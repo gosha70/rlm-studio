@@ -209,7 +209,7 @@ class RestrictedSandboxAdapter:
 
     def _build_globals(self) -> None:
         """(Re)build the restricted globals dict."""
-        self._globals = safe_globals.copy()
+        self._globals: dict[str, Any] = {**safe_globals}
 
         # RestrictedPython guard hooks
         self._globals["_print_"] = PrintCollector
