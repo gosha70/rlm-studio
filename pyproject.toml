@@ -34,10 +34,10 @@ dependencies = [
     "litellm>=1.84.0",  # CVE-2026-35029, CVE-2026-35030 (1.83.0); GHSA-xqmj-j6mv-4862 proxy SSTI (1.83.7); CVE-2026-40217 / GHSA-wxxx-gvqv-xp7p custom-code-guardrail sandbox escape (1.83.11); auth bypass via host header injection (1.84.0) — proxy-only CVEs; RLMKit uses litellm as a library
     "aiohttp>=3.14.3",  # PYSEC-2026-3545/3546/3547 (3.14.3); CVE-2026-22815, CVE-2026-34513..34520, CVE-2026-34525 (3.13.4); TLS hostname override ignored on HTTPS connection reuse (3.14.1); DigestAuth credentials forwarded on cross-origin redirect (3.14.1)
     "msgpack>=1.2.1",  # OOB read / crash on Unpacker reuse after a caught error (transitive via litellm)
-    "tornado>=6.5.7",  # gzip bomb via unbound decompression (6.5.6); Authorization header forwarded on cross-origin redirect (6.5.6); per-request credentials leaked on CurlAsyncHTTPClient handle reuse (6.5.7) — transitive via litellm
+    "tornado>=6.5.8",  # gzip bomb via unbound decompression (6.5.6); Authorization header forwarded on cross-origin redirect (6.5.6); per-request credentials leaked on CurlAsyncHTTPClient handle reuse (6.5.7); PYSEC-2026-3928 / GHSA-mpf4-983q-p7j4 urlencoded body parsing ignores max_num_fields, GHSA-8423-8fgw-73vq multipart split() memory amplification, GHSA-wwv5-g3v4-889x cookie attribute injection via legacy set_cookie kwargs (6.5.8) — transitive via litellm
     "idna>=3.15",  # PYSEC-2026-215 fix (transitive via httpx/aiohttp/requests)
     "click>=8.3.3",  # PYSEC-2026-2132 fix (transitive via litellm/uvicorn/streamlit)
-    "RestrictedPython>=7.0",
+    "RestrictedPython>=8.4",  # CVE-2026-55830 / GHSA-ffg3-p8fm-mjx2 guard hooks shadowed via positional-only params (8.3); CVE-2026-76825 string.Formatter traversal via safer_getattr (8.4) — both are sandbox escapes in the primary SandboxPort adapter
     "tenacity>=9.1.2",
     "pygments>=2.20.0",
     "requests>=2.33.0",  # CVE-2026-25645 fix; imported by rlmstudio.llm.ollama_client (direct provider="ollama" path) — explicit, not just transitive via tiktoken
