@@ -61,7 +61,7 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-      - run: uv sync --extra dev --extra studio
+      - run: uv sync --extra dev --extra studio --extra interop
       - name: Run tests with coverage
         # --runslow includes spawn-heavy tests like TestTopLevelScriptEntrypoint
         # which are gated by default for local dev speed but MUST run in CI.

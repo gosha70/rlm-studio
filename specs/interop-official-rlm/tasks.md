@@ -34,7 +34,7 @@ Branch `feat/interop-official-rlm` off `master` after `feat/rebrand-rlm-studio` 
 - [x] T4.3 e2e tests in `tests/e2e/test_api_endpoints.py`. *(Placed in `tests/test_engines_route.py` next to `test_compare_matrix_route.py` (same fake-injection convention) rather than the e2e file: `/api/engines` ×3, compare-matrix ×3 (official slot next to a direct slot, 400 + no side effects when unavailable, availability not consulted for built-in modes), chat ×3 (400, CP mode honoured, 202 when available). Matrix use-case dispatch/ranking in `tests/test_run_matrix_comparison_official.py`.)*
 
 ## Phase 5 — packaging
-- [ ] T5.1 `interop` extra with version marker; `all` includes it; `uv lock`; CI installs the extra on 3.11+ only.
+- [x] T5.1 `interop` extra with version marker; `all` includes it; `uv lock`; CI installs the extra on 3.11+ only. *(2026-09-29: `interop = ["rlms>=0.1.3,<0.2"]` (no Python marker needed — the project floor is 3.11); `all` already included `interop`. `uv lock` added `rlms` + 8 transitive packages (google-genai, portkey-ai, google-auth, pyasn1*, websockets, cached-property, types-requests) and kept litellm 1.89.3 / openai 2.24.0 / anthropic 0.122.0 unchanged. CI `test-backend` (3.11/3.12/3.13, `--runslow`) now syncs `--extra interop`, so `tests/test_rlms_engine_real.py` runs on every matrix entry; the security job already audits `all`. Full suite + real-engine tests green in the project env.)*
 
 ## Phase 6 — frontend
 - [ ] T6.1 Compare slot picker + Chat mode option; availability gating from `/api/engines`; engine badge in Traces/Compare.

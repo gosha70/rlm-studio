@@ -91,8 +91,13 @@ providers = [
 ]
 
 # Optional engines for the Compare matrix (see specs/interop-official-rlm).
-# Intentionally empty until the official-RLM engine lands.
-interop = []
+# `rlms` is the paper authors' implementation (github.com/alexzhang13/rlm);
+# its 0.1.x API is what infrastructure/engines/rlms_adapter.py is written
+# against, hence the upper bound. Note it pulls google-genai, portkey-ai and
+# pytest as *runtime* dependencies of its own.
+interop = [
+    "rlms>=0.1.3,<0.2",
+]
 
 eval = [
     "openai>=1.0.0",  # For embeddings + generation
