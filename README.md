@@ -163,6 +163,7 @@ result = interact(content, query, mode="compare")
 | `direct` | < 8K tokens | Full context in single LLM call |
 | `rag` | Static corpora, repeated retrieval | Chunk + embed + retrieve top-k, then LLM call with retrieved context |
 | `rlm` | Any size, especially >50K tokens | LLM writes code to navigate content via `peek()`, `grep()`, `chunk()` |
+| `rlm_official` | Benchmarking Studio's loop against the paper authors' | Runs [alexzhang13/rlm](https://github.com/alexzhang13/rlm) (`rlms`) as an engine under Studio's budgets, traces and ranking. Needs `pip install "rlm-studio[interop]"`; UI and REST API only (not the Python client) |
 | `auto` | Mixed / unknown sizes | Selects `direct` (< 8K) or `rlm` (≥ 8K) automatically |
 | `compare` | Benchmarking | Runs the other modes concurrently, returns metrics for each side by side |
 

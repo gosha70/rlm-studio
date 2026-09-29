@@ -41,8 +41,8 @@ Branch `feat/interop-official-rlm` off `master` after `feat/rebrand-rlm-studio` 
 - [x] T6.2 vitest coverage for gating + badge. *(`__tests__/engines.test.tsx`, 10 tests: the pure rule, the badge, the Compare picker rendered with SWR mocked per key, and the strategy select opened in jsdom. tsc / eslint / vitest 335 / `next build` green.)*
 
 ## Phase 7 — telemetry + docs
-- [ ] T7.1 Telemetry mode enum/labels; Dashboard grouping check.
-- [ ] T7.2 Docs: studio guide, concepts, hosts provider-mapping matrix, README table row; CHANGELOG.
+- [x] T7.1 Telemetry mode enum/labels; Dashboard grouping check. *(2026-09-29: the telemetry `mode` column is free text and `MetricsResponse.by_mode` is `dict[str, ModeSummary]`, so `rlm_official` flows through with no backend change; the failure breakdown is keyed the same way. Frontend: `ChatMode` type widened; `ComparisonChart` gains an `officialData` series ("Official RLM", amber) wired from `by_mode.rlm_official` on the Dashboard; test added. JSONL export unchanged.)*
+- [x] T7.2 Docs: studio guide, concepts, hosts provider-mapping matrix, README table row; CHANGELOG. *(`docs/rlm-studio-guide.md` Compare → new "Official RLM engine" subsection (install, providers, budgets, sandbox, what you'll notice, public-client caveat); `docs/rlm-concepts.md` §9.9; `docs/hosts/README.md` §8 provider-mapping table; README Execution Modes table row; CHANGELOG `[Unreleased]` "Official-engine interop" + `### Security` (anyio).)*
 
 ## Phase 8 — acceptance
 - [ ] T8.1 Run AC-1..AC-5 from `spec.md`; record results in `doc_internal/v1.0.0-rlm-studio/MANUAL_TEST_PLAN.md`.

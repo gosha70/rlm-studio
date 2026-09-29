@@ -125,6 +125,7 @@ export default function DashboardPage() {
               rlmData={metrics.by_mode.rlm}
               directData={metrics.by_mode.direct}
               ragData={metrics.by_mode.rag}
+              officialData={metrics.by_mode.rlm_official}
             />
             <CostBreakdown
               data={metrics.by_chat_provider && Object.keys(metrics.by_chat_provider).length > 0

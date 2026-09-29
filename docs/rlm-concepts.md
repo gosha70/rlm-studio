@@ -245,6 +245,12 @@ RLM Studio adds SQLite-backed conversation storage via the `StoragePort` abstrac
 
 The `server/` layer exposes both REST and WebSocket endpoints. `interact_async()` and `complete_async()` mirror the sync API. The WebSocket connection streams partial responses token-by-token to the UI.
 
+### 9.9 The Reference Implementation as a Built-in Baseline
+
+Everything above is Studio's *own* RLM loop, so a natural objection to any number it produces is "does that measure the RLM idea, or your implementation of it?" The `rlm_official` execution mode answers it in-product: it runs the reference implementation from §8 (`rlms`) as an engine behind a single port (`RLMEnginePort`), under the same budgets, and translates its trajectory into the same trace shape Studio's loop emits — so Traces, replay, telemetry and the Compare ranking treat both loops identically, and one matrix run can show Official-RLM, Studio-RLM, Direct and RAG on the same document, provider and model.
+
+Two things differ by construction and are surfaced rather than hidden: the reference engine does not stream (no TTFT or decode timings) and reports token usage per run rather than per step; and its default environment executes model-written code in-process, so Studio maps its Docker sandbox onto the engine's Docker environment and flags every non-isolated run. The mode is optional — `pip install "rlm-studio[interop]"` — and the UI disables it with the reason when the package is absent.
+
 ---
 
 ## 10. Limitations and Open Work

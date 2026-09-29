@@ -23,7 +23,7 @@ const BACKEND_BASE =
 // Types matching the backend Pydantic models
 // ---------------------------------------------------------------------------
 
-export type ChatMode = "auto" | "rlm" | "direct" | "rag" | "compare";
+export type ChatMode = "auto" | "rlm" | "direct" | "rag" | "compare" | "rlm_official";
 
 export interface ChatRequest {
   content?: string | null;

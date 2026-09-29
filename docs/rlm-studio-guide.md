@@ -351,7 +351,7 @@ The Compare page — also known as the **LLM Tuner** — runs the same query aga
 ### Workflow
 
 1. Pick one or more **LLM providers** (each becomes a column).
-2. Pick one or more **execution modes** — Direct, RLM, RAG (each becomes a row).
+2. Pick one or more **execution modes** — Direct, RLM, RAG, and, when the `interop` extra is installed, Official RLM (each becomes a row).
 3. Optionally upload a document, then type a query.
 4. Pick a **ranking metric** (see below).
 5. Click **Run** — every cell executes in parallel against `POST /api/chat/compare-matrix`.
@@ -367,6 +367,27 @@ Each cell shows the answer, token count, cost, and latency. The winner for your 
 | **Latency** | Lowest wall-clock time |
 | **Answer per cost** | Best answer-length-per-dollar ratio |
 | **Judge score** | Highest LLM-as-judge `overall_score` (requires a judge Chat Provider set in Settings; see [Judge & scoring](#judge--scoring)) |
+
+### Official RLM engine (`rlm_official`)
+
+The fourth mode runs the paper authors' own implementation — [alexzhang13/rlm](https://github.com/alexzhang13/rlm), PyPI package `rlms` — as an engine inside the matrix, so one run can put Official-RLM, Studio-RLM, Direct and RAG side by side on the same document, provider and budget, with the same traces, telemetry and ranking. Skeptical of whether a number reflects the RLM idea or Studio's implementation? This is the row that answers it.
+
+**Install.** `pip install "rlm-studio[interop]"` (included in `[all]`), then restart the server. `GET /api/engines` reports whether the engine can run; until it can, the option is shown disabled with the reason as its tooltip, and a request naming the mode is rejected with the same reason before anything is recorded.
+
+**Providers.** `openai` and `anthropic` use the engine's native clients with the LLM Provider's key. `ollama`, `lmstudio` and `vllm` go through the engine's OpenAI-compatible client pointed at the provider's endpoint (`/v1` is appended when missing). Same model id, same endpoint, same key as the sibling Studio cells — that is what makes the comparison honest. See [docs/hosts/README.md §8](hosts/README.md#8-official-rlm-engine-rlm_official--provider-mapping) for the matrix.
+
+**Budgets.** The Chat Provider's *Max steps* and *Timeout* apply (`max_iterations` and the engine's own timeout); the recursion depth, token and cost caps from **Settings → Budget** map onto the engine's limits too. The engine checks its timeout *between* iterations, so an execution that never returns is stopped by Studio's own wall-clock guard and classified as a timeout like any other run.
+
+**Sandbox.** With the Docker sandbox selected in Settings the engine runs its REPL in a container; with any other sandbox it runs the engine's in-process `local` environment, which is **not isolated** — every such run carries a note saying so in its trace metadata.
+
+**What you will notice.**
+
+- Cells carry an **official rlms x.y.z** badge (Compare and Traces).
+- No streaming: no TTFT / decode timings, and no token-by-token output in Chat.
+- The engine reports token usage per run, not per step, so step rows show 0 tokens while the run totals are exact.
+- If the engine reports no price for a model and Studio has none either, the cell shows $0 but is flagged `cost_known=false` and ranks **last** on the cost metrics rather than winning as "free".
+- Conversation memory is not delivered to the engine — it receives only the document and the question.
+- The Python client's `compare_matrix()` does not accept the mode in 1.0; use the UI or `POST /api/chat/compare-matrix`.
 
 ### Ephemeral Chat Providers
 

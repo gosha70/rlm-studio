@@ -167,6 +167,19 @@ describe("ComparisonChart", () => {
     render(<ComparisonChart rlmData={undefined} directData={undefined} />);
     expect(screen.getByText("Mode Comparison")).toBeInTheDocument();
   });
+
+  test("charts the official engine as a fourth series on its own", () => {
+    render(
+      <ComparisonChart
+        rlmData={undefined}
+        directData={undefined}
+        officialData={makeModeSummary({ total_tokens: 640, total_cost_usd: 0.03 })}
+      />,
+    );
+    // Not the empty state: both chart panels render for rlm_official runs alone.
+    expect(screen.queryByText(/Run queries in multiple modes/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: /Bar chart comparing mode/ })).toHaveLength(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

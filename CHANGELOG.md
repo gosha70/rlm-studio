@@ -5,6 +5,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Official-engine interop (`rlm_official`)
+
+- **Added:** a fourth execution mode, `rlm_official`, that runs the paper
+  authors' implementation ([alexzhang13/rlm](https://github.com/alexzhang13/rlm),
+  PyPI `rlms`) as an engine inside the Compare matrix and Chat — under the
+  same budgets, traces, telemetry and ranking as Studio's own loop — so one
+  run can benchmark Official-RLM vs Studio-RLM vs Direct vs RAG on the same
+  document, provider and model. Optional: `pip install "rlm-studio[interop]"`
+  (included in `[all]`). `GET /api/engines` reports availability; the UI
+  disables the option with the reason while the package is absent, and a
+  request naming the mode is rejected with the same reason before any
+  session or telemetry side effect. Provider mapping: `openai` / `anthropic`
+  use the engine's native clients; `ollama` / `lmstudio` / `vllm` go through
+  its OpenAI-compatible client at the provider's endpoint. Studio's `docker`
+  sandbox maps to the engine's Docker environment; any other sandbox runs the
+  engine's in-process `local` REPL, which is not isolated and is flagged on
+  every such run. Cells and traces carry an "official rlms x.y.z" badge.
+- **Known limitations:** the engine does not stream (no TTFT / decode
+  timings, no token events over WebSocket); it reports token usage per run,
+  so step rows show 0 tokens while totals are exact; a run whose engine
+  reports no price and for which Studio has none is flagged
+  (`cost_known=false`) and ranks last on the cost metrics rather than
+  counting as free; conversation memory is not delivered to the engine; the
+  mode is UI / REST only — the Python client's `compare_matrix()` does not
+  accept it in 1.0. A REPL execution that never returns is stopped by
+  Studio's wall-clock guard (the engine only checks its timeout between
+  iterations); with the `local` environment the abandoned thread lives on
+  until the server restarts.
+- **Architecture:** new `RLMEnginePort` (application layer) and
+  `infrastructure/engines/rlms_adapter.py`; `RunRLMOfficialUseCase` enforces
+  the wall-clock and post-run token / cost caps around the engine. Mode
+  literals are now centralised as the `ExecutionMode` / `ChatMode` aliases
+  next to the `MODE_*` constants.
+
+### Security
+
+- `anyio>=4.14.2` — CVE-2026-63374 (TLSStream IDNA-2003 host-name encoding
+  enables certificate spoofing; critical) and CVE-2026-64847 (transitive via
+  httpx / anthropic / google-genai).
+
 ### Rebrand: RLMKit → RLM Studio
 
 - **BREAKING:** the project is now **RLM Studio**. PyPI distribution
