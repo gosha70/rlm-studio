@@ -13,16 +13,20 @@ engine's native clients; the OpenAI-compatible local servers (``lmstudio``,
 Trace mapping (spec FR-3): every code block in the engine's trajectory becomes
 one ``assistant`` entry (the model's response, with the code) followed by one
 ``execution`` entry (stdout/stderr); nested ``llm_query`` sub-calls become
-extra ``execution`` entries carrying ``recursion_depth``; the final answer
-closes the trace as a last ``assistant`` entry so the normaliser in
-``server/routes/_helpers.py`` promotes it to ``final``.
+extra ``execution`` entries carrying ``recursion_depth``, and a sub-call that
+ran its own REPL loop contributes that loop's entries at its own depth; the
+final answer closes the trace as a last ``assistant`` entry so the normaliser
+in ``server/routes/_helpers.py`` promotes it to ``final``.
 
 Known limitations, recorded on every result under ``engine_notes``: the
 engine does not stream (no TTFT / decode timings), it reports token usage per
 run rather than per step, and its ``local`` environment executes model-written
 code in-process — a runaway loop there cannot be stopped, only abandoned by
-the use case's wall-clock guard.  Select the Docker sandbox to run the engine
-in a container instead.
+the use case's wall-clock guard.  That environment also mutates process-global
+state (``sys.stdout``/``sys.stderr`` and the working directory) around every
+code cell under a per-instance lock, so this adapter serialises ``local`` runs
+process-wide; see :data:`_LOCAL_ENV_LOCK`.  Select the Docker sandbox to run
+the engine in a container instead, which removes both limits.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ import asyncio
 import importlib
 import importlib.metadata
 import logging
+import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -65,6 +71,13 @@ UNAVAILABLE_REASON = (
 
 # Studio provider backends the engine speaks natively (Studio key → rlms backend).
 _NATIVE_BACKENDS: dict[str, str] = {"openai": "openai", "anthropic": "anthropic"}
+# Environment variable each native backend's key is read from when the provider
+# instance carries none.  The engine's OpenAI client only reads the environment
+# at *import* time, so the key is resolved here and passed in explicitly.
+_ENV_VAR_BY_NATIVE_BACKEND: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
 # Studio backends reached through the engine's OpenAI client plus a base_url.
 _OPENAI_COMPATIBLE_BACKENDS: frozenset[str] = frozenset({"lmstudio", "vllm", "ollama"})
 _RLMS_OPENAI_BACKEND = "openai"
@@ -76,6 +89,29 @@ SANDBOX_TYPE_DOCKER = "docker"
 _ENV_LOCAL = "local"
 _ENV_DOCKER = "docker"
 
+# Studio counts *levels of sub-RLM*; the engine counts the depth at which a node
+# stops looping and degrades to a plain model call.  See _engine_max_depth.
+_RLMS_DEPTH_OFFSET = 1
+_RLMS_MIN_DEPTH = 1
+
+# The engine's in-process ``local`` environment swaps ``sys.stdout`` /
+# ``sys.stderr`` and chdirs into a temp directory around every code cell, under
+# a lock that only covers one instance.  Two concurrent slots would therefore
+# restore each other's streams and leave the server in a deleted directory, so
+# every ``local`` run in this process takes this lock instead.
+_LOCAL_ENV_LOCK = threading.Lock()
+# Waiting cap for a slot that has no wall-clock budget of its own.
+_LOCAL_ENV_LOCK_TIMEOUT_SECONDS = 30.0
+# The same global state rules out the engine's parallel batched sub-calls, which
+# would otherwise give several in-process REPLs to one run: ``llm_query_batched``
+# fans out over a thread pool, and every child that is allowed its own REPL
+# swaps this process's streams and directory.  One at a time inside a run, too.
+_LOCAL_MAX_CONCURRENT_SUBCALLS = 1
+
+# Deepest sub-call nesting converted into trace entries.  The trajectory comes
+# from another library, so the walk is bounded rather than trusting its shape.
+MAX_TRACE_RECURSION_DEPTH = 8
+
 NOTE_NO_STREAMING = (
     "The official engine does not stream: TTFT and decode timings are unavailable for this slot."
 )
@@ -85,11 +121,27 @@ NOTE_NO_STEP_TOKENS = (
 )
 NOTE_LOCAL_ENV = (
     "The official engine ran its REPL in-process (rlms 'local' environment), which is "
-    "not isolated; select the Docker sandbox in Settings to run it in a container."
+    "not isolated and redirects this process's output and working directory while each "
+    "code cell runs; official runs and their sub-calls are therefore serialised one at "
+    "a time. Select the Docker sandbox in Settings to isolate them and run them in "
+    "parallel."
 )
 NOTE_COST_UNKNOWN = (
     "No price is known for this model; cost is shown as 0 and the slot is excluded "
     "from cost ranking."
+)
+NOTE_NO_SUBCALL_FLOOR = (
+    "Recursion is set to 0 levels, which the official engine cannot enforce: its "
+    "sub-calls degrade to plain model calls instead of being refused."
+)
+NOTE_INTERRUPTED_TOTALS = (
+    "The run was stopped by a cap, so the engine reported one combined token total "
+    "instead of an input/output split; the total is recorded as input tokens."
+)
+BUSY_REASON = (
+    "Another official RLM run is still holding the in-process REPL, which only one run "
+    "can use at a time. Select the Docker sandbox in Settings to run official slots "
+    "side by side."
 )
 
 
@@ -121,6 +173,26 @@ def _openai_v1(url: str) -> str:
     return trimmed if trimmed.endswith(_OPENAI_V1_SUFFIX) else trimmed + _OPENAI_V1_SUFFIX
 
 
+def engine_max_depth(max_recursion_depth: int) -> int:
+    """Translate Studio's recursion budget into the engine's ``max_depth``.
+
+    Studio counts *levels of sub-RLM*: ``max_recursion_depth=1`` lets the root
+    loop spawn one child that runs its own REPL loop.  ``rlms`` instead counts
+    the depth at which a node stops looping and becomes a plain model call —
+    ``RLM.completion`` falls back when ``depth >= max_depth`` and the root node
+    is at ``depth == 0`` — so the root loop already costs one level and
+    Studio's *N* maps to *N + 1*.
+
+    ``max_depth=0`` must never reach the engine: it would skip the loop
+    entirely, answer from the document without ever being shown the question,
+    and return a bare string where the adapter expects a completion object.
+    Studio's 0 (no sub-calls at all) is therefore clamped to the engine's
+    minimum, where sub-calls degrade to plain model calls; the result carries
+    :data:`NOTE_NO_SUBCALL_FLOOR` to say so.
+    """
+    return max(_RLMS_MIN_DEPTH, max_recursion_depth + _RLMS_DEPTH_OFFSET)
+
+
 def sum_usage(usage: dict[str, Any]) -> tuple[int, int, float | None]:
     """Total ``(input_tokens, output_tokens, cost)`` from an ``rlms`` ``UsageSummary`` dict.
 
@@ -149,10 +221,18 @@ def trajectory_to_trace(
 
     Per-step token counts are unknown (the engine reports totals only) and are
     recorded as 0; nested sub-calls carry their own usage.
+
+    Sub-calls nest: a child that was allowed to run its own REPL loop records
+    that loop under its ``metadata`` (the engine attaches the child's full
+    trajectory there).  Its iterations are converted at the child's depth,
+    ahead of the entry carrying the child's answer, so a trace reads
+    parent-step → child-steps → child-answer.  The walk stops at
+    :data:`MAX_TRACE_RECURSION_DEPTH`; deeper children still contribute their
+    answer entry, just not their internal steps.
     """
     entries: list[dict[str, Any]] = []
 
-    def _entry(role: str, content: str, **extra: Any) -> None:
+    def _entry(role: str, content: str, *, depth: int = 0, **extra: Any) -> None:
         entries.append(
             {
                 TRACE_KEY_STEP: len(entries),
@@ -163,46 +243,70 @@ def trajectory_to_trace(
                 TRACE_KEY_OUTPUT_TOKENS: 0,
                 TRACE_KEY_MODEL: model,
                 TRACE_KEY_ELAPSED_SECONDS: 0.0,
+                **({TRACE_KEY_RECURSION_DEPTH: depth} if depth else {}),
                 **extra,
             }
         )
 
-    for iteration in (trajectory or {}).get("iterations") or []:
-        response = iteration.get("response") or ""
-        blocks = iteration.get("code_blocks") or []
-        if not blocks:
-            _entry(
-                "assistant",
-                response,
-                **{TRACE_KEY_ELAPSED_SECONDS: iteration.get("iteration_time") or 0.0},
-            )
-            continue
-        for index, block in enumerate(blocks):
-            code = block.get("code") or ""
-            _entry("assistant", response if index == 0 else code, **{TRACE_KEY_CODE: code})
-            result = block.get("result") or {}
-            stdout = result.get("stdout") or ""
-            stderr = (result.get("stderr") or "").strip()
-            output = f"{stdout}\n{stderr}".strip() if stderr else stdout
-            _entry(
-                "execution",
-                output,
-                **{TRACE_KEY_ELAPSED_SECONDS: result.get("execution_time") or 0.0},
-                **({"error": stderr} if stderr else {}),
-            )
-            for call in result.get("rlm_calls") or []:
-                call_in, call_out, _ = sum_usage(call.get("usage_summary") or {})
+    def _walk(iterations: Any, *, node_model: str, depth: int) -> None:
+        for iteration in iterations or []:
+            response = iteration.get("response") or ""
+            blocks = iteration.get("code_blocks") or []
+            if not blocks:
                 _entry(
-                    "execution",
-                    call.get("response") or "",
+                    "assistant",
+                    response,
+                    depth=depth,
                     **{
-                        TRACE_KEY_MODEL: call.get("root_model") or model,
-                        TRACE_KEY_INPUT_TOKENS: call_in,
-                        TRACE_KEY_OUTPUT_TOKENS: call_out,
-                        TRACE_KEY_ELAPSED_SECONDS: call.get("execution_time") or 0.0,
-                        TRACE_KEY_RECURSION_DEPTH: 1,
+                        TRACE_KEY_MODEL: node_model,
+                        TRACE_KEY_ELAPSED_SECONDS: iteration.get("iteration_time") or 0.0,
                     },
                 )
+                continue
+            for index, block in enumerate(blocks):
+                code = block.get("code") or ""
+                _entry(
+                    "assistant",
+                    response if index == 0 else code,
+                    depth=depth,
+                    **{TRACE_KEY_MODEL: node_model, TRACE_KEY_CODE: code},
+                )
+                result = block.get("result") or {}
+                stdout = result.get("stdout") or ""
+                stderr = (result.get("stderr") or "").strip()
+                output = f"{stdout}\n{stderr}".strip() if stderr else stdout
+                _entry(
+                    "execution",
+                    output,
+                    depth=depth,
+                    **{
+                        TRACE_KEY_MODEL: node_model,
+                        TRACE_KEY_ELAPSED_SECONDS: result.get("execution_time") or 0.0,
+                    },
+                    **({"error": stderr} if stderr else {}),
+                )
+                for call in result.get("rlm_calls") or []:
+                    _walk_call(call, parent_model=node_model, depth=depth + 1)
+
+    def _walk_call(call: dict[str, Any], *, parent_model: str, depth: int) -> None:
+        call_model = call.get("root_model") or parent_model
+        call_in, call_out, _ = sum_usage(call.get("usage_summary") or {})
+        nested = call.get("metadata")
+        if isinstance(nested, dict) and depth < MAX_TRACE_RECURSION_DEPTH:
+            _walk(nested.get("iterations"), node_model=call_model, depth=depth)
+        _entry(
+            "execution",
+            call.get("response") or "",
+            depth=depth,
+            **{
+                TRACE_KEY_MODEL: call_model,
+                TRACE_KEY_INPUT_TOKENS: call_in,
+                TRACE_KEY_OUTPUT_TOKENS: call_out,
+                TRACE_KEY_ELAPSED_SECONDS: call.get("execution_time") or 0.0,
+            },
+        )
+
+    _walk((trajectory or {}).get("iterations"), node_model=model, depth=0)
 
     # Close with the final answer so the last step promotes to ``final`` —
     # unless the last iteration already was that answer.
@@ -270,36 +374,68 @@ class RlmsEngineAdapter:
         return True, reason
 
     def run(self, content: str, query: str, config: RunConfigDTO) -> RunResultDTO:
+        environment, environment_kwargs = self._engine_environment()
+        if environment != _ENV_LOCAL:
+            return self._run_engine(content, query, config, environment, environment_kwargs)
+
+        # The in-process REPL mutates process-global state, so only one run at a
+        # time; wait no longer than the slot's own wall-clock budget.
+        wait = config.max_time_seconds or _LOCAL_ENV_LOCK_TIMEOUT_SECONDS
+        queued_at = time.time()
+        if not _LOCAL_ENV_LOCK.acquire(timeout=wait):
+            logger.warning("Official RLM engine busy: in-process REPL held for over %.1fs", wait)
+            # ``queued_at`` so the failed slot reports the time it spent waiting.
+            return self._failed(BUSY_REASON, queued_at, environment, config)
+        try:
+            return self._run_engine(content, query, config, environment, environment_kwargs)
+        finally:
+            _LOCAL_ENV_LOCK.release()
+
+    def _run_engine(
+        self,
+        content: str,
+        query: str,
+        config: RunConfigDTO,
+        environment: str,
+        environment_kwargs: dict[str, Any],
+    ) -> RunResultDTO:
         rlm = importlib.import_module(RLMS_MODULE)
         rlm_logger = importlib.import_module(f"{RLMS_MODULE}.logger")
         backend, backend_kwargs = self._engine_backend()
-        environment, environment_kwargs = self._engine_environment()
 
         trajectory = rlm_logger.RLMLogger()
+        engine_kwargs: dict[str, Any] = {}
+        if environment == _ENV_LOCAL:
+            engine_kwargs["max_concurrent_subcalls"] = _LOCAL_MAX_CONCURRENT_SUBCALLS
         engine = rlm.RLM(
             backend=backend,
             backend_kwargs=backend_kwargs,
             environment=environment,
             environment_kwargs=environment_kwargs,
-            max_depth=config.max_recursion_depth,
+            max_depth=engine_max_depth(config.max_recursion_depth),
             max_iterations=config.max_steps,
             max_timeout=config.max_time_seconds,
             max_tokens=config.max_tokens,
             max_budget=config.max_cost,
             logger=trajectory,
             verbose=False,
+            **engine_kwargs,
         )
         start = time.time()
         try:
             # ``prompt`` is the context the REPL exposes; ``root_prompt`` is the question.
             completion = engine.completion(prompt=content, root_prompt=query)
         except (rlm.BudgetExceededError, rlm.TokenLimitExceededError) as exc:
-            return self._failed(f"Budget exceeded: {exc}", start, environment)
+            return self._interrupted(
+                f"Budget exceeded: {exc}", exc, trajectory, start, environment, config
+            )
         except rlm.TimeoutExceededError as exc:
-            return self._failed(f"Official RLM engine timed out: {exc}", start, environment)
+            return self._interrupted(
+                f"Official RLM engine timed out: {exc}", exc, trajectory, start, environment, config
+            )
         finally:
             engine.close()
-        return self._to_result(completion, start, environment)
+        return self._to_result(completion, start, environment, config)
 
     async def run_async(self, content: str, query: str, config: RunConfigDTO) -> RunResultDTO:
         return await asyncio.to_thread(self.run, content, query, config)
@@ -311,15 +447,21 @@ class RlmsEngineAdapter:
     def _engine_backend(self) -> tuple[str, dict[str, Any]]:
         """Map Studio's provider onto an ``rlms`` backend + client kwargs, or raise ``ValueError``."""
         if self._backend in _NATIVE_BACKENDS:
-            kwargs: dict[str, Any] = {"model_name": self._model}
-            if self._api_key:
-                kwargs["api_key"] = self._api_key
-            elif self._backend == "anthropic":
+            env_var = _ENV_VAR_BY_NATIVE_BACKEND[self._backend]
+            # Both native backends are treated alike: a missing key is reported
+            # rather than left for the engine to discover.  The environment is
+            # read here because the engine's OpenAI client captured it at import
+            # time and would not see a key exported afterwards.
+            api_key = self._api_key or os.environ.get(env_var)
+            if not api_key:
                 raise ValueError(
-                    "The official RLM engine needs an API key for the Anthropic provider; "
-                    "set one in Settings → LLM Providers."
+                    f"The official RLM engine needs an API key for the {self._backend!r} "
+                    f"provider; set one in Settings → LLM Providers or export {env_var}."
                 )
-            return _NATIVE_BACKENDS[self._backend], kwargs
+            return _NATIVE_BACKENDS[self._backend], {
+                "model_name": self._model,
+                "api_key": api_key,
+            }
         if self._backend in _OPENAI_COMPATIBLE_BACKENDS:
             if not self._base_url:
                 raise ValueError(
@@ -341,15 +483,28 @@ class RlmsEngineAdapter:
             return _ENV_DOCKER, ({"image": self._docker_image} if self._docker_image else {})
         return _ENV_LOCAL, {}
 
-    def _notes(self, environment: str, *, cost_known: bool) -> list[str]:
+    def _notes(
+        self,
+        environment: str,
+        config: RunConfigDTO,
+        *,
+        cost_known: bool,
+        interrupted: bool = False,
+    ) -> list[str]:
         notes = [NOTE_NO_STREAMING, NOTE_NO_STEP_TOKENS]
         if environment == _ENV_LOCAL:
             notes.append(NOTE_LOCAL_ENV)
+        if config.max_recursion_depth <= 0:
+            notes.append(NOTE_NO_SUBCALL_FLOOR)
         if not cost_known:
             notes.append(NOTE_COST_UNKNOWN)
+        if interrupted:
+            notes.append(NOTE_INTERRUPTED_TOTALS)
         return notes
 
-    def _to_result(self, completion: Any, start: float, environment: str) -> RunResultDTO:
+    def _to_result(
+        self, completion: Any, start: float, environment: str, config: RunConfigDTO
+    ) -> RunResultDTO:
         usage_summary = getattr(completion, "usage_summary", None)
         usage = usage_summary.to_dict() if usage_summary is not None else {}
         input_tokens, output_tokens, reported_cost = sum_usage(usage)
@@ -358,6 +513,11 @@ class RlmsEngineAdapter:
             total_cost = reported_cost
         elif self._cost_fn is not None:
             total_cost = float(self._cost_fn(input_tokens, output_tokens))
+            # The slot's cost table answers 0.0 both for a model it has no price
+            # for and for a lookup that failed, so a run that really did consume
+            # tokens is "price unknown", not "free".  Ranking must not reward it
+            # as the cheapest slot.
+            cost_known = total_cost > 0.0 or (input_tokens + output_tokens) == 0
         else:
             total_cost = 0.0
             cost_known = False
@@ -370,7 +530,7 @@ class RlmsEngineAdapter:
         metadata = {
             RESULT_KEY_ENGINE_VERSION: self.version,
             RESULT_KEY_COST_KNOWN: cost_known,
-            RESULT_KEY_ENGINE_NOTES: self._notes(environment, cost_known=cost_known),
+            RESULT_KEY_ENGINE_NOTES: self._notes(environment, config, cost_known=cost_known),
         }
         error = getattr(completion, "error", None)
         if error:
@@ -400,7 +560,10 @@ class RlmsEngineAdapter:
             metadata=metadata,
         )
 
-    def _failed(self, error: str, start: float, environment: str) -> RunResultDTO:
+    def _failed(
+        self, error: str, start: float, environment: str, config: RunConfigDTO
+    ) -> RunResultDTO:
+        """Failed result for a run that never reached the engine (nothing was spent)."""
         return RunResultDTO(
             answer=f"⚠️ **Execution error**.\n\n{error}",
             mode_used=MODE_RLM_OFFICIAL,
@@ -410,6 +573,62 @@ class RlmsEngineAdapter:
             metadata={
                 RESULT_KEY_ENGINE_VERSION: self.version,
                 RESULT_KEY_COST_KNOWN: True,
-                RESULT_KEY_ENGINE_NOTES: self._notes(environment, cost_known=True),
+                RESULT_KEY_ENGINE_NOTES: self._notes(environment, config, cost_known=True),
+            },
+        )
+
+    def _interrupted(
+        self,
+        error: str,
+        exc: BaseException,
+        trajectory: Any,
+        start: float,
+        environment: str,
+        config: RunConfigDTO,
+    ) -> RunResultDTO:
+        """Failed result that keeps what the engine had already spent and done.
+
+        The engine raises its cap breaches from inside the loop, so no
+        completion object comes back and the usage the cap was checked against
+        would be lost.  It survives in two places: the exception carries the
+        figure that tripped the cap (``spent`` for a budget breach,
+        ``tokens_used`` for a token breach, neither for a timeout), and the
+        logger passed into the engine is ours, so the iterations it captured are
+        still readable.  Reporting both is what keeps the most expensive runs
+        from being recorded as the cheapest.
+
+        The engine reports interrupted usage as one combined token figure, so it
+        is recorded as input tokens and flagged with
+        :data:`NOTE_INTERRUPTED_TOTALS`.
+        """
+        captured = trajectory.get_trajectory() if hasattr(trajectory, "get_trajectory") else None
+        partial = str(getattr(exc, "partial_answer", None) or "")
+        trace = (
+            trajectory_to_trace(captured, final_answer=partial, model=self._model)
+            if captured
+            else []
+        )
+        tokens_used = int(getattr(exc, "tokens_used", 0) or 0)
+        spent: float | None = getattr(exc, "spent", None)
+        cost_known = spent is not None
+        answer = f"⚠️ **Execution error**.\n\n{error}"
+        if partial:
+            answer = f"{answer}\n\n**Partial answer**\n\n{partial}"
+        return RunResultDTO(
+            answer=answer,
+            mode_used=MODE_RLM_OFFICIAL,
+            success=False,
+            error=error,
+            steps=len((captured or {}).get("iterations") or []),
+            input_tokens=tokens_used,
+            total_cost=float(spent) if spent is not None else 0.0,
+            elapsed_time=time.time() - start,
+            trace=trace,
+            metadata={
+                RESULT_KEY_ENGINE_VERSION: self.version,
+                RESULT_KEY_COST_KNOWN: cost_known,
+                RESULT_KEY_ENGINE_NOTES: self._notes(
+                    environment, config, cost_known=cost_known, interrupted=True
+                ),
             },
         )

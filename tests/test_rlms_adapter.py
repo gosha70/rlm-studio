@@ -10,9 +10,13 @@ output for ``rlms==0.1.3``.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.metadata
 import sys
+import threading
 import types
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -37,12 +41,18 @@ from rlmstudio.application.services.outcome_classifier import (
     OutcomeCategory,
     classify_execution_outcome,
 )
+from rlmstudio.infrastructure.engines import rlms_adapter
 from rlmstudio.infrastructure.engines.rlms_adapter import (
+    BUSY_REASON,
+    MAX_TRACE_RECURSION_DEPTH,
     NOTE_COST_UNKNOWN,
+    NOTE_INTERRUPTED_TOTALS,
     NOTE_LOCAL_ENV,
     NOTE_NO_STREAMING,
+    NOTE_NO_SUBCALL_FLOOR,
     UNAVAILABLE_REASON,
     RlmsEngineAdapter,
+    engine_max_depth,
     sum_usage,
     trajectory_to_trace,
 )
@@ -170,6 +180,32 @@ class TestSumUsage:
         assert sum_usage({}) == (0, 0, None)
 
 
+class TestEngineMaxDepth:
+    """The two projects count recursion differently; the mapping is the contract.
+
+    Studio counts levels of sub-RLM, the engine counts the depth at which a node
+    degrades to a plain model call, and the engine's root node is at depth 0.
+    """
+
+    @pytest.mark.parametrize(
+        ("studio_levels", "engine_depth"),
+        [(0, 1), (1, 2), (2, 3), (5, 6)],
+    )
+    def test_studio_levels_map_to_engine_depth_plus_one(
+        self, studio_levels: int, engine_depth: int
+    ) -> None:
+        assert engine_max_depth(studio_levels) == engine_depth
+
+    def test_zero_is_clamped_so_the_engine_never_skips_its_loop(self) -> None:
+        """``max_depth=0`` would answer from the document without the question.
+
+        The engine returns a bare string in that case instead of a completion
+        object, so the floor is 1 rather than a faithful 0.
+        """
+        assert engine_max_depth(0) >= 1
+        assert engine_max_depth(-3) >= 1
+
+
 class TestTrajectoryToTrace:
     def test_roles_follow_the_block_structure(self) -> None:
         trace = trajectory_to_trace(TRAJECTORY, final_answer=FINAL, model=ROOT_MODEL)
@@ -249,6 +285,136 @@ class TestTrajectoryToTrace:
 
         assert [e[TRACE_KEY_CONTENT] for e in trace] == ["42"]
 
+    def test_second_code_block_in_one_iteration_carries_its_own_code(self) -> None:
+        """One model turn can emit several ```repl blocks; each becomes a pair.
+
+        The iteration's prose belongs to the first block only, so later blocks
+        show their code as the assistant content instead of repeating it.
+        """
+        trajectory = {
+            "iterations": [
+                {
+                    "response": "Two steps.\n```repl\na=1\n```\n```repl\nb=2\n```",
+                    "code_blocks": [
+                        {"code": "a=1", "result": {"stdout": "first\n", "stderr": ""}},
+                        {"code": "b=2", "result": {"stdout": "second\n", "stderr": ""}},
+                    ],
+                }
+            ]
+        }
+        trace = trajectory_to_trace(trajectory, final_answer=FINAL, model=ROOT_MODEL)
+
+        assert [e[TRACE_KEY_ROLE] for e in trace] == [
+            "assistant",
+            "execution",
+            "assistant",
+            "execution",
+            "assistant",
+        ]
+        assert trace[0][TRACE_KEY_CONTENT].startswith("Two steps.")
+        assert trace[2][TRACE_KEY_CONTENT] == "b=2"
+        assert trace[2][TRACE_KEY_CODE] == "b=2"
+        assert [e[TRACE_KEY_CONTENT] for e in trace if e[TRACE_KEY_ROLE] == "execution"] == [
+            "first\n",
+            "second\n",
+        ]
+
+
+def _nested_call(*, response: str, model: str, nested: dict[str, Any] | None) -> dict[str, Any]:
+    """An ``rlm_calls`` entry; ``nested`` is the child's own trajectory (engine ``metadata``)."""
+    call: dict[str, Any] = {
+        "root_model": model,
+        "prompt": "sub question",
+        "response": response,
+        "usage_summary": SUBCALL_USAGE,
+        "execution_time": 0.3,
+    }
+    if nested is not None:
+        call["metadata"] = nested
+    return call
+
+
+def _one_block_trajectory(*, response: str, calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """A one-iteration, one-code-block trajectory whose block made *calls*."""
+    return {
+        "iterations": [
+            {
+                "response": response,
+                "code_blocks": [
+                    {
+                        "code": "out = llm_query(chunk)",
+                        "result": {"stdout": "", "stderr": "", "rlm_calls": calls},
+                    }
+                ],
+            }
+        ]
+    }
+
+
+class TestNestedSubCalls:
+    """A sub-call that ran its own REPL loop contributes that loop to the trace.
+
+    The engine attaches a child's full trajectory to the sub-call's
+    ``metadata``, so anything deeper than one level used to be dropped and
+    every sub-call was labelled depth 1 regardless of where it ran.
+    """
+
+    def _two_level_trace(self) -> list[dict[str, Any]]:
+        grandchild = _nested_call(response="leaf answer", model="child-model", nested=None)
+        child = _nested_call(
+            response="child answer",
+            model="child-model",
+            nested=_one_block_trajectory(response="child reasoning", calls=[grandchild]),
+        )
+        trace: list[dict[str, Any]] = trajectory_to_trace(
+            _one_block_trajectory(response="root reasoning", calls=[child]),
+            final_answer=FINAL,
+            model=ROOT_MODEL,
+        )
+        return trace
+
+    def test_child_steps_precede_the_child_answer(self) -> None:
+        contents = [e[TRACE_KEY_CONTENT] for e in self._two_level_trace()]
+
+        assert contents.index("child reasoning") < contents.index("child answer")
+        assert contents.index("leaf answer") < contents.index("child answer")
+
+    def test_each_level_carries_its_own_depth(self) -> None:
+        depths = {
+            e[TRACE_KEY_CONTENT]: e.get(TRACE_KEY_RECURSION_DEPTH) for e in self._two_level_trace()
+        }
+
+        assert depths["root reasoning"] is None  # the root loop is not recursion
+        assert depths["child reasoning"] == 1
+        assert depths["child answer"] == 1
+        assert depths["leaf answer"] == 2
+
+    def test_child_entries_are_attributed_to_the_child_model(self) -> None:
+        by_content = {e[TRACE_KEY_CONTENT]: e for e in self._two_level_trace()}
+
+        assert by_content["root reasoning"][TRACE_KEY_MODEL] == ROOT_MODEL
+        assert by_content["child reasoning"][TRACE_KEY_MODEL] == "child-model"
+
+    def test_walk_stops_at_the_depth_cap_but_still_reports_the_answer(self) -> None:
+        """Nesting comes from another library, so the walk is bounded."""
+        call = _nested_call(response="depth-limit answer", model=ROOT_MODEL, nested=None)
+        for level in range(MAX_TRACE_RECURSION_DEPTH + 3):
+            call = _nested_call(
+                response=f"answer {level}",
+                model=ROOT_MODEL,
+                nested=_one_block_trajectory(response=f"reasoning {level}", calls=[call]),
+            )
+        trace = trajectory_to_trace(
+            _one_block_trajectory(response="root reasoning", calls=[call]),
+            final_answer=FINAL,
+            model=ROOT_MODEL,
+        )
+
+        depths = [e.get(TRACE_KEY_RECURSION_DEPTH) or 0 for e in trace]
+        assert max(depths) == MAX_TRACE_RECURSION_DEPTH
+        assert "depth-limit answer" not in [e[TRACE_KEY_CONTENT] for e in trace]
+        assert trace[-1][TRACE_KEY_CONTENT] == FINAL
+
 
 # ---------------------------------------------------------------------------
 # Availability and provider mapping (no rlm needed)
@@ -290,11 +456,45 @@ class TestAvailability:
         assert "'gemini'" in reason
         assert "not supported" in reason
 
-    def test_anthropic_without_key_is_unavailable(self, fake_rlm: _FakeRlm) -> None:
-        available, reason = _adapter(backend="anthropic", api_key=None).is_available()
+    @pytest.mark.parametrize("backend", ["anthropic", "openai"])
+    def test_native_backend_without_any_key_is_unavailable(
+        self, fake_rlm: _FakeRlm, monkeypatch: pytest.MonkeyPatch, backend: str
+    ) -> None:
+        """Both cloud backends are reported alike; neither is silently allowed."""
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        available, reason = _adapter(backend=backend, api_key=None).is_available()
 
         assert not available
         assert "API key" in reason
+
+    @pytest.mark.parametrize(
+        ("backend", "env_var"),
+        [("openai", "OPENAI_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY")],
+    )
+    def test_key_falls_back_to_the_provider_environment_variable(
+        self, fake_rlm: _FakeRlm, monkeypatch: pytest.MonkeyPatch, backend: str, env_var: str
+    ) -> None:
+        """The engine's own client reads the environment at import time only.
+
+        Studio therefore resolves the variable itself and passes the key in, so
+        a key exported after the process started is still used.
+        """
+        monkeypatch.setenv(env_var, "sk-from-env")
+
+        _adapter(backend=backend, api_key=None).run("d", "q", _CONFIG)
+
+        assert fake_rlm.init_kwargs["backend_kwargs"]["api_key"] == "sk-from-env"
+
+    def test_an_explicit_key_wins_over_the_environment(
+        self, fake_rlm: _FakeRlm, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+
+        _adapter(api_key="sk-explicit").run("d", "q", _CONFIG)
+
+        assert fake_rlm.init_kwargs["backend_kwargs"]["api_key"] == "sk-explicit"
 
     def test_local_backend_without_endpoint_is_unavailable(self, fake_rlm: _FakeRlm) -> None:
         available, reason = _adapter(backend="ollama", base_url=None).is_available()
@@ -351,6 +551,9 @@ class _FakeRlm:
         self.closed = False
         self.completion: _FakeCompletion = _FakeCompletion()
         self.raise_on_completion: BaseException | None = None
+        # What the logger the adapter owns would hand back mid-run; the adapter
+        # reads it when the engine raises instead of returning a completion.
+        self.logged_trajectory: dict[str, Any] | None = TRAJECTORY
 
 
 @pytest.fixture
@@ -381,6 +584,9 @@ def fake_rlm(monkeypatch: pytest.MonkeyPatch) -> _FakeRlm:
         def __init__(self, log_dir: str | None = None, file_name: str = "rlm") -> None:
             self.log_dir = log_dir
 
+        def get_trajectory(self) -> dict[str, Any] | None:
+            return state.logged_trajectory
+
     module = types.ModuleType("rlm")
     module.RLM = RLM  # type: ignore[attr-defined]
     module.BudgetExceededError = BudgetExceededError  # type: ignore[attr-defined]
@@ -410,7 +616,8 @@ class TestRun:
 
         kw = fake_rlm.init_kwargs
         assert kw["max_iterations"] == 7
-        assert kw["max_depth"] == 2
+        # Studio's 2 levels of sub-RLM are 3 engine levels: see engine_max_depth.
+        assert kw["max_depth"] == 3
         assert kw["max_timeout"] == 90.0
         assert kw["max_tokens"] == 50_000
         assert kw["max_budget"] == 0.25
@@ -520,6 +727,41 @@ class TestRun:
         assert result.metadata[RESULT_KEY_COST_KNOWN] is False
         assert NOTE_COST_UNKNOWN in result.metadata[RESULT_KEY_ENGINE_NOTES]
 
+    def test_a_zero_from_the_cost_table_is_unknown_not_free(self, fake_rlm: _FakeRlm) -> None:
+        """A priceless model must not rank as the cheapest slot.
+
+        The slot's cost table answers 0.0 both for a model it has no price for
+        and for a lookup that raised, so a run that consumed tokens and came
+        back free is "price unknown".
+        """
+        fake_rlm.completion = _FakeCompletion(usage=USAGE_NO_COST)
+
+        result = _adapter(cost_fn=lambda _in, _out: 0.0).run("d", "q", _CONFIG)
+
+        assert result.total_cost == 0.0
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is False
+        assert NOTE_COST_UNKNOWN in result.metadata[RESULT_KEY_ENGINE_NOTES]
+
+    def test_zero_cost_on_a_run_that_used_no_tokens_stays_known(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.completion = _FakeCompletion(usage={})
+
+        result = _adapter(cost_fn=lambda _in, _out: 0.0).run("d", "q", _CONFIG)
+
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is True
+
+    def test_zero_recursion_is_reported_as_unenforceable(self, fake_rlm: _FakeRlm) -> None:
+        config = dataclasses.replace(_CONFIG, max_recursion_depth=0)
+
+        result = _adapter().run("d", "q", config)
+
+        assert fake_rlm.init_kwargs["max_depth"] == 1
+        assert NOTE_NO_SUBCALL_FLOOR in result.metadata[RESULT_KEY_ENGINE_NOTES]
+
+    def test_positive_recursion_carries_no_floor_note(self, fake_rlm: _FakeRlm) -> None:
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert NOTE_NO_SUBCALL_FLOOR not in result.metadata[RESULT_KEY_ENGINE_NOTES]
+
     def test_engine_error_completion_is_a_failed_result(self, fake_rlm: _FakeRlm) -> None:
         fake_rlm.completion = _FakeCompletion(
             response="Error: Timeout exhausted (90.0s of 90.0s)",
@@ -571,3 +813,164 @@ class TestRun:
 
         assert result.success
         assert fake_rlm.completion_calls[0]["root_prompt"] == "q"
+
+
+def _raise(exc_name: str, message: str, **attrs: Any) -> BaseException:
+    """Build one of the fake ``rlm`` limit exceptions with the engine's attributes."""
+    exc: BaseException = getattr(sys.modules["rlm"], exc_name)(message)
+    for name, value in attrs.items():
+        setattr(exc, name, value)
+    return exc
+
+
+class TestInterruptedRunKeepsWhatWasSpent:
+    """A run stopped by a cap must not be recorded as having spent nothing.
+
+    The engine raises from inside its loop, so no completion comes back: the
+    figure that tripped the cap lives on the exception and the steps live in the
+    logger the adapter owns.  Reporting neither made the most expensive runs
+    look like the cheapest.
+    """
+
+    def test_token_breach_reports_the_tokens_and_the_trajectory(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = _raise(
+            "TokenLimitExceededError",
+            "50,000 of 50,000 tokens",
+            tokens_used=50_000,
+            partial_answer="3 sections so far",
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert not result.success
+        assert result.total_tokens == 50_000
+        assert result.steps == 2  # the two iterations the logger captured
+        assert len(result.trace) > 0
+        assert "3 sections so far" in result.answer
+        assert NOTE_INTERRUPTED_TOTALS in result.metadata[RESULT_KEY_ENGINE_NOTES]
+        assert classify_execution_outcome(result.success, result.error, result.answer).category is (
+            OutcomeCategory.BUDGET_EXHAUSTED
+        )
+
+    def test_budget_breach_reports_the_money_it_spent(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = _raise(
+            "BudgetExceededError", "spent $0.310000 of $0.250000", spent=0.31
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert result.total_cost == 0.31
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is True
+
+    def test_timeout_reports_no_cost_as_unknown_rather_than_zero(self, fake_rlm: _FakeRlm) -> None:
+        """A timeout carries no usage at all, so cost is unknown, not $0."""
+        fake_rlm.raise_on_completion = _raise(
+            "TimeoutExceededError", "90.0s of 90.0s", elapsed=90.0
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert result.total_cost == 0.0
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is False
+        assert result.steps == 2
+        assert classify_execution_outcome(result.success, result.error, result.answer).category is (
+            OutcomeCategory.TIMEOUT
+        )
+
+    def test_an_empty_logger_still_yields_a_classified_failure(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.logged_trajectory = None
+        fake_rlm.raise_on_completion = _raise("TimeoutExceededError", "90.0s of 90.0s")
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert not result.success
+        assert result.trace == []
+        assert result.steps == 0
+
+
+class TestLocalEnvironmentIsSerialised:
+    """The engine's in-process REPL mutates process-global state.
+
+    ``local`` swaps ``sys.stdout`` / ``sys.stderr`` and chdirs into a temp
+    directory around every code cell under a lock that covers one instance only,
+    so two concurrent slots could restore each other's streams and leave the
+    server in a deleted directory.  Official runs therefore queue.
+    """
+
+    def test_a_second_local_run_waits_and_then_reports_the_engine_as_busy(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        config = dataclasses.replace(_CONFIG, max_time_seconds=0.05)
+        with self._lock_held():
+            result = _adapter(sandbox_type="restricted").run("d", "q", config)
+
+        assert not result.success
+        assert result.error == BUSY_REASON
+        assert fake_rlm.completion_calls == []  # the engine was never started
+        assert result.elapsed_time >= config.max_time_seconds  # the wait is reported
+        assert classify_execution_outcome(result.success, result.error, result.answer).category is (
+            OutcomeCategory.GENERAL_ERROR
+        )
+
+    def test_a_docker_run_is_not_serialised(self, fake_rlm: _FakeRlm) -> None:
+        """Container runs touch no shared process state, so they never queue."""
+        config = dataclasses.replace(_CONFIG, max_time_seconds=0.05)
+        with self._lock_held():
+            result = _adapter(sandbox_type="docker").run("d", "q", config)
+
+        assert result.success
+
+    def test_batched_sub_calls_are_serialised_in_process(self, fake_rlm: _FakeRlm) -> None:
+        """One run must not give itself several in-process REPLs either.
+
+        The engine fans ``llm_query_batched`` out over a thread pool, and every
+        child allowed its own REPL swaps the same process-global streams and
+        working directory.
+        """
+        _adapter(sandbox_type="restricted").run("d", "q", _CONFIG)
+
+        assert fake_rlm.init_kwargs["max_concurrent_subcalls"] == 1
+
+    def test_docker_runs_keep_the_engine_default_concurrency(self, fake_rlm: _FakeRlm) -> None:
+        _adapter(sandbox_type="docker").run("d", "q", _CONFIG)
+
+        assert "max_concurrent_subcalls" not in fake_rlm.init_kwargs
+
+    def test_the_lock_is_released_after_a_run(self, fake_rlm: _FakeRlm) -> None:
+        _adapter(sandbox_type="restricted").run("d", "q", _CONFIG)
+
+        assert _adapter(sandbox_type="restricted").run("d", "q", _CONFIG).success
+
+    def test_the_lock_is_released_when_the_engine_raises(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = RuntimeError("connection refused")
+
+        with pytest.raises(RuntimeError):
+            _adapter(sandbox_type="restricted").run("d", "q", _CONFIG)
+
+        fake_rlm.raise_on_completion = None
+        assert _adapter(sandbox_type="restricted").run("d", "q", _CONFIG).success
+
+    @staticmethod
+    @contextmanager
+    def _lock_held() -> Iterator[None]:
+        """Hold the adapter's process-wide local-environment lock on another thread.
+
+        A thread rather than the test's own thread because the lock is not
+        reentrant and the adapter must observe it as held by someone else.
+        """
+        acquired = threading.Event()
+        release = threading.Event()
+
+        def _hold() -> None:
+            with rlms_adapter._LOCAL_ENV_LOCK:
+                acquired.set()
+                release.wait(timeout=10.0)
+
+        holder = threading.Thread(target=_hold, name="lock-holder", daemon=True)
+        holder.start()
+        assert acquired.wait(timeout=10.0), "the holder thread never took the lock"
+        try:
+            yield
+        finally:
+            release.set()
+            holder.join(timeout=10.0)
