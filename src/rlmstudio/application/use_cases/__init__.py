@@ -8,10 +8,12 @@ from .run_comparison import RunComparisonUseCase
 from .run_direct import RunDirectUseCase
 from .run_rag import RunRAGUseCase
 from .run_rlm import RunRLMUseCase
+from .run_rlm_official import RunRLMOfficialUseCase
 
 __all__ = [
     "RunRLMUseCase",
     "RunDirectUseCase",
     "RunRAGUseCase",
     "RunComparisonUseCase",
+    "RunRLMOfficialUseCase",
 ]

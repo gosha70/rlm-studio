@@ -19,9 +19,9 @@ Branch `feat/interop-official-rlm` off `master` after `feat/rebrand-rlm-studio` 
 - [x] T1.2 Tests: request validation accepts the mode; `auto` never routes to it. *(`tests/test_mode_rlm_official.py`, 14 tests; `test_all_execution_modes_accepted` extended.)*
 
 ## Phase 2 — port + fake + use case
-- [ ] T2.1 `application/ports/rlm_engine_port.py` (`RLMEnginePort`).
-- [ ] T2.2 `tests/fakes/fake_rlm_engine.py` (scripted trajectories).
-- [ ] T2.3 `application/use_cases/run_rlm_official.py`; tests: happy, error, timeout, budget breach → correct outcome categories.
+- [x] T2.1 `application/ports/rlm_engine_port.py` (`RLMEnginePort`). *(2026-09-29: `version` property + `is_available()` + `run`/`run_async`; exported from `application.ports`; compliance test in `tests/test_port_compliance.py`.)*
+- [x] T2.2 `tests/fakes/fake_rlm_engine.py` (scripted trajectories). *(`tests/` is a package, so `tests/fakes/` is importable; the fake sleeps with `asyncio.sleep` on the async path so `wait_for` cancels cleanly.)*
+- [x] T2.3 `application/use_cases/run_rlm_official.py`; tests: happy, error, timeout, budget breach → correct outcome categories. *(Wall-clock backstop = daemon thread joined with a timeout, not a ThreadPoolExecutor, so an engine stuck in a REPL can neither block the caller nor interpreter exit. Post-run token/cost breach → degraded `⚠️ … budget …` answer (success=True, classifier → BUDGET_EXHAUSTED), mirroring `RunRLMUseCase`'s limit warning. `tests/test_run_rlm_official.py`, 16 tests, all asserting the classifier category.)*
 
 ## Phase 3 — adapter
 - [ ] T3.1 `infrastructure/engines/rlms_adapter.py`: lazy import, `is_available()`, client factory (native openai/anthropic; openai-compatible base_url; unsupported → clear error), run, trajectory→`TraceStep` mapping, usage→tokens/cost.

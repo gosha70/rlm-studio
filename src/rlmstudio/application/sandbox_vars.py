@@ -124,6 +124,9 @@ TRACE_KEY_MODEL = "model"
 TRACE_KEY_MODE = "mode"
 TRACE_KEY_CLAMP = "clamp"
 
+RESULT_KEY_ENGINE_VERSION = "engine_version"
+"""``RunResultDTO.metadata`` key: version of the third-party engine that ran."""
+
 MODES_INPROMPT = frozenset({MODE_DIRECT, MODE_COMPARE, MODE_RAG})
 """Modes that carry history as native user/assistant chat messages."""
 

@@ -21,6 +21,36 @@ def _has_port_methods(obj: object, method_names: list[str]) -> bool:
 
 _LLM_PORT_METHODS = ["complete", "complete_stream", "count_tokens", "get_pricing"]
 _SANDBOX_PORT_METHODS = ["execute", "reset", "is_healthy", "set_variable", "get_variable"]
+_RLM_ENGINE_PORT_METHODS = ["run", "run_async", "is_available"]
+
+
+class TestFakeRLMEngineCompliance:
+    """Verify the shared FakeRLMEngine satisfies RLMEnginePort structurally.
+
+    The real ``rlms`` adapter is checked the same way once it exists; keeping
+    the fake honest is what makes the use-case tests meaningful.
+    """
+
+    def _make_engine(self):
+        from tests.fakes.fake_rlm_engine import FakeRLMEngine
+
+        return FakeRLMEngine()
+
+    def test_has_all_rlm_engine_port_methods(self):
+        assert _has_port_methods(self._make_engine(), _RLM_ENGINE_PORT_METHODS)
+
+    def test_exposes_version(self):
+        assert isinstance(self._make_engine().version, str)
+
+    def test_is_available_returns_flag_and_reason(self):
+        available, reason = self._make_engine().is_available()
+        assert isinstance(available, bool)
+        assert isinstance(reason, str)
+
+    def test_isinstance_rlm_engine_port(self):
+        from rlmstudio.application.ports.rlm_engine_port import RLMEnginePort
+
+        assert isinstance(self._make_engine(), RLMEnginePort)
 
 
 class TestMockLLMAdapterCompliance:
