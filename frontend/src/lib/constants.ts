@@ -13,6 +13,8 @@ export const MODE_RLM = "rlm" as const;
 export const MODE_RAG = "rag" as const;
 export const MODE_COMPARE = "compare" as const;
 export const MODE_AUTO = "auto" as const;
+/** The paper authors' reference implementation (`rlms`) run as an engine. */
+export const MODE_RLM_OFFICIAL = "rlm_official" as const;
 
 /** All execution modes the user can select in the UI. */
 export const ALL_EXECUTION_MODES = [MODE_DIRECT, MODE_RLM, MODE_RAG] as const;

@@ -89,6 +89,7 @@ const MODE_DESCRIPTIONS: Record<MatrixSlotMode, string> = {
   direct: "Single LLM call with full content",
   rlm: "Recursive exploration with sandbox",
   rag: "Retrieval over embedded chunks",
+  rlm_official: "Paper authors' reference implementation (rlms)",
 };
 
 const RANKING_METRICS: {

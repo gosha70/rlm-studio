@@ -11,12 +11,12 @@ date: 2026-08-15
 Branch `feat/interop-official-rlm` off `master` after `feat/rebrand-rlm-studio` merges. One commit per phase; CI green each time. Allowlist in `plan.md` §2 is binding. Apply defaults for OQ-1..3 in `spec.md` §6.
 
 ## Phase 0 — confirmations (no edits)
-- [ ] T0.1 `pip index versions rlms` — record latest 0.1.x and its Python floor; read `rlm.RLM` signature and logger/trajectory API for the pinned version.
-- [ ] T0.2 Locate where mode literals/constants live today (`grep -rn 'Literal\["auto"' src`; `SlotMode`); decide the single constants module.
+- [x] T0.1 `pip index versions rlms` — record latest 0.1.x and its Python floor; read `rlm.RLM` signature and logger/trajectory API for the pinned version. *(2026-09-29: `rlms==0.1.3`, `>=3.11`; signatures, `RLMLogger.get_trajectory()`, `UsageSummary`, exported exceptions and the `[studio]+rlms` resolution check recorded in `doc_internal/plans/2026-09-29-release-1.0.0-execution-plan.md` §M1.)*
+- [x] T0.2 Locate where mode literals/constants live today (`grep -rn 'Literal\["auto"' src`; `SlotMode`); decide the single constants module. *(2026-09-29: `application/sandbox_vars.py:57-61` is the home — `MODE_RLM_OFFICIAL` goes there; no new `application/constants.py`. Other literal sites: `run_matrix_comparison.py:32/48`, `server/models.py:219/638/682/711`, `frontend/src/lib/api.ts:51/377/392/405`.)*
 
 ## Phase 1 — constants + literals
-- [ ] T1.1 `MODE_RLM_OFFICIAL` constant; widen `SlotMode`, `server/models.py` literals; frontend type mirror.
-- [ ] T1.2 Tests: request validation accepts the mode; `auto` never routes to it.
+- [x] T1.1 `MODE_RLM_OFFICIAL` constant; widen `SlotMode`, `server/models.py` literals; frontend type mirror. *(2026-09-29: constant + `ExecutionMode`/`ChatMode` `Literal` aliases in `sandbox_vars.py`; `SlotMode` in the use case **and** the duplicate in `routes/compare_matrix.py:58` both re-export the alias; matrix `modes` `max_length` 3→4; frontend `MODE_RLM_OFFICIAL`, `api.ts` unions, `MODE_DESCRIPTIONS` entry. `_SUPPORTED_MODES` widens in Phase 4 together with dispatch so a slot is never silently accepted-then-failed.)*
+- [x] T1.2 Tests: request validation accepts the mode; `auto` never routes to it. *(`tests/test_mode_rlm_official.py`, 14 tests; `test_all_execution_modes_accepted` extended.)*
 
 ## Phase 2 — port + fake + use case
 - [ ] T2.1 `application/ports/rlm_engine_port.py` (`RLMEnginePort`).

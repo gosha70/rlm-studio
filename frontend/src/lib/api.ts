@@ -48,7 +48,7 @@ export interface ChatResponse {
 // Matrix compare — POST /api/chat/compare-matrix
 // ---------------------------------------------------------------------------
 
-export type MatrixSlotMode = "direct" | "rlm" | "rag";
+export type MatrixSlotMode = "direct" | "rlm" | "rag" | "rlm_official";
 
 export type MatrixRankingMetric =
   | "cost"
@@ -374,7 +374,7 @@ export interface ChatProviderConfig {
   llm_model?: string;     // old: model name
   profile_id?: string | null;
   profile_name?: string | null;
-  execution_mode: "direct" | "rlm" | "rag";
+  execution_mode: "direct" | "rlm" | "rag" | "rlm_official";
   runtime_settings: RuntimeSettings;
   rag_config?: RAGConfig | null;
   rlm_max_steps: number;
@@ -389,7 +389,7 @@ export interface ChatProviderCreateRequest {
   name: string;
   llm_provider_id: string;  // UUID of LLMProviderConfig
   profile_id?: string | null;
-  execution_mode?: "direct" | "rlm" | "rag";
+  execution_mode?: "direct" | "rlm" | "rag" | "rlm_official";
   rag_config?: RAGConfig | null;
   rlm_max_steps?: number | null;
   rlm_timeout_seconds?: number | null;
@@ -402,7 +402,7 @@ export interface ChatProviderUpdateRequest {
   name?: string | null;
   llm_model?: string | null;
   profile_id?: string | null;
-  execution_mode?: "direct" | "rlm" | "rag" | null;
+  execution_mode?: "direct" | "rlm" | "rag" | "rlm_official" | null;
   runtime_settings?: RuntimeSettings | null;
   rag_config?: RAGConfig | null;
   rlm_max_steps?: number | null;

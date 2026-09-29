@@ -11,7 +11,7 @@ date: 2026-08-15
 Branch `feat/benchmarks-v1` after `feat/rebrand-rlm-studio` merges (may run in parallel with `feat/interop-official-rlm`; the `rlm_official` engine row is added when that lands). One commit per phase; CI green each time. Allowlist in `plan.md` §2 is binding. Apply defaults for OQ-1..3 in `spec.md` §6.
 
 ## Phase 0 — confirmations (no edits)
-- [ ] T0.1 Read `src/rlmstudio/benchmark/{dataset,runner,report}.py` and `run_matrix_comparison.py`; confirm the slot-builder wiring in `server/dependencies.py` can be reused from the application layer without importing `server/`.
+- [x] T0.1 Read `src/rlmstudio/benchmark/{dataset,runner,report}.py` and `run_matrix_comparison.py`; confirm the slot-builder wiring in `server/dependencies.py` can be reused from the application layer without importing `server/`. *(2026-09-29: it cannot — per-slot adapter construction lives on `AppState` (`server/dependencies.py:944/:1352`, used from `routes/compare_matrix.py:385-434`). A small slot builder is factored into `application`/`infrastructure` during interop Phase 4 and reused here. See `doc_internal/plans/2026-09-29-release-1.0.0-execution-plan.md` §M2.)*
 - [ ] T0.2 Pick and record dataset sources + licenses (Gutenberg, RFCs, gov reports, repo docs).
 
 ## Phase 1 — dataset

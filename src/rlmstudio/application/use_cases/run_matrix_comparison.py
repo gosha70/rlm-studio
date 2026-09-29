@@ -16,20 +16,21 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
 from rlmstudio.application.ports.embedding_port import EmbeddingPort
 from rlmstudio.application.ports.llm_port import LLMPort
 from rlmstudio.application.ports.sandbox_port import SandboxPort
 from rlmstudio.application.ports.storage_port import StoragePort
+from rlmstudio.application.sandbox_vars import ExecutionMode
 from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
 from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
 from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
 
 logger = logging.getLogger(__name__)
 
-SlotMode = Literal["direct", "rag", "rlm"]
+SlotMode: TypeAlias = ExecutionMode
 RankingMetric = Literal[
     "cost",
     "tokens",

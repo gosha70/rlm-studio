@@ -5,6 +5,8 @@ infrastructure skips them on return), so they live here as the single
 source of truth rather than as magic strings scattered across files.
 """
 
+from typing import Literal, TypeAlias
+
 # ---------------------------------------------------------------------------
 # Sandbox variable names — bound via sandbox.set_variable(), read by model
 # code inside the subprocess, and excluded from the child → parent return
@@ -59,6 +61,18 @@ MODE_RLM = "rlm"
 MODE_RAG = "rag"
 MODE_COMPARE = "compare"
 MODE_AUTO = "auto"
+MODE_RLM_OFFICIAL = "rlm_official"
+"""The paper authors' reference implementation (``rlms``) run as an engine."""
+
+ExecutionMode: TypeAlias = Literal["direct", "rlm", "rag", "rlm_official"]
+"""Modes a Chat Provider or a Compare-matrix slot executes in.
+
+The literal is spelled here, next to the ``MODE_*`` constants, so every
+request model and use case imports one alias instead of repeating the set.
+"""
+
+ChatMode: TypeAlias = Literal["auto", "rlm", "direct", "rag", "compare", "rlm_official"]
+"""Modes accepted by ``POST /api/chat``.  ``auto`` never resolves to ``rlm_official``."""
 
 # Modes that use RLM internally (RLM run config applies)
 MODES_RLM_INTERNAL = frozenset({MODE_RLM, MODE_AUTO, MODE_COMPARE})

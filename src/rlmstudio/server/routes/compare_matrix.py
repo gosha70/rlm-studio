@@ -14,7 +14,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -29,6 +29,7 @@ from rlmstudio.application.sandbox_vars import (
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
     RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS,
+    ExecutionMode,
 )
 from rlmstudio.application.use_cases.run_matrix_comparison import (
     MatrixComparisonResultDTO,
@@ -55,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-SlotMode = Literal["direct", "rlm", "rag"]
+SlotMode: TypeAlias = ExecutionMode
 
 # Supported ranking metrics are the same set the use case exposes, restated
 # here so the request schema can validate them at the HTTP boundary.
@@ -84,7 +85,7 @@ class CompareMatrixRequest(BaseModel):
     file_ids: list[str] | None = None
     query: str = Field(..., min_length=1)
     chat_provider_ids: list[str] = Field(..., min_length=1, max_length=10)
-    modes: list[SlotMode] = Field(..., min_length=1, max_length=3)
+    modes: list[SlotMode] = Field(..., min_length=1, max_length=4)
     session_id: str | None = None
     ranking_metric: Literal[
         "cost",
@@ -108,7 +109,7 @@ class CompareMatrixRequestV2(BaseModel):
     file_ids: list[str] | None = None
     query: str = Field(..., min_length=1)
     llm_provider_ids: list[str] = Field(..., min_length=1, max_length=10)
-    modes: list[SlotMode] = Field(..., min_length=1, max_length=3)
+    modes: list[SlotMode] = Field(..., min_length=1, max_length=4)
     session_id: str | None = None
     ranking_metric: Literal[
         "cost",
@@ -138,7 +139,7 @@ class CompareMatrixUnifiedRequest(BaseModel):
     chat_provider_ids: list[str] | None = None
     # V2 path
     llm_provider_ids: list[str] | None = None
-    modes: list[SlotMode] = Field(default=["direct"], min_length=1, max_length=3)
+    modes: list[SlotMode] = Field(default=["direct"], min_length=1, max_length=4)
     session_id: str | None = None
     ranking_metric: Literal[
         "cost",

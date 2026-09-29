@@ -21,6 +21,8 @@ from rlmstudio.application.sandbox_vars import (
     RUNTIME_DEFAULT_TEMPERATURE,
     RUNTIME_DEFAULT_TIMEOUT_SECONDS,
     RUNTIME_DEFAULT_TOP_P,
+    ChatMode,
+    ExecutionMode,
 )
 
 # ---------------------------------------------------------------------------
@@ -216,7 +218,7 @@ class ChatRequest(BaseModel):
     file_id: str | None = None  # deprecated: use file_ids
     file_ids: list[str] | None = None
     query: str
-    mode: Literal["auto", "rlm", "direct", "rag", "compare"] = "auto"
+    mode: ChatMode = MODE_AUTO
     provider: str | None = None
     model: str | None = None
     session_id: str | None = None
@@ -635,7 +637,7 @@ class ChatProviderConfig(BaseModel):
     llm_model: str = ""  # deprecated: model name like "claude-sonnet-4-6"
     profile_id: str | None = None  # reference to a RunProfile
     profile_name: str | None = None  # resolved profile name (read-only)
-    execution_mode: Literal["direct", "rlm", "rag"] = "direct"
+    execution_mode: ExecutionMode = MODE_DIRECT
     runtime_settings: RuntimeSettings = Field(default_factory=RuntimeSettings)
     rag_config: RAGConfig | None = None  # only for RAG mode
     rlm_max_steps: int = RLM_DEFAULT_MAX_STEPS
@@ -679,7 +681,7 @@ class ChatProviderCreateRequest(BaseModel):
     name: str
     llm_provider_id: str  # UUID of the LLMProviderConfig to use
     profile_id: str | None = None
-    execution_mode: Literal["direct", "rlm", "rag"] = "direct"
+    execution_mode: ExecutionMode = MODE_DIRECT
     rag_config: RAGConfig | None = None
     rlm_max_steps: int | None = None
     rlm_timeout_seconds: int | None = None
@@ -708,7 +710,7 @@ class ChatProviderUpdateRequest(BaseModel):
     name: str | None = None
     llm_provider_id: str | None = None  # switch to a different LLM Provider
     profile_id: str | None = None
-    execution_mode: Literal["direct", "rlm", "rag"] | None = None
+    execution_mode: ExecutionMode | None = None
     rag_config: RAGConfig | None = None
     rlm_max_steps: int | None = None
     rlm_timeout_seconds: int | None = None
