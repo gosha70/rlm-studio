@@ -102,10 +102,10 @@ class TestCells:
         ]
         cells = MatrixBenchmarkReport(_results(outcomes)).cells()
 
-        assert [(c.provider, c.engine) for c in cells] == [
-            ("openai", MODE_DIRECT),
-            ("openai", MODE_RLM_OFFICIAL),
-            ("ollama", MODE_DIRECT),
+        assert [(c.provider, c.model, c.engine) for c in cells] == [
+            ("openai", "m", MODE_DIRECT),
+            ("openai", "m", MODE_RLM_OFFICIAL),
+            ("ollama", "m", MODE_DIRECT),
         ]
         openai_direct, openai_official, ollama_direct = cells
         assert (openai_direct.cases, openai_direct.runs) == (2, 2)
@@ -123,6 +123,20 @@ class TestCells:
 
         assert ollama_direct.accuracy is None  # no expected answer
         assert ollama_direct.judge_mean == 5.0
+
+    def test_two_models_of_one_backend_are_separate_cells(self) -> None:
+        outcomes = [
+            _outcome("c1", 1, "openai", MODE_DIRECT),
+            SlotOutcome(**{**_outcome("c1", 1, "openai", MODE_DIRECT).__dict__, "model": "big"}),
+        ]
+        results = _results(outcomes)
+        results.providers = ["openai/m", "openai/big"]
+        results.engines = [MODE_DIRECT]
+
+        cells = MatrixBenchmarkReport(results).cells()
+
+        assert [(c.provider, c.model) for c in cells] == [("openai", "m"), ("openai", "big")]
+        assert all(c.runs == 1 for c in cells)
 
     def test_judge_range_spans_repetitions(self) -> None:
         outcomes = [
@@ -156,6 +170,16 @@ class TestMarkdown:
         assert (
             "| openai / m | `rlm_official` | 1 | 100% (1/1) | 4.00 | 0 / 0 | 100 / 10 | $0.0000 (unknown ×1) | — | 2.0 s |"
             in md
+        )
+
+    def test_run_note_is_rendered_when_present(self) -> None:
+        results = _results([_outcome("c1", 1, "openai", MODE_DIRECT)])
+        assert "**Run notes:**" not in MatrixBenchmarkReport(results).to_markdown()
+
+        results.metadata["note"] = "Ollama 0.12 on an M3 Max, 64 GB"
+        assert (
+            "**Run notes:** Ollama 0.12 on an M3 Max, 64 GB"
+            in MatrixBenchmarkReport(results).to_markdown()
         )
 
     def test_per_case_section_only_when_requested(self) -> None:

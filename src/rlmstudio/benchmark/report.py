@@ -18,6 +18,7 @@ from .runner import BenchmarkRun
 
 BENCH_START_MARKER = "<!-- bench:start -->"
 BENCH_END_MARKER = "<!-- bench:end -->"
+RESULTS_METADATA_NOTE = "note"  # BenchmarkResults.metadata key rendered as "Run notes"
 
 
 class BenchmarkReport:
@@ -194,8 +195,8 @@ class CellSummary:
     """Aggregates for one provider × engine cell across cases and repetitions."""
 
     provider: str
+    model: str
     engine: str
-    models: list[str]
     cases: int
     runs: int
     failed: int
@@ -219,8 +220,8 @@ class CellSummary:
     def to_dict(self) -> dict[str, Any]:
         return {
             "provider": self.provider,
+            "model": self.model,
             "engine": self.engine,
-            "models": self.models,
             "cases": self.cases,
             "runs": self.runs,
             "failed": self.failed,
@@ -263,15 +264,18 @@ class MatrixBenchmarkReport:
         self.results = results
 
     def cells(self) -> list[CellSummary]:
-        """One summary per provider × engine, in the run's provider/engine order."""
-        groups: dict[tuple[str, str], list[SlotOutcome]] = {}
+        """One summary per provider/model × engine, in the run's declared order."""
+        groups: dict[tuple[str, str, str], list[SlotOutcome]] = {}
         for outcome in self.results.outcomes:
-            groups.setdefault((outcome.provider, outcome.engine), []).append(outcome)
+            key = (outcome.provider, outcome.model, outcome.engine)
+            groups.setdefault(key, []).append(outcome)
 
-        provider_keys = [spec.partition("/")[0] for spec in self.results.providers]
-        order = [(p, e) for p in provider_keys for e in self.results.engines]
-        # Keep any unexpected keys (e.g. fakes) after the declared order.
-        order += [k for k in groups if k not in order]
+        declared: list[tuple[str, str, str]] = []
+        for spec in self.results.providers:
+            provider, _, model = spec.partition("/")
+            declared.extend((provider, model, engine) for engine in self.results.engines)
+        # Declared order first (deduplicated), then anything unexpected.
+        order = list(dict.fromkeys(declared + list(groups)))
 
         summaries: list[CellSummary] = []
         for key in order:
@@ -286,8 +290,8 @@ class MatrixBenchmarkReport:
             summaries.append(
                 CellSummary(
                     provider=key[0],
-                    engine=key[1],
-                    models=sorted({o.model for o in group}),
+                    model=key[1],
+                    engine=key[2],
                     cases=len({o.case_id for o in group}),
                     runs=len(group),
                     failed=sum(1 for o in group if o.outcome != OutcomeCategory.SUCCESS.value),
@@ -336,6 +340,9 @@ class MatrixBenchmarkReport:
         if r.skipped:
             skipped = ", ".join(f"`{cid}`" for cid in sorted(r.skipped))
             lines.append(f"**Skipped cases (not fetched):** {skipped}")
+        if r.metadata.get(RESULTS_METADATA_NOTE):
+            # Hardware / model-version note for local rows (spec AC-2).
+            lines.append(f"**Run notes:** {r.metadata[RESULTS_METADATA_NOTE]}")
         return "\n".join(lines)
 
     def table_markdown(self) -> str:
@@ -360,7 +367,7 @@ class MatrixBenchmarkReport:
                 cost += f" (unknown ×{c.cost_unknown_runs})"
             ttft = f"{c.median_ttft_ms} ms" if c.median_ttft_ms is not None else "—"
             rows.append(
-                f"| {c.provider} / {', '.join(c.models)} | `{c.engine}` | {c.cases} | {accuracy} | "
+                f"| {c.provider} / {c.model} | `{c.engine}` | {c.cases} | {accuracy} | "
                 f"{judge} | {c.failed} / {c.timed_out} | {c.input_tokens:,} / {c.output_tokens:,} | "
                 f"{cost} | {ttft} | {c.mean_elapsed_seconds:.1f} s |"
             )
