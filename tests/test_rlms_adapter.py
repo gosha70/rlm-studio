@@ -54,6 +54,7 @@ from rlmstudio.infrastructure.engines.rlms_adapter import (
     UNAVAILABLE_REASON,
     RlmsEngineAdapter,
     engine_max_depth,
+    engine_timeout,
     sum_usage,
     trajectory_to_trace,
 )
@@ -209,6 +210,32 @@ class TestEngineMaxDepth:
         """
         assert engine_max_depth(0) >= 1
         assert engine_max_depth(-3) >= 1
+
+
+class TestEngineTimeout:
+    """The engine's deadline sits inside the caller's, never on top of it.
+
+    Both count the same budget, but the use case's guard starts first and can
+    only abandon the run; the engine stopping itself is what produces a result
+    with the usage and steps in it.
+    """
+
+    @pytest.mark.parametrize("budget", [2.0, 20.0, 90.0, 600.0])
+    def test_the_engine_stops_before_the_caller_gives_up(self, budget: float) -> None:
+        granted = engine_timeout(budget)
+
+        assert granted is not None
+        assert 0 < granted < budget
+
+    def test_a_small_budget_keeps_most_of_itself(self) -> None:
+        """The margin is proportional, so a short run is not cut in half."""
+        assert engine_timeout(2.0) == pytest.approx(1.8)
+
+    def test_a_large_budget_gives_up_only_the_capped_margin(self) -> None:
+        assert engine_timeout(600.0) == pytest.approx(595.0)
+
+    def test_no_budget_stays_no_budget(self) -> None:
+        assert engine_timeout(None) is None
 
 
 class TestTrajectoryToTrace:
@@ -628,7 +655,11 @@ class TestRun:
         assert kw["max_iterations"] == 7
         # Studio's 2 levels of sub-RLM are 3 engine levels: see engine_max_depth.
         assert kw["max_depth"] == 3
-        assert kw["max_timeout"] == 90.0
+        # The engine stops just inside the caller's guard: see engine_timeout.
+        # Approximate because the local path also charges the time spent
+        # queueing for the in-process REPL, microseconds when it is free.
+        assert kw["max_timeout"] == pytest.approx(engine_timeout(90.0), abs=0.01)
+        assert kw["max_timeout"] < 90.0
         assert kw["max_tokens"] == 50_000
         assert kw["max_budget"] == 0.25
         assert kw["verbose"] is False
@@ -758,6 +789,30 @@ class TestRun:
         result = _adapter(cost_fn=lambda _in, _out: 0.0).run("d", "q", _CONFIG)
 
         assert result.metadata[RESULT_KEY_COST_KNOWN] is True
+
+    @pytest.mark.parametrize("backend", ["ollama", "lmstudio", "vllm"])
+    def test_a_locally_served_model_is_free_not_unknown(
+        self, fake_rlm: _FakeRlm, backend: str
+    ) -> None:
+        """$0 is the real price of local inference, as Studio's own cells report it.
+
+        Treating it as unknown would drop every local official slot to the
+        bottom of the cost ranking while its Studio-loop sibling on the same
+        model ranked first.
+        """
+        fake_rlm.completion = _FakeCompletion(usage=USAGE_NO_COST)
+
+        result = _adapter(
+            backend=backend,
+            model="qwen3:8b",
+            api_key=None,
+            base_url="http://localhost:11434",
+            cost_fn=lambda _in, _out: 0.0,
+        ).run("d", "q", _CONFIG)
+
+        assert result.total_cost == 0.0
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is True
+        assert NOTE_COST_UNKNOWN not in result.metadata[RESULT_KEY_ENGINE_NOTES]
 
     def test_zero_recursion_is_reported_as_unenforceable(self, fake_rlm: _FakeRlm) -> None:
         config = dataclasses.replace(_CONFIG, max_recursion_depth=0)
@@ -924,6 +979,23 @@ class TestInterruptedRunKeepsWhatWasSpent:
             OutcomeCategory.BUDGET_EXHAUSTED
         )
 
+    def test_a_token_breach_is_priced_from_the_slot_cost_table(self, fake_rlm: _FakeRlm) -> None:
+        """The tokens are known even though the money is not, so price them."""
+        fake_rlm.raise_on_completion = _raise(
+            "TokenLimitExceededError", "50,000 of 50,000 tokens", tokens_used=50_000
+        )
+        seen: list[tuple[int, int]] = []
+
+        def cost_fn(input_tokens: int, output_tokens: int) -> float:
+            seen.append((input_tokens, output_tokens))
+            return 0.19
+
+        result = _adapter(cost_fn=cost_fn).run("d", "q", _CONFIG)
+
+        assert seen == [(50_000, 0)]
+        assert result.total_cost == 0.19
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is True
+
     def test_budget_breach_reports_the_money_it_spent(self, fake_rlm: _FakeRlm) -> None:
         fake_rlm.raise_on_completion = _raise(
             "BudgetExceededError", "spent $0.310000 of $0.250000", spent=0.31
@@ -972,17 +1044,67 @@ class TestLocalEnvironmentIsSerialised:
     def test_a_second_local_run_waits_and_then_reports_the_engine_as_busy(
         self, fake_rlm: _FakeRlm
     ) -> None:
-        config = dataclasses.replace(_CONFIG, max_time_seconds=0.05)
+        """The busy report must reach the caller *inside* its own budget.
+
+        The use case's wall-clock guard is counting the same budget from
+        earlier, so a queued run that waited the whole of it would always be
+        abandoned as a timeout and this message would never be seen.
+        """
+        budget = 1.0
+        config = dataclasses.replace(_CONFIG, max_time_seconds=budget)
         with self._lock_held():
             result = _adapter(sandbox_type="restricted").run("d", "q", config)
 
         assert not result.success
         assert result.error == BUSY_REASON
         assert fake_rlm.completion_calls == []  # the engine was never started
-        assert result.elapsed_time >= config.max_time_seconds  # the wait is reported
+        assert 0.0 < result.elapsed_time < budget
         assert classify_execution_outcome(result.success, result.error, result.answer).category is (
             OutcomeCategory.GENERAL_ERROR
         )
+
+    def test_a_run_that_waited_is_charged_for_the_wait(self, fake_rlm: _FakeRlm) -> None:
+        """Queueing spends budget, so the engine gets what is left, not the lot.
+
+        Handing it the full budget after part of it went on waiting is what
+        leaves a thread still working for a caller that has already given up.
+        """
+        budget = 4.0
+        config = dataclasses.replace(_CONFIG, max_time_seconds=budget)
+        held_for = 0.2
+        with self._lock_held(release_after=held_for):
+            result = _adapter(sandbox_type="restricted").run("d", "q", config)
+
+        assert result.success
+        granted = fake_rlm.init_kwargs["max_timeout"]
+        assert granted < engine_timeout(budget)
+        assert granted <= budget - held_for
+
+    def test_waiting_past_the_allowance_reports_busy_with_budget_to_spare(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        """The allowance is a slice, so the caller hears "busy" and still has time.
+
+        A hold longer than the allowance ends the wait, rather than letting it
+        run to the caller's own deadline.
+        """
+        budget = 1.0
+        config = dataclasses.replace(_CONFIG, max_time_seconds=budget)
+        with self._lock_held(release_after=budget * 0.9):
+            result = _adapter(sandbox_type="restricted").run("d", "q", config)
+
+        assert result.error == BUSY_REASON
+        assert fake_rlm.completion_calls == []
+        assert result.elapsed_time < budget
+
+    def test_a_short_budget_still_gets_to_run(self, fake_rlm: _FakeRlm) -> None:
+        """A one-second timeout is a small budget, not a busy engine."""
+        config = dataclasses.replace(_CONFIG, max_time_seconds=1.0)
+
+        result = _adapter(sandbox_type="restricted").run("d", "q", config)
+
+        assert result.success
+        assert fake_rlm.completion_calls != []
 
     def test_a_docker_run_is_not_serialised(self, fake_rlm: _FakeRlm) -> None:
         """Container runs touch no shared process state, so they never queue."""
@@ -1024,11 +1146,13 @@ class TestLocalEnvironmentIsSerialised:
 
     @staticmethod
     @contextmanager
-    def _lock_held() -> Iterator[None]:
+    def _lock_held(release_after: float | None = None) -> Iterator[None]:
         """Hold the adapter's process-wide local-environment lock on another thread.
 
         A thread rather than the test's own thread because the lock is not
         reentrant and the adapter must observe it as held by someone else.
+        ``release_after`` lets go of it that many seconds in, so the run under
+        test queues for a while and then proceeds.
         """
         acquired = threading.Event()
         release = threading.Event()
@@ -1036,7 +1160,7 @@ class TestLocalEnvironmentIsSerialised:
         def _hold() -> None:
             with rlms_adapter._LOCAL_ENV_LOCK:
                 acquired.set()
-                release.wait(timeout=10.0)
+                release.wait(timeout=release_after if release_after is not None else 10.0)
 
         holder = threading.Thread(target=_hold, name="lock-holder", daemon=True)
         holder.start()

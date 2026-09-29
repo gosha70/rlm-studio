@@ -28,7 +28,11 @@ from typing import Any
 from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
 from rlmstudio.application.ports.event_port import ExecutionEventEmitter
 from rlmstudio.application.ports.rlm_engine_port import RLMEnginePort
-from rlmstudio.application.sandbox_vars import MODE_RLM_OFFICIAL, RESULT_KEY_ENGINE_VERSION
+from rlmstudio.application.sandbox_vars import (
+    MODE_RLM_OFFICIAL,
+    RESULT_KEY_COST_KNOWN,
+    RESULT_KEY_ENGINE_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +235,13 @@ class RunRLMOfficialUseCase:
             success=False,
             error=error,
             elapsed_time=time.time() - start,
-            metadata={RESULT_KEY_ENGINE_VERSION: self._engine.version},
+            # The engine was abandoned mid-run, so it had spent something this
+            # guard cannot see.  Reporting $0 as a known cost would understate
+            # exactly the runs that ran longest.
+            metadata={
+                RESULT_KEY_ENGINE_VERSION: self._engine.version,
+                RESULT_KEY_COST_KNOWN: False,
+            },
         )
 
     def _error_result(self, error: str, start: float) -> RunResultDTO:
@@ -241,5 +251,10 @@ class RunRLMOfficialUseCase:
             success=False,
             error=error,
             elapsed_time=time.time() - start,
-            metadata={RESULT_KEY_ENGINE_VERSION: self._engine.version},
+            # The engine may have raised part-way through a run it had already
+            # paid for, so the cost is unknown rather than zero.
+            metadata={
+                RESULT_KEY_ENGINE_VERSION: self._engine.version,
+                RESULT_KEY_COST_KNOWN: False,
+            },
         )

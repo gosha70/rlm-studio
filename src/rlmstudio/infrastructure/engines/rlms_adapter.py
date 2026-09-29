@@ -32,6 +32,7 @@ the engine in a container instead, which removes both limits.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import importlib
 import importlib.metadata
 import logging
@@ -102,6 +103,14 @@ _RLMS_MIN_DEPTH = 1
 _LOCAL_ENV_LOCK = threading.Lock()
 # Waiting cap for a slot that has no wall-clock budget of its own.
 _LOCAL_ENV_LOCK_TIMEOUT_SECONDS = 30.0
+# Share of a slot's budget it may spend queueing, so a run that does get the
+# REPL still has most of its budget to use it with.
+_LOCAL_ENV_LOCK_WAIT_FRACTION = 0.25
+# The engine's own timeout is set this far inside the caller's wall-clock guard
+# so the engine stops itself first and can report what it spent; the guard stays
+# as the backstop for a REPL stuck inside a single iteration.
+_ENGINE_TIMEOUT_MARGIN_FRACTION = 0.1
+_ENGINE_TIMEOUT_MARGIN_CAP_SECONDS = 5.0
 # The same global state rules out the engine's parallel batched sub-calls, which
 # would otherwise give several in-process REPLs to one run: ``llm_query_batched``
 # fans out over a thread pool, and every child that is allowed its own REPL
@@ -191,6 +200,26 @@ def engine_max_depth(max_recursion_depth: int) -> int:
     :data:`NOTE_NO_SUBCALL_FLOOR` to say so.
     """
     return max(_RLMS_MIN_DEPTH, max_recursion_depth + _RLMS_DEPTH_OFFSET)
+
+
+def engine_timeout(max_time_seconds: float | None) -> float | None:
+    """Give the engine a deadline just inside the caller's wall-clock budget.
+
+    Both clocks measure the same budget, but the use case's guard starts first,
+    so an equal deadline means the guard always wins — and the guard can only
+    abandon the run, reporting no tokens, no cost and no trace.  Stopping the
+    engine a little earlier instead lets it raise its own timeout, which carries
+    the usage and the trajectory to report.  The guard remains the backstop for
+    the case the engine cannot handle: a REPL execution stuck inside one
+    iteration, which it never gets to check between.
+    """
+    if max_time_seconds is None:
+        return None
+    margin = min(
+        max_time_seconds * _ENGINE_TIMEOUT_MARGIN_FRACTION,
+        _ENGINE_TIMEOUT_MARGIN_CAP_SECONDS,
+    )
+    return max(max_time_seconds - margin, max_time_seconds / 2)
 
 
 def sum_usage(usage: dict[str, Any]) -> tuple[int, int, float | None]:
@@ -379,17 +408,46 @@ class RlmsEngineAdapter:
             return self._run_engine(content, query, config, environment, environment_kwargs)
 
         # The in-process REPL mutates process-global state, so only one run at a
-        # time; wait no longer than the slot's own wall-clock budget.
-        wait = config.max_time_seconds or _LOCAL_ENV_LOCK_TIMEOUT_SECONDS
+        # time.  The wait is a *slice* of the slot's budget, never the whole of
+        # it: the use case's wall-clock guard is counting the same budget from
+        # earlier, so waiting the full amount would guarantee the caller gave up
+        # first — the queued run would never get to report itself busy, and its
+        # abandoned thread would then run a fresh full-length engine call that
+        # nobody is waiting for while still holding this lock.
         queued_at = time.time()
-        if not _LOCAL_ENV_LOCK.acquire(timeout=wait):
-            logger.warning("Official RLM engine busy: in-process REPL held for over %.1fs", wait)
+        if not _LOCAL_ENV_LOCK.acquire(timeout=self._lock_wait(config)):
+            logger.warning("Official RLM engine busy: in-process REPL still held")
             # ``queued_at`` so the failed slot reports the time it spent waiting.
             return self._failed(BUSY_REASON, queued_at, environment, config)
         try:
-            return self._run_engine(content, query, config, environment, environment_kwargs)
+            queued_config = self._config_after_queueing(config, queued_at)
+            return self._run_engine(content, query, queued_config, environment, environment_kwargs)
         finally:
             _LOCAL_ENV_LOCK.release()
+
+    @staticmethod
+    def _lock_wait(config: RunConfigDTO) -> float:
+        """How long a queued run may wait for the in-process REPL."""
+        budget = config.max_time_seconds
+        if budget is None:
+            return _LOCAL_ENV_LOCK_TIMEOUT_SECONDS
+        return float(min(budget * _LOCAL_ENV_LOCK_WAIT_FRACTION, _LOCAL_ENV_LOCK_TIMEOUT_SECONDS))
+
+    @staticmethod
+    def _config_after_queueing(config: RunConfigDTO, queued_at: float) -> RunConfigDTO:
+        """Charge the time spent queueing to the run's budget.
+
+        Without this the engine would be handed the full budget after part of it
+        had already gone on waiting, and would still be working for a caller
+        that had given up.  Waiting can only ever consume the slice
+        :meth:`_lock_wait` allows, so what is left is always enough to attempt
+        the run.
+        """
+        budget = config.max_time_seconds
+        if budget is None:
+            return config
+        remaining = max(budget - (time.time() - queued_at), 0.0)
+        return dataclasses.replace(config, max_time_seconds=remaining)
 
     def _run_engine(
         self,
@@ -414,7 +472,7 @@ class RlmsEngineAdapter:
             environment_kwargs=environment_kwargs,
             max_depth=engine_max_depth(config.max_recursion_depth),
             max_iterations=config.max_steps,
-            max_timeout=config.max_time_seconds,
+            max_timeout=engine_timeout(config.max_time_seconds),
             max_tokens=config.max_tokens,
             max_budget=config.max_cost,
             logger=trajectory,
@@ -519,6 +577,33 @@ class RlmsEngineAdapter:
             f"(supported: {supported})."
         )
 
+    def _price(
+        self, input_tokens: int, output_tokens: int, reported_cost: float | None
+    ) -> tuple[float, bool]:
+        """Return ``(cost, cost_known)`` for a run's usage.
+
+        The engine's own figure wins when it has one.  Otherwise the slot's cost
+        table is asked, and a 0.0 from it is read carefully: the table answers
+        0.0 both for a model it has no price for and for a lookup that raised,
+        so for a cloud model that really did consume tokens the honest answer is
+        "price unknown" rather than "free" — ranking must not reward it as the
+        cheapest slot.  A locally served model is the exception: $0 is its real
+        price, the same way Studio's own cells report it, so it stays known and
+        keeps its place in the cost ranking.
+        """
+        if reported_cost is not None:
+            return reported_cost, True
+        if self._cost_fn is None:
+            return 0.0, False
+        total_cost = float(self._cost_fn(input_tokens, output_tokens))
+        if total_cost > 0.0 or (input_tokens + output_tokens) == 0:
+            return total_cost, True
+        return total_cost, self._is_locally_served()
+
+    def _is_locally_served(self) -> bool:
+        """True when the provider is a local server, where $0 is a real price."""
+        return self._backend in _OPENAI_COMPATIBLE_BACKENDS
+
     def _engine_environment(self) -> tuple[str, dict[str, Any]]:
         if self._sandbox_type == SANDBOX_TYPE_DOCKER:
             return _ENV_DOCKER, ({"image": self._docker_image} if self._docker_image else {})
@@ -549,19 +634,7 @@ class RlmsEngineAdapter:
         usage_summary = getattr(completion, "usage_summary", None)
         usage = usage_summary.to_dict() if usage_summary is not None else {}
         input_tokens, output_tokens, reported_cost = sum_usage(usage)
-        cost_known = True
-        if reported_cost is not None:
-            total_cost = reported_cost
-        elif self._cost_fn is not None:
-            total_cost = float(self._cost_fn(input_tokens, output_tokens))
-            # The slot's cost table answers 0.0 both for a model it has no price
-            # for and for a lookup that failed, so a run that really did consume
-            # tokens is "price unknown", not "free".  Ranking must not reward it
-            # as the cheapest slot.
-            cost_known = total_cost > 0.0 or (input_tokens + output_tokens) == 0
-        else:
-            total_cost = 0.0
-            cost_known = False
+        total_cost, cost_known = self._price(input_tokens, output_tokens, reported_cost)
 
         trajectory = completion.metadata if isinstance(completion.metadata, dict) else None
         answer = completion.response or ""
@@ -651,7 +724,9 @@ class RlmsEngineAdapter:
         )
         tokens_used = int(getattr(exc, "tokens_used", 0) or 0)
         spent: float | None = getattr(exc, "spent", None)
-        cost_known = spent is not None
+        # A token breach knows the tokens but not the money, so the slot's cost
+        # table can still price it; only a timeout arrives with neither.
+        total_cost, cost_known = self._price(tokens_used, 0, spent)
         answer = f"⚠️ **Execution error**.\n\n{error}"
         if partial:
             answer = f"{answer}\n\n**Partial answer**\n\n{partial}"
@@ -662,7 +737,7 @@ class RlmsEngineAdapter:
             error=error,
             steps=len((captured or {}).get("iterations") or []),
             input_tokens=tokens_used,
-            total_cost=float(spent) if spent is not None else 0.0,
+            total_cost=total_cost,
             elapsed_time=time.time() - start,
             trace=trace,
             metadata={

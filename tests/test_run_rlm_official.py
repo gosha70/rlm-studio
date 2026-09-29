@@ -163,6 +163,24 @@ class TestWallClockBudget:
         assert result.answer.startswith("⚠️")
         assert _category(result) is OutcomeCategory.TIMEOUT
 
+    def test_an_abandoned_run_reports_its_cost_as_unknown(self) -> None:
+        """The guard cannot see what the abandoned engine had already spent.
+
+        Recording a known $0 would understate exactly the runs that ran longest;
+        the engine's own timeout is the path that reports real figures.
+        """
+        engine = FakeRLMEngine(delay=_SLOW)
+        config = RunConfigDTO(max_time_seconds=_TIGHT_BUDGET)
+        result = RunRLMOfficialUseCase(engine).execute("doc", "q", config)
+
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is False
+
+    def test_an_engine_exception_also_reports_cost_as_unknown(self) -> None:
+        engine = FakeRLMEngine(error=RuntimeError("backend exploded mid-run"))
+        result = RunRLMOfficialUseCase(engine).execute("doc", "q")
+
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is False
+
     def test_no_budget_means_no_timeout(self) -> None:
         engine = FakeRLMEngine(delay=_TIGHT_BUDGET)
         result = RunRLMOfficialUseCase(engine).execute(
