@@ -45,7 +45,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   accept it in 1.0. A REPL execution that never returns is stopped by
   Studio's wall-clock guard (the engine only checks its timeout between
   iterations); with the `local` environment the abandoned thread lives on
-  until the server restarts.
+  until the server restarts, and because the engine runs that code inside the
+  server process, code that never finishes keeps the process's output
+  redirected and its working directory moved and makes every later official
+  run report the engine as busy. The Docker sandbox has none of that: the
+  container owns the runaway code.
 - **Architecture:** new `RLMEnginePort` (application layer) and
   `infrastructure/engines/rlms_adapter.py`; `RunRLMOfficialUseCase` enforces
   the wall-clock and post-run token / cost caps around the engine. Mode

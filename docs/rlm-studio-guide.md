@@ -382,6 +382,8 @@ The fourth mode runs the paper authors' own implementation — [alexzhang13/rlm]
 
 **Sandbox.** With the Docker sandbox selected in Settings the engine runs its REPL in a container; with any other sandbox it runs the engine's in-process `local` environment, which is **not isolated** — every such run carries a note saying so in its trace metadata. That environment also redirects this process's output and working directory around every code cell, so Studio runs official slots **one at a time**: a second official cell waits for the first, and reports the engine as busy if it waits past its own timeout. Pick the Docker sandbox to run official cells in parallel.
 
+One consequence is worth knowing before you use the in-process path on a shared server. Studio can stop *waiting* for a REPL execution that never returns, but it cannot stop the execution itself — the engine runs model-written code inside the server process. Code that truly never finishes therefore keeps the server's output redirected and its working directory moved, and every later official run reports the engine as busy, until the server restarts. Docker is the answer if that matters: the container owns the runaway code, and nothing in the server is affected.
+
 **What you will notice.**
 
 - Cells carry an **official rlms x.y.z** badge (Compare and Traces).
