@@ -128,6 +128,33 @@ class TestUnknownCostRanking:
 
         assert [slots[i].slot_id for i in ranking] == ["known", "unknown"]
 
+    def test_an_unpriced_engine_slot_ranks_last_end_to_end(self) -> None:
+        """The whole chain, not just ``_rank``: the flag the engine set is honoured.
+
+        The hand-built cases above start from a DTO that already carries
+        ``cost_known``; this one lets the engine report it and runs the real
+        dispatch, so a slot that came back unpriced cannot quietly rank first
+        because the key went missing on the way.
+        """
+        unpriced = FakeRLMEngine(
+            answer="unpriced answer",
+            total_cost=0.0,
+            metadata={RESULT_KEY_COST_KNOWN: False},
+        )
+        priced = FakeRLMEngine(answer="priced answer", total_cost=0.25)
+        slots = [
+            MatrixSlotDTO(
+                slot_id="unpriced", mode=MODE_RLM_OFFICIAL, llm=_FakeLLM(), engine=unpriced
+            ),
+            MatrixSlotDTO(slot_id="priced", mode=MODE_RLM_OFFICIAL, llm=_FakeLLM(), engine=priced),
+        ]
+
+        out = RunMatrixComparisonUseCase().execute("doc", "q", slots)
+
+        assert out.get_slot("unpriced").result.metadata[RESULT_KEY_COST_KNOWN] is False  # type: ignore[union-attr]
+        ranking = RunMatrixComparisonUseCase._rank(out.slots, "cost")
+        assert [out.slots[i].slot_id for i in ranking] == ["priced", "unpriced"]
+
     def test_a_genuinely_free_slot_still_ranks_first(self) -> None:
         slots = [
             _slot_result("paid", cost=0.5),

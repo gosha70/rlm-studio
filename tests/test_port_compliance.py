@@ -22,6 +22,15 @@ def _has_port_methods(obj: object, method_names: list[str]) -> bool:
 _LLM_PORT_METHODS = ["complete", "complete_stream", "count_tokens", "get_pricing"]
 _SANDBOX_PORT_METHODS = ["execute", "reset", "is_healthy", "set_variable", "get_variable"]
 _RLM_ENGINE_PORT_METHODS = ["run", "run_async", "is_available"]
+# ``version`` is a property, not a method, so it is checked separately: the
+# project rule is structural checks over isinstance against a Protocol, which
+# only compares member names and would pass for any object carrying them.
+_RLM_ENGINE_PORT_ATTRIBUTES = ["version"]
+
+
+def _has_port_attributes(obj: object, attribute_names: list[str]) -> bool:
+    """Check that *obj* exposes all required non-callable members."""
+    return all(hasattr(obj, name) for name in attribute_names)
 
 
 class TestFakeRLMEngineCompliance:
@@ -47,10 +56,10 @@ class TestFakeRLMEngineCompliance:
         assert isinstance(available, bool)
         assert isinstance(reason, str)
 
-    def test_isinstance_rlm_engine_port(self):
-        from rlmstudio.application.ports.rlm_engine_port import RLMEnginePort
-
-        assert isinstance(self._make_engine(), RLMEnginePort)
+    def test_exposes_the_whole_port_surface(self):
+        engine = self._make_engine()
+        assert _has_port_methods(engine, _RLM_ENGINE_PORT_METHODS)
+        assert _has_port_attributes(engine, _RLM_ENGINE_PORT_ATTRIBUTES)
 
 
 class TestRlmsEngineAdapterCompliance:
@@ -78,10 +87,10 @@ class TestRlmsEngineAdapterCompliance:
         assert isinstance(reason, str)
         assert reason  # never silent — either the version or the install hint
 
-    def test_isinstance_rlm_engine_port(self):
-        from rlmstudio.application.ports.rlm_engine_port import RLMEnginePort
-
-        assert isinstance(self._make_engine(), RLMEnginePort)
+    def test_exposes_the_whole_port_surface(self):
+        engine = self._make_engine()
+        assert _has_port_methods(engine, _RLM_ENGINE_PORT_METHODS)
+        assert _has_port_attributes(engine, _RLM_ENGINE_PORT_ATTRIBUTES)
 
 
 class TestMockLLMAdapterCompliance:
