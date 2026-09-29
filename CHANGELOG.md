@@ -47,7 +47,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   locally served model keeps $0 as its real price; a run the engine
   stopped for breaking a cap still reports the spend, steps and partial
   answer it had reached, and a token breach with no price attached is priced
-  from the slot's own cost table; conversation memory is not delivered to the engine; the
+  from the slot's own cost table while a cost-cap breach reports 0 tokens and
+  says so and a timeout reports its cost as unknown rather than as $0;
+  conversation memory is not delivered to the engine; the
   mode is UI / REST only — the Python client's `compare_matrix()` does not
   accept it in 1.0. A REPL execution that never returns is stopped by
   Studio's wall-clock guard (the engine only checks its timeout between
