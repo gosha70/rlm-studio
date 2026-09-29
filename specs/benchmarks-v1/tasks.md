@@ -31,10 +31,10 @@ Branch `feat/benchmarks-v1` after `feat/rebrand-rlm-studio` merges (may run in p
 - [x] T4.2 CI `bench-smoke` step (2 cases × 2 engines, no network). *(In the `build` job: 2 cases × 2 providers (one failing) × 4 engines, judge path, page regeneration on a scratch copy of BENCHMARKS.md, file/grep checks. Verified locally with the exact command. `tests/test_cli_bench.py` (5).)*
 
 ## Phase 5 — real run (owner)
-- [ ] T5.1 Configure providers (env vars per `docs/hosts/`); run cloud ×2, local ×1, engines ×3–4, three reps for cloud; commit `benchmarks/results/<date>/` + regenerated `BENCHMARKS.md`; log total cost.
+- [ ] T5.1 Configure providers (env vars per `docs/hosts/`); run cloud ×2, local ×1, engines ×3–4, three reps for cloud; commit `benchmarks/results/<date>/` + regenerated `BENCHMARKS.md`; log total cost. *(Owner. The command is in BENCHMARKS.md / the guide; pass `--fetch` so all 14 cases run (≥12 per cell, AC-4) and `--note` with the local hardware (AC-2).)*
 
 ## Phase 6 — docs
 - [x] T6.1 README "Where RLM Studio shines" cites the table; `docs/rlm-studio-guide.md` "Reproducing the benchmarks"; CHANGELOG. *(2026-09-29: README benchmarking paragraph links `BENCHMARKS.md` + a Documentation table row; guide gains a `## Benchmarks` section with the full command, flag semantics and outputs; CHANGELOG `[Unreleased]` "Reproducible benchmarks" entry.)*
 
 ## Phase 7 — acceptance
-- [ ] T7.1 AC-1..AC-4 from `spec.md`; record in `doc_internal/v1.0.0-rlm-studio/MANUAL_TEST_PLAN.md`.
+- [~] T7.1 AC-1..AC-4 from `spec.md`; record in `doc_internal/v1.0.0-rlm-studio/MANUAL_TEST_PLAN.md`. *(2026-09-29: recorded as §9c there. AC-3 verified; AC-1/2/4 have automated equivalents and keep their boxes for the owner's real run.)*
