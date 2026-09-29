@@ -25,6 +25,8 @@ from rlmstudio.application.sandbox_vars import (
     MODE_COMPARE,
     MODE_RAG,
     MODE_RLM,
+    MODE_RLM_OFFICIAL,
+    MODES_RLM_INTERNAL,
     RLM_DEFAULT_MAX_STEPS,
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
@@ -398,6 +400,11 @@ async def _compare_matrix_v2(
 
             llm = state.create_llm_adapter_for_chat_provider(cp_id)
             sandbox = state.create_sandbox() if mode == MODE_RLM else None
+            engine = (
+                state.create_rlm_engine_for_chat_provider(cp_id, llm)
+                if mode == MODE_RLM_OFFICIAL
+                else None
+            )
 
             embedder = None
             storage = None
@@ -432,6 +439,7 @@ async def _compare_matrix_v2(
                     provider=backend,
                     model=model_name,
                     config=slot_config,
+                    engine=engine,
                 )
             )
             execution = ExecutionRecord(
@@ -550,6 +558,13 @@ async def compare_matrix(
     state: AppState = Depends(get_state),  # noqa: B008
 ) -> CompareMatrixResponse:
     """Run the same (content, query) across ``chat_provider_ids × modes``."""
+    # Fail fast, before any session/telemetry side effects, if a requested
+    # engine cannot run in this process; the reason is user-facing.
+    if MODE_RLM_OFFICIAL in req.modes:
+        engine_available, engine_reason, _ = state.rlm_engine_availability()
+        if not engine_available:
+            raise HTTPException(status_code=400, detail=engine_reason)
+
     # --- Route to V2 or V1 based on which IDs are provided ------------
     if req.llm_provider_ids is not None:
         try:
@@ -639,6 +654,11 @@ async def compare_matrix(
             # state cannot bleed into another's.
             llm = state.create_llm_adapter_for_chat_provider(cp_id)
             sandbox = state.create_sandbox() if mode == MODE_RLM else None
+            engine = (
+                state.create_rlm_engine_for_chat_provider(cp_id, llm)
+                if mode == MODE_RLM_OFFICIAL
+                else None
+            )
 
             embedder = None
             storage = None
@@ -678,6 +698,7 @@ async def compare_matrix(
                     provider=backend,
                     model=model_name,
                     config=slot_config,
+                    engine=engine,
                 )
             )
 
@@ -924,13 +945,15 @@ def _build_slot_run_config(
     """
     run_config = state.create_run_config(mode=mode)
 
-    # Apply per-provider RLM knobs the same way /api/chat does.
-    if mode == MODE_RLM:
+    # Apply per-provider RLM knobs the same way /api/chat does.  The official
+    # engine shares the step/time budgets but runs its own prompts, so the
+    # profile system prompt applies to Studio's loop only.
+    if mode in MODES_RLM_INTERNAL:
         run_config.max_steps = cp.rlm_max_steps
         run_config.max_time_seconds = float(cp.rlm_timeout_seconds)
         run_config.repeat_limit = cp.rlm_repeat_limit
         run_config.nudge_at_fraction = cp.rlm_nudge_at_fraction
-        if cp.profile_id:
+        if cp.profile_id and mode == MODE_RLM:
             profile = state.find_profile(cp.profile_id)
             if profile:
                 from rlmstudio.server.routes.chat import _resolve_profile_prompt

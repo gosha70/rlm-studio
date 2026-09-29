@@ -83,6 +83,23 @@ class DiagnosticsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Engines — third-party RLM engines (``GET /api/engines``)
+# ---------------------------------------------------------------------------
+
+
+class EngineStatus(BaseModel):
+    """Availability of one third-party engine in this process."""
+
+    available: bool
+    reason: str  # user-facing: the version when available, otherwise why not
+    version: str | None = None
+
+
+class EnginesResponse(BaseModel):
+    rlm_official: EngineStatus
+
+
+# ---------------------------------------------------------------------------
 # Docs — Learn tab allowlisted markdown loader
 # ---------------------------------------------------------------------------
 

@@ -93,6 +93,28 @@ NOTE_COST_UNKNOWN = (
 )
 
 
+def _installed_version() -> str | None:
+    try:
+        return importlib.metadata.version(RLMS_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def rlms_availability() -> tuple[bool, str, str | None]:
+    """Package-level availability of the engine: ``(available, reason, version)``.
+
+    Provider mapping is not involved — that is per slot and reported by
+    :meth:`RlmsEngineAdapter.is_available`.  ``reason`` is user-facing either
+    way: the version when installed, the install hint when not.
+    """
+    try:
+        importlib.import_module(RLMS_MODULE)
+    except ImportError:
+        return False, UNAVAILABLE_REASON, None
+    version = _installed_version()
+    return True, f"{RLMS_DISTRIBUTION} {version or 'unknown'}", version
+
+
 def _openai_v1(url: str) -> str:
     """Return *url* with the ``/v1`` suffix the OpenAI SDK expects (idempotent)."""
     trimmed = url.rstrip("/")
@@ -235,21 +257,17 @@ class RlmsEngineAdapter:
 
     @property
     def version(self) -> str | None:
-        try:
-            return importlib.metadata.version(RLMS_DISTRIBUTION)
-        except importlib.metadata.PackageNotFoundError:
-            return None
+        return _installed_version()
 
     def is_available(self) -> tuple[bool, str]:
-        try:
-            importlib.import_module(RLMS_MODULE)
-        except ImportError:
-            return False, UNAVAILABLE_REASON
+        available, reason, _version = rlms_availability()
+        if not available:
+            return False, reason
         try:
             self._engine_backend()
         except ValueError as exc:
             return False, str(exc)
-        return True, f"{RLMS_DISTRIBUTION} {self.version or 'unknown'}"
+        return True, reason
 
     def run(self, content: str, query: str, config: RunConfigDTO) -> RunResultDTO:
         rlm = importlib.import_module(RLMS_MODULE)

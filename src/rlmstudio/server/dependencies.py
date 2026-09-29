@@ -12,14 +12,17 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 if TYPE_CHECKING:
     from rlmstudio.application.services.provider_tester import ProviderTestResult
 
 from rlmstudio.application.dto import RunConfigDTO
+from rlmstudio.application.ports.llm_port import LLMPort
+from rlmstudio.application.ports.rlm_engine_port import RLMEnginePort
 from rlmstudio.application.sandbox_vars import MODE_AUTO, MODE_DIRECT, MODE_RAG, MODE_RLM
 from rlmstudio.branding import env, env_name, state_dir
+from rlmstudio.infrastructure.engines.rlms_adapter import RlmsEngineAdapter, rlms_availability
 from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
 from rlmstudio.infrastructure.sandbox.sandbox_factory import create_sandbox
 from rlmstudio.server.models import (
@@ -55,6 +58,17 @@ def _get_instance_api_key(llm_provider_id: str, backend: str) -> str | None:
 
 # Providers that default to zero retries (local servers; retries multiply hangs)
 _LOCAL_PROVIDERS: frozenset[str] = frozenset({"ollama", "lmstudio", "vllm"})
+
+
+class _ResolvedBackend(NamedTuple):
+    """Where a Chat Provider's requests actually go: backend key, model, endpoint, key."""
+
+    provider_key: str
+    model: str
+    api_base: str | None
+    api_key: str | None
+    llm_provider: LLMProviderConfig | None
+
 
 # Config lives in the product state dir (see rlmstudio.branding.state_dir) so
 # the path is stable regardless of CWD.  Migrate from legacy
@@ -941,18 +955,12 @@ class AppState:
                 session.conversations[chat_provider_id] = []
             session.conversations[chat_provider_id].append(message)
 
-    def create_llm_adapter_for_chat_provider(
-        self,
-        chat_provider_id: str,
-        num_retries: int | None = None,
-    ) -> LiteLLMAdapter:
-        """Create an LLM adapter configured for a specific Chat Provider."""
-        cp = self.get_chat_provider(chat_provider_id)
-        if not cp:
-            raise ValueError(f"Chat Provider {chat_provider_id} not found")
+    def _resolve_backend_for_chat_provider(self, cp: ChatProviderConfig) -> _ResolvedBackend:
+        """Resolve a (resolved) Chat Provider to its backend key, model, endpoint and API key.
 
-        cp = self.resolve_chat_provider(cp)
-
+        Shared by the LiteLLM adapter factory and the official-engine factory
+        so the two can never disagree about which provider a slot talks to.
+        """
         # Resolve backend config through LLM Provider instance
         lp = self.get_llm_provider(cp.llm_provider_id) if cp.llm_provider_id else None
         api_key: str | None = None
@@ -978,6 +986,64 @@ class AppState:
                     break
             if not api_base and entry and entry.default_endpoint:
                 api_base = entry.default_endpoint
+        return _ResolvedBackend(provider_key, model, api_base, api_key, lp)
+
+    def create_rlm_engine_for_chat_provider(
+        self,
+        chat_provider_id: str,
+        llm: LLMPort | None = None,
+    ) -> RLMEnginePort:
+        """Official-engine adapter for a Chat Provider's provider/model.
+
+        ``llm`` is the slot's LiteLLM adapter; its cost table prices the run
+        when the engine reports no price.
+        """
+        cp = self.get_chat_provider(chat_provider_id)
+        if not cp:
+            raise ValueError(f"Chat Provider {chat_provider_id} not found")
+        backend = self._resolve_backend_for_chat_provider(self.resolve_chat_provider(cp))
+        return self._build_rlm_engine(backend, llm)
+
+    def create_rlm_engine(self, llm: LLMPort | None = None) -> RLMEnginePort:
+        """Official-engine adapter for the globally active provider (no Chat Provider)."""
+        provider_key, model, api_base, _runtime = self._resolve_active_backend()
+        entry = PROVIDERS_BY_KEY.get(provider_key)
+        api_key = os.environ.get(entry.env_var) if entry and entry.env_var else None
+        return self._build_rlm_engine(
+            _ResolvedBackend(provider_key, model, api_base, api_key, None), llm
+        )
+
+    def _build_rlm_engine(self, backend: _ResolvedBackend, llm: LLMPort | None) -> RLMEnginePort:
+        cost_fn = getattr(llm, "get_completion_cost", None) if llm is not None else None
+        return RlmsEngineAdapter(
+            backend=backend.provider_key,
+            model=backend.model,
+            api_key=backend.api_key,
+            base_url=backend.api_base,
+            sandbox_type=self.config.sandbox.type,
+            docker_image=self.config.sandbox.docker_image,
+            cost_fn=cost_fn,
+        )
+
+    @staticmethod
+    def rlm_engine_availability() -> tuple[bool, str, str | None]:
+        """Package-level availability of the official engine: ``(available, reason, version)``."""
+        availability: tuple[bool, str, str | None] = rlms_availability()
+        return availability
+
+    def create_llm_adapter_for_chat_provider(
+        self,
+        chat_provider_id: str,
+        num_retries: int | None = None,
+    ) -> LiteLLMAdapter:
+        """Create an LLM adapter configured for a specific Chat Provider."""
+        cp = self.get_chat_provider(chat_provider_id)
+        if not cp:
+            raise ValueError(f"Chat Provider {chat_provider_id} not found")
+
+        cp = self.resolve_chat_provider(cp)
+
+        provider_key, model, api_base, api_key, lp = self._resolve_backend_for_chat_provider(cp)
 
         prefixed_model = self._litellm_model_name(provider_key, model)
         # runtime_settings are resolved from the Profile by resolve_chat_provider()
@@ -1289,16 +1355,17 @@ class AppState:
         self.sessions[sid] = session
         return session
 
-    def create_llm_adapter(self, num_retries: int | None = None) -> LiteLLMAdapter:
+    def _resolve_active_backend(self) -> tuple[str, str, str | None, RuntimeSettings]:
+        """``(provider_key, model, api_base, runtime)`` for the globally active provider.
+
+        Shared by :meth:`create_llm_adapter` and :meth:`create_rlm_engine`.
+        """
         provider_key = self.config.active_provider
         model = self.config.active_model
 
         # Trust the user-selected model — it may have been fetched live from
         # the provider API and won't be in the static catalog.
         entry = PROVIDERS_BY_KEY.get(provider_key)
-
-        # Apply LiteLLM provider prefix (e.g. "ollama/" for Ollama models)
-        prefixed_model = self._litellm_model_name(provider_key, model)
 
         # Prefer persisted endpoint over catalog default
         api_base: str | None = None
@@ -1311,6 +1378,13 @@ class AppState:
                 break
         if not api_base and entry and entry.default_endpoint:
             api_base = entry.default_endpoint
+        return provider_key, model, api_base, runtime
+
+    def create_llm_adapter(self, num_retries: int | None = None) -> LiteLLMAdapter:
+        provider_key, model, api_base, runtime = self._resolve_active_backend()
+
+        # Apply LiteLLM provider prefix (e.g. "ollama/" for Ollama models)
+        prefixed_model = self._litellm_model_name(provider_key, model)
 
         # Priority: per-request > local-provider default > 2
         effective_retries = (

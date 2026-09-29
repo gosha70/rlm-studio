@@ -24,6 +24,7 @@ from rlmstudio.application.sandbox_vars import (
     MODE_COMPARE,
     MODE_RAG,
     MODE_RLM,
+    MODE_RLM_OFFICIAL,
     MODES_INPROMPT,
     MODES_REPL_VARIABLE,
     MODES_RLM_INTERNAL,
@@ -46,6 +47,7 @@ from rlmstudio.application.services.outcome_classifier import classify_execution
 from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
 from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
 from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
+from rlmstudio.application.use_cases.run_rlm_official import RunRLMOfficialUseCase
 from rlmstudio.core.trace import ExecutionTrace
 from rlmstudio.core.trace import TraceStep as CoreTraceStep
 from rlmstudio.infrastructure.embedding.litellm_embedding_adapter import LiteLLMEmbeddingAdapter
@@ -115,6 +117,11 @@ def _prepare_history_context(
         {},
         {"path": HISTORY_PATH_DISABLED},
     )
+
+    # The official engine receives only content + query — it has neither a
+    # message list nor a ``history`` REPL variable to carry prior turns.
+    if mode == MODE_RLM_OFFICIAL:
+        return disabled_result
 
     if not chat_provider_id or cp is None:
         return disabled_result
@@ -473,6 +480,11 @@ async def submit_chat(
         cp = state.resolve_chat_provider(cp)
         mode = cp.execution_mode
 
+    if mode == MODE_RLM_OFFICIAL:
+        engine_available, engine_reason, _ = state.rlm_engine_availability()
+        if not engine_available:
+            raise HTTPException(status_code=400, detail=engine_reason)
+
     # Create execution record
     exec_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
@@ -746,6 +758,16 @@ async def _run_execution(
             # Populate cache after successful first index
             if cache_key and not skip_indexing and results[0].success:
                 _rag_index_cache[cache_key] = (storage, collection, rag_cfg.embedding_model)
+        elif mode == MODE_RLM_OFFICIAL:
+            engine = (
+                state.create_rlm_engine_for_chat_provider(chat_provider_id, llm)
+                if chat_provider_id
+                else state.create_rlm_engine(llm)
+            )
+            uc_official = RunRLMOfficialUseCase(engine)
+            results = [
+                await asyncio.to_thread(uc_official.execute, content, full_query, run_config)
+            ]
         elif mode in MODES_REPL_VARIABLE:
             sandbox = state.create_sandbox()
             uc = RunRLMUseCase(llm, sandbox)
@@ -999,6 +1021,22 @@ async def websocket_chat(
                         continue
                     mode = ws_cp.execution_mode
 
+                if mode == MODE_RLM_OFFICIAL:
+                    engine_available, engine_reason, _ = state.rlm_engine_availability()
+                    if not engine_available:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "id": msg_id,
+                                "data": {
+                                    "code": "ENGINE_UNAVAILABLE",
+                                    "message": engine_reason,
+                                    "recoverable": True,
+                                },
+                            }
+                        )
+                        continue
+
                 # Create execution record (mirrors REST path) so traces/dashboard work
                 exec_id = str(uuid.uuid4())
                 now = datetime.now(timezone.utc)
@@ -1161,6 +1199,18 @@ async def websocket_chat(
                             uc_rag = RunRAGUseCase(llm, ws_embedder, ws_storage)
                             results = [
                                 await asyncio.to_thread(uc_rag.execute, cnt, full_query, cfg)
+                            ]
+                        elif m == MODE_RLM_OFFICIAL:
+                            engine = (
+                                state.create_rlm_engine_for_chat_provider(cp_id, llm)
+                                if cp_id
+                                else state.create_rlm_engine(llm)
+                            )
+                            uc_official = RunRLMOfficialUseCase(engine)
+                            results = [
+                                await uc_official.execute_async(
+                                    cnt, full_query, cfg, event_emitter=emitter
+                                )
                             ]
                         elif m in MODES_REPL_VARIABLE:
                             sandbox = state.create_sandbox()
