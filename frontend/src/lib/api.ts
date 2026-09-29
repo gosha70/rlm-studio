@@ -580,6 +580,23 @@ export const getDiagnostics = () =>
   fetchJSON<DiagnosticsResponse>("/api/diagnostics");
 
 // ---------------------------------------------------------------------------
+// Engines — third-party RLM engines (GET /api/engines)
+// ---------------------------------------------------------------------------
+
+export interface EngineStatus {
+  available: boolean;
+  /** User-facing: the version when available, otherwise why not. */
+  reason: string;
+  version?: string | null;
+}
+
+export interface EnginesResponse {
+  rlm_official: EngineStatus;
+}
+
+export const getEngines = () => fetchJSON<EnginesResponse>("/api/engines");
+
+// ---------------------------------------------------------------------------
 // Docs — Learn tab allowlisted markdown loader
 // ---------------------------------------------------------------------------
 

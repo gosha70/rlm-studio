@@ -71,6 +71,7 @@ import {
   MODE_RLM,
   MODE_RAG,
 } from "@/lib/constants";
+import { StrategySelectItems } from "@/components/settings/strategy-select-items";
 
 // Backend keys the Settings form accepts. The deep-link banner only
 // renders when `?provider=` matches one of these, so a random or
@@ -1417,9 +1418,7 @@ function SettingsPageInner() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={MODE_DIRECT}>Direct</SelectItem>
-                      <SelectItem value={MODE_RLM}>RLM</SelectItem>
-                      <SelectItem value={MODE_RAG}>RAG</SelectItem>
+                      <StrategySelectItems />
                     </SelectContent>
                   </Select>
                   <Button

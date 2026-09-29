@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { AppShell } from "@/components/shared/app-shell";
+import { EngineBadge } from "@/components/shared/engine-badge";
 import { PERF_UI_ENABLED } from "@/lib/branding";
 import { Timeline } from "@/components/trace/timeline";
 import { TraceTree } from "@/components/trace/trace-tree";
@@ -75,6 +76,7 @@ function TraceDetailPanel({
             <p className="truncate font-medium">{trace.query}</p>
           </div>
           <Badge variant="outline">{trace.mode.toUpperCase()}</Badge>
+          <EngineBadge mode={trace.mode} />
           {trace.chat_provider_name && (
             <>
               <Separator orientation="vertical" className="h-8" />

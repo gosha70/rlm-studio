@@ -23,6 +23,7 @@ import {
   MODE_DIRECT,
   MODE_RLM,
   MODE_RAG,
+  MODE_RLM_OFFICIAL,
 } from "@/lib/constants";
 
 const DEFAULT_CONFIG: ModeConfig = {
@@ -97,6 +98,8 @@ export function ExecutionConfig({ config, onChange }: ExecutionConfigProps) {
                     {mode === MODE_DIRECT && "Send query directly to LLM"}
                     {mode === MODE_RLM && "Recursive Language Model with code execution"}
                     {mode === MODE_RAG && "Retrieval-Augmented Generation from uploaded files"}
+                    {mode === MODE_RLM_OFFICIAL &&
+                      "The paper authors' reference implementation (rlms); needs the interop extra"}
                   </p>
                 </div>
                 <Switch

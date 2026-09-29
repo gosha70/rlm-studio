@@ -79,6 +79,8 @@ import {
   type CompareMatrixRequestV2,
 } from "@/lib/api";
 import { ALL_EXECUTION_MODES, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
+import { EngineBadge } from "@/components/shared/engine-badge";
+import { useEngineAvailability } from "@/components/shared/use-engines";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -247,6 +249,7 @@ export default function ComparePage() {
     "profiles",
     () => getProfiles(),
   );
+  const { unavailableReasonFor } = useEngineAvailability();
 
   // --- Inputs --------------------------------------------------------------
   const [query, setQuery] = useState("");
@@ -611,19 +614,22 @@ export default function ComparePage() {
               <div className="flex flex-wrap gap-2">
                 {ALL_MODES.map((mode) => {
                   const active = selectedModes.has(mode);
+                  // Third-party engines can be uninstalled; the server says why.
+                  const unavailableReason = unavailableReasonFor(mode);
+                  const blocked = isRunning || unavailableReason !== null;
                   return (
                     <button
                       key={mode}
                       type="button"
                       onClick={() => toggleMode(mode)}
-                      disabled={isRunning}
+                      disabled={blocked}
                       className={`rounded-md border px-3 py-1.5 text-sm transition-colors ${
                         active
                           ? "border-primary bg-primary text-primary-foreground"
                           : "border-input bg-background hover:bg-accent"
-                      } ${isRunning ? "cursor-not-allowed opacity-50" : ""}`}
+                      } ${blocked ? "cursor-not-allowed opacity-50" : ""}`}
                       aria-pressed={active}
-                      title={MODE_DESCRIPTIONS[mode]}
+                      title={unavailableReason ?? MODE_DESCRIPTIONS[mode]}
                     >
                       {mode}
                     </button>
@@ -1411,6 +1417,7 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
             <Trophy className="h-4 w-4 text-amber-500" />
           ) : null}
           <span className="text-sm font-semibold">{slot.label}</span>
+          <EngineBadge mode={slot.mode} />
         </div>
         {rank !== null && (
           <Badge variant={failed ? "destructive" : "outline"} className="text-xs">

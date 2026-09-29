@@ -17,7 +17,7 @@ export const MODE_AUTO = "auto" as const;
 export const MODE_RLM_OFFICIAL = "rlm_official" as const;
 
 /** All execution modes the user can select in the UI. */
-export const ALL_EXECUTION_MODES = [MODE_DIRECT, MODE_RLM, MODE_RAG] as const;
+export const ALL_EXECUTION_MODES = [MODE_DIRECT, MODE_RLM, MODE_RAG, MODE_RLM_OFFICIAL] as const;
 
 /** Default mode for new profiles and Chat Providers. */
 export const DEFAULT_MODE = MODE_DIRECT;
