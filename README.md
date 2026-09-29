@@ -31,6 +31,20 @@ It ships as a Python library (`rlmstudio`) plus a web UI, and provides:
 - **Sandboxed execution** — RestrictedPython / subprocess / Docker sandboxes behind one interface
 - **[The Studio UI](#rlm-studio-web-ui)** — Chat, Compare, Dashboard, Traces, Learn, Settings, served from a single process
 
+### How it relates to other RLM implementations
+
+| | [`rlms`](https://github.com/alexzhang13/rlm) (the paper authors) | [`dspy.RLM`](https://dspy.ai/api/modules/RLM) | **RLM Studio** |
+|---|---|---|---|
+| What it is | The reference implementation of the paper | A DSPy module (Deno / Pyodide sandbox), optimizer-compatible | A workbench that runs RLM next to Direct and RAG and measures the difference |
+| Sandboxes | local, IPython, Docker, Modal, Prime, Daytona, E2B | Deno / Pyodide | RestrictedPython, subprocess, Docker |
+| Providers | OpenAI, Anthropic, OpenRouter, Portkey, vLLM, Gemini, Azure | Whatever DSPy is configured with | 100+ via LiteLLM — Ollama, LM Studio and vLLM first-class |
+| Compare modes × providers with ranking | — | — | ✅ Compare matrix (cost, latency, TTFT, cache hit rate, judge) |
+| Persistent telemetry, traces, replay, budgets, outcome classification | JSONL logger + visualizer | — | ✅ built in |
+| Runs the reference implementation as a baseline | n/a | — | ✅ `rlm_official` (`[interop]` extra) |
+| Training / RL harness | ✅ | via DSPy optimizers | — (out of scope) |
+
+Use `rlms` when you want the paper's implementation and its training story; `dspy.RLM` inside DSPy pipelines; RLM Studio when the question is *"does RLM beat Direct or RAG on my documents, with my model, at what cost?"* — it runs `rlms` for you as one of the rows. Landscape as of September 2026.
+
 ## Where RLM Studio Shines
 
 RLM Studio solves a specific class of problem. Knowing when it helps (and when it doesn't) saves you from over-engineering.
@@ -86,6 +100,8 @@ rlm-studio studio
 ```
 
 That installs the package with all extras, starts the API server, mounts the bundled web UI, and opens [http://localhost:8000/studio](http://localhost:8000/studio) in your default browser. Chat, Dashboard, Traces, Compare, Learn, and Settings all run from a single process — no Node, no second terminal.
+
+> **Pre-release (September 2026):** 1.0.0 is not on PyPI yet, so the `pip install` above will not resolve until the release tag lands. Until then, run from a checkout — `git clone https://github.com/gosha70/rlm-studio && cd rlm-studio && uv sync --extra all` — then either the dev stack (`uv run python -m rlmstudio.server --reload` plus `cd frontend && npm run dev`) or build the bundled UI once (see [RELEASING.md](RELEASING.md)) and `uv run rlm-studio studio`. This note is removed in the release PR.
 
 To skip the browser auto-open: `rlm-studio studio --no-browser`. To change the bind address: `rlm-studio studio --host 0.0.0.0 --port 9000`.
 
