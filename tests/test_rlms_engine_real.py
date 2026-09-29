@@ -14,7 +14,10 @@ gated behind ``--runslow`` like the other heavyweight tests::
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -42,6 +45,12 @@ _ANSWER = "The document has 1234 characters."
 _STUB_MODEL = "stub-model"
 _PROMPT_TOKENS = 100
 _COMPLETION_TOKENS = 20
+# The stuck-REPL test: how long the model-written code blocks for, the budget
+# that must cut it short, and how long to wait afterwards for the abandoned
+# engine thread to put the process's working directory and streams back.
+_STUCK_REPL_SECONDS = 3.0
+_STUCK_BUDGET_SECONDS = 1.0
+_UNWIND_GRACE_SECONDS = 10.0
 
 
 def _chat_completion(content: str) -> dict[str, Any]:
@@ -171,16 +180,33 @@ def test_wall_clock_budget_stops_a_stuck_repl_execution() -> None:
     runs the code in-process, and the abandoned daemon thread would otherwise
     hold the GIL in a tight loop and slow every other test in the worker.
     The mechanism under test is identical.
+
+    The test then waits for that abandoned thread to unwind before returning.
+    While it sits inside the engine's REPL, the whole process has ``os.chdir``
+    'd into the engine's temp directory and had ``sys.stdout`` / ``sys.stderr``
+    replaced; the directory is deleted when the engine finally closes.  Leaving
+    the thread running therefore breaks unrelated later tests in the same
+    worker — a subprocess they spawn inherits a working directory that is about
+    to vanish — and holds the adapter's local-environment lock.
     """
-    replies = ["```repl\nimport time\ntime.sleep(30)\n```"]
+    replies = [f"```repl\nimport time\ntime.sleep({_STUCK_REPL_SECONDS})\n```"]
+    cwd_before = os.getcwd()
+    stdout_before = sys.stdout
     with _ScriptedOpenAIStub(replies) as stub:
         result = RunRLMOfficialUseCase(_adapter(stub.base_url)).execute(
             "doc",
             "q",
-            RunConfigDTO(max_steps=3, max_time_seconds=2.0),
+            RunConfigDTO(max_steps=3, max_time_seconds=_STUCK_BUDGET_SECONDS),
         )
 
-    assert not result.success
-    assert result.elapsed_time < 10.0
-    outcome = classify_execution_outcome(result.success, result.error, result.answer)
-    assert outcome.category is OutcomeCategory.TIMEOUT
+        assert not result.success
+        assert result.elapsed_time < _STUCK_REPL_SECONDS
+        outcome = classify_execution_outcome(result.success, result.error, result.answer)
+        assert outcome.category is OutcomeCategory.TIMEOUT
+
+        deadline = time.time() + _STUCK_REPL_SECONDS + _UNWIND_GRACE_SECONDS
+        while os.getcwd() != cwd_before and time.time() < deadline:
+            time.sleep(0.1)
+
+    assert os.getcwd() == cwd_before, "the abandoned engine thread left the process chdir'd"
+    assert sys.stdout is stdout_before, "the abandoned engine thread left stdout redirected"

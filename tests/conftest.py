@@ -19,6 +19,8 @@ no flags stays fast.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 
@@ -43,6 +45,27 @@ def pytest_collection_modifyitems(
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+
+@pytest.fixture(autouse=True)
+def _working_directory_is_restored() -> Iterator[None]:
+    """Fail the test that leaves the process chdir'd somewhere else.
+
+    The working directory is process-global, so a test that changes it — or
+    that abandons a thread inside code which changes it, as the official RLM
+    engine's in-process REPL does — silently breaks any later test in the same
+    worker that spawns a subprocess: the child inherits a directory that may
+    already be deleted and dies on its first ``os.getcwd()``.  That failure
+    surfaces far from its cause, so it is caught here instead.
+    """
+    import os
+
+    before = os.getcwd()
+    yield
+    after = os.getcwd()
+    if after != before:
+        os.chdir(before)
+        pytest.fail(f"test left the working directory at {after!r} instead of {before!r}")
 
 
 def pytest_configure(config: pytest.Config) -> None:

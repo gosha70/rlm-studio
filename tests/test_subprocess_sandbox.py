@@ -438,6 +438,13 @@ class TestTopLevelScriptEntrypoint:
         Uses :mod:`subprocess` (stdlib) rather than invoking pytest from
         within pytest, so the child is a genuinely fresh interpreter.
         Returns ``(returncode, stdout, stderr)``.
+
+        The child is given an explicit working directory instead of inheriting
+        the test process's.  A sibling test elsewhere in the suite can leave the
+        worker chdir'd into a directory it is about to delete, and the child
+        would then die on the first ``os.getcwd()`` — in ``litellm`` at import
+        time, or in ``multiprocessing``'s spawn preparation — for reasons that
+        have nothing to do with the sandbox.
         """
         import subprocess  # noqa: S404 — stdlib, only used to spawn ourselves
         import sys as _sys
@@ -449,6 +456,7 @@ class TestTopLevelScriptEntrypoint:
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=str(tmp_path),
         )
         return proc.returncode, proc.stdout, proc.stderr
 
