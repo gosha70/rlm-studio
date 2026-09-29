@@ -3,13 +3,15 @@
  *
  * - `unavailableReasonFor` is the single rule every picker applies.
  * - `EngineBadge` renders only for `rlm_official` runs and carries the
- *   installed engine version.
+ *   installed engine version — in the traces table and its detail panel.
  * - The Compare mode picker disables the option and shows the server's
- *   reason as the tooltip when `GET /api/engines` says unavailable.
+ *   reason as the tooltip when `GET /api/engines` says unavailable, and
+ *   drops the mode from the selection if it was picked before the status
+ *   arrived, so a run can never carry a mode the backend rejects.
  */
 
-import { render, screen } from "@testing-library/react";
-import { vi, describe, test, expect, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
 import useSWR from "swr";
 
 vi.mock("swr", () => ({
@@ -31,8 +33,9 @@ import { ENGINES_SWR_KEY, unavailableReasonFor } from "@/components/shared/use-e
 import { StrategySelectItems } from "@/components/settings/strategy-select-items";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MODE_DIRECT, MODE_RLM, MODE_RLM_OFFICIAL } from "@/lib/constants";
-import type { EnginesResponse } from "@/lib/api";
+import type { EnginesResponse, ExecutionSummary, LLMProviderConfig } from "@/lib/api";
 import ComparePage from "@/app/compare/page";
+import TracesPage from "@/app/traces/page";
 
 const INSTALL_HINT = 'The official RLM engine needs the `interop` extra: pip install "rlm-studio[interop]"';
 
@@ -43,7 +46,42 @@ const UNAVAILABLE: EnginesResponse = {
   rlm_official: { available: false, reason: INSTALL_HINT, version: null },
 };
 
-function mockSWR(engines: EnginesResponse | undefined) {
+const CONNECTED_PROVIDER: LLMProviderConfig = {
+  id: "lp-1",
+  name: "GPT-4o",
+  backend: "openai",
+  model: "gpt-4o",
+  runtime_settings: {
+    temperature: 0.2,
+    top_p: 1,
+    max_output_tokens: 1024,
+    timeout_seconds: 60,
+  },
+  status: "connected",
+};
+
+const makeExecution = (overrides: Partial<ExecutionSummary> = {}): ExecutionSummary => ({
+  execution_id: "exec-1",
+  session_id: "sess-1",
+  query: "What is 2 + 2?",
+  mode: MODE_RLM,
+  status: "complete",
+  started_at: "2024-01-01T00:00:00Z",
+  completed_at: "2024-01-01T00:00:01Z",
+  total_tokens: 300,
+  total_cost: 0.012,
+  chat_provider_name: "GPT-4o Direct",
+  ...overrides,
+});
+
+interface MockData {
+  /** Engine status, or undefined to model "not answered yet". */
+  engines?: EnginesResponse;
+  llmProviders?: LLMProviderConfig[];
+  executions?: ExecutionSummary[];
+}
+
+function mockSWR(engines: EnginesResponse | undefined, extra: Omit<MockData, "engines"> = {}) {
   const stub = (data: unknown) => ({
     data,
     mutate: vi.fn(),
@@ -53,7 +91,12 @@ function mockSWR(engines: EnginesResponse | undefined) {
   });
   vi.mocked(useSWR).mockImplementation(((key: unknown) => {
     if (key === ENGINES_SWR_KEY) return stub(engines);
-    if (key === "llm-providers" || key === "profiles") return stub([]);
+    if (key === "llm-providers") return stub(extra.llmProviders ?? []);
+    if (key === "profiles" || key === "sessions") return stub([]);
+    // The traces page keys its two execution fetches as arrays.
+    if (Array.isArray(key) && String(key[0]).startsWith("executions")) {
+      return stub(extra.executions ?? []);
+    }
     return stub(undefined);
   }) as typeof useSWR);
 }
@@ -113,6 +156,103 @@ describe("Compare mode picker", () => {
     const button = screen.getByRole("button", { name: MODE_RLM_OFFICIAL });
     expect(button).toBeEnabled();
     expect(button).toHaveAttribute("title", "Paper authors' reference implementation (rlms)");
+  });
+});
+
+describe("Compare selection when the engine status arrives late", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Pick rlm_official while availability is still unknown, then answer. */
+  const selectThenReport = (answer: EnginesResponse, extra: Omit<MockData, "engines"> = {}) => {
+    mockSWR(undefined, extra);
+    const view = render(<ComparePage />);
+    fireEvent.click(screen.getByRole("button", { name: MODE_RLM_OFFICIAL }));
+    expect(screen.getByRole("button", { name: MODE_RLM_OFFICIAL })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    mockSWR(answer, extra);
+    view.rerender(<ComparePage />);
+    return view;
+  };
+
+  test("deselects the mode once the engine is reported unavailable", () => {
+    selectThenReport(UNAVAILABLE);
+
+    const button = screen.getByRole("button", { name: MODE_RLM_OFFICIAL });
+    // Still un-clickable, but no longer part of the run.
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("Modes (1 selected)")).toBeInTheDocument();
+  });
+
+  test("keeps the mode selected when the engine is reported available", () => {
+    selectThenReport(AVAILABLE);
+
+    const button = screen.getByRole("button", { name: MODE_RLM_OFFICIAL });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Modes (2 selected)")).toBeInTheDocument();
+  });
+
+  test("submits a matrix without the unavailable mode, so the run cannot 400", async () => {
+    selectThenReport(UNAVAILABLE, { llmProviders: [CONNECTED_PROVIDER] });
+
+    fireEvent.change(screen.getByPlaceholderText("What would you like to ask?"), {
+      target: { value: "Summarize this" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Paste text content here/), {
+      target: { value: "a long document" },
+    });
+
+    // submitCompareMatrix posts with bare fetch, so the wire body is visible here.
+    const fetchMock = vi.fn().mockRejectedValue(new Error("stub: body already captured"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = screen.getByRole("button", { name: /Run Compare/ });
+    expect(run).toBeEnabled();
+    fireEvent.click(run);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/api/chat/compare-matrix");
+    expect(JSON.parse(String(init.body)).modes).toEqual([MODE_DIRECT]);
+  });
+});
+
+describe("useEngineAvailability fetch options", () => {
+  test("caps error retries so a backend without /api/engines is not polled forever", () => {
+    mockSWR(undefined);
+    render(<EngineBadge mode={MODE_RLM_OFFICIAL} />);
+
+    expect(vi.mocked(useSWR)).toHaveBeenCalledWith(
+      ENGINES_SWR_KEY,
+      expect.any(Function),
+      expect.objectContaining({ revalidateOnFocus: false, errorRetryCount: 2 }),
+    );
+  });
+});
+
+describe("Traces engine badge", () => {
+  test("labels an official-engine run in the table, not just the detail panel", () => {
+    mockSWR(AVAILABLE, {
+      executions: [
+        makeExecution({ execution_id: "exec-official", mode: MODE_RLM_OFFICIAL }),
+        makeExecution({ execution_id: "exec-studio", query: "Explain recursion" }),
+      ],
+    });
+    render(<TracesPage />);
+
+    // One row is rlm_official, the other is Studio's own RLM: exactly one badge.
+    expect(screen.getAllByText("official rlms 0.1.3")).toHaveLength(1);
+    expect(screen.getByText("RLM_OFFICIAL")).toBeInTheDocument();
+  });
+
+  test("shows no engine badge when every run used a built-in mode", () => {
+    mockSWR(AVAILABLE, { executions: [makeExecution()] });
+    render(<TracesPage />);
+
+    expect(screen.queryByText(/official rlms/)).not.toBeInTheDocument();
   });
 });
 

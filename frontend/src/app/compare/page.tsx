@@ -293,6 +293,21 @@ export default function ComparePage() {
     }
   }, [llmProviders, selectedLLMProviderIds.length]);
 
+  // --- Drop modes whose engine turned out to be unavailable ----------------
+  // Availability arrives after the first paint, so a mode can already be
+  // selected by the time the server reports its engine missing.  The picker
+  // button is disabled by then, leaving the user no way to deselect it, and
+  // the backend rejects the *whole* matrix when any requested mode cannot
+  // run — so prune the selection instead of stranding it.
+  useEffect(() => {
+    setSelectedModes((prev) => {
+      const kept = [...prev].filter((m) => unavailableReasonFor(m) === null);
+      if (kept.length === prev.size) return prev;
+      // Never leave the picker empty: Direct is always runnable.
+      return new Set(kept.length > 0 ? kept : [MODE_DIRECT]);
+    });
+  }, [unavailableReasonFor]);
+
   // --- Profile pre-fill ----------------------------------------------------
   const handleProfileChange = useCallback(
     (profileId: string) => {

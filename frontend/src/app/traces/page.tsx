@@ -512,7 +512,10 @@ function TracesPageInner() {
                         {exec.chat_provider_name || "—"}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{exec.mode.toUpperCase()}</Badge>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline">{exec.mode.toUpperCase()}</Badge>
+                          <EngineBadge mode={exec.mode} />
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge
