@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from rlmstudio.application.dto import LLMResponseDTO, RunConfigDTO
+from rlmstudio.application.dto import LLMResponseDTO, RunConfigDTO, RunResultDTO
 from rlmstudio.application.sandbox_vars import (
     MODE_DIRECT,
     MODE_RLM_OFFICIAL,
@@ -14,7 +16,11 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
 )
 from rlmstudio.application.services.outcome_classifier import OutcomeCategory
-from rlmstudio.application.use_cases.run_matrix_comparison import MatrixSlotDTO
+from rlmstudio.application.use_cases.run_matrix_comparison import (
+    MatrixSlotDTO,
+    MatrixSlotResultDTO,
+)
+from rlmstudio.benchmark import matrix_runner
 from rlmstudio.benchmark.dataset import MATCH_CONTAINS, BenchmarkCase, load_dataset_from_dict
 from rlmstudio.benchmark.matrix_runner import (
     BenchmarkResults,
@@ -296,3 +302,161 @@ class TestRunner:
             MatrixBenchmarkRunner(
                 providers=["a/b"], engines=["direct"], reps=0, slot_builder=_fake_slots
             )
+
+
+class _RecordingUseCase:
+    """Stands in for RunMatrixComparisonUseCase, recording how slots were batched."""
+
+    batches: list[tuple[int | None, list[str]]] = []
+
+    def __init__(self, max_workers: int | None = None) -> None:
+        self._max_workers = max_workers
+
+    def execute(self, content: str, query: str, slots: list[MatrixSlotDTO]) -> Any:
+        type(self).batches.append((self._max_workers, [s.mode for s in slots]))
+        return SimpleNamespace(
+            slots=[
+                MatrixSlotResultDTO(
+                    slot_id=s.slot_id,
+                    label=s.slot_id,
+                    mode=s.mode,
+                    provider=s.provider or "p",
+                    model=s.model or "m",
+                    result=RunResultDTO(answer="a", mode_used=s.mode, success=True),
+                )
+                for s in slots
+            ]
+        )
+
+
+@pytest.fixture
+def recording_use_case(monkeypatch: pytest.MonkeyPatch) -> type[_RecordingUseCase]:
+    _RecordingUseCase.batches = []
+    monkeypatch.setattr(matrix_runner, "RunMatrixComparisonUseCase", _RecordingUseCase)
+    return _RecordingUseCase
+
+
+class TestOfficialSlotsShareOneInProcessREPL:
+    """The official engine admits one in-process run at a time, process wide.
+
+    Left in the matrix's own thread pool, a grid with two providers would lose
+    every official cell but one to "engine busy" — a benchmark reporting
+    failures it created itself.
+    """
+
+    def _run(self, sandbox_type: str | None, providers: list[str]) -> None:
+        MatrixBenchmarkRunner(
+            providers=providers,
+            engines=[MODE_DIRECT, MODE_RLM_OFFICIAL],
+            slot_builder=_fake_slots,
+            sandbox_type=sandbox_type,
+        ).run(DATASET, case_ids=["needle"])
+
+    def test_two_official_slots_run_one_at_a_time(
+        self, recording_use_case: type[_RecordingUseCase]
+    ) -> None:
+        self._run(None, ["openai/a", "anthropic/b"])
+
+        batches = recording_use_case.batches
+        assert len(batches) == 2
+        parallel_workers, parallel_modes = batches[0]
+        serial_workers, serial_modes = batches[1]
+        assert parallel_workers is None
+        assert set(parallel_modes) == {MODE_DIRECT}
+        assert serial_workers == 1
+        assert set(serial_modes) == {MODE_RLM_OFFICIAL}
+
+    def test_every_slot_still_reaches_the_report(
+        self, recording_use_case: type[_RecordingUseCase]
+    ) -> None:
+        seen: list[SlotOutcome] = []
+        MatrixBenchmarkRunner(
+            providers=["openai/a", "anthropic/b"],
+            engines=[MODE_DIRECT, MODE_RLM_OFFICIAL],
+            slot_builder=_fake_slots,
+            on_slot_complete=seen.append,
+        ).run(DATASET, case_ids=["needle"])
+
+        assert len(seen) == 4
+        assert sum(1 for o in seen if o.engine == MODE_RLM_OFFICIAL) == 2
+
+    def test_a_single_official_slot_is_not_held_back(
+        self, recording_use_case: type[_RecordingUseCase]
+    ) -> None:
+        self._run(None, ["openai/a"])
+
+        assert len(recording_use_case.batches) == 1
+
+    def test_the_docker_sandbox_needs_no_serialising(
+        self, recording_use_case: type[_RecordingUseCase]
+    ) -> None:
+        """A container per run means no shared REPL to queue for."""
+        self._run("docker", ["openai/a", "anthropic/b"])
+
+        assert len(recording_use_case.batches) == 1
+
+
+class TestJudgeFailureDoesNotEndTheRun:
+    """A paid run is hours of provider calls; one judge hiccup must not void it."""
+
+    class _AngryJudgeLLM(_JudgeLLM):
+        def complete(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
+            raise RuntimeError("429 rate limit exceeded")
+
+    def test_the_cell_loses_its_verdict_and_says_why(self) -> None:
+        judge = JudgeScorer(self._AngryJudgeLLM(), model="judge/x")  # type: ignore[arg-type]
+        results = MatrixBenchmarkRunner(
+            providers=["openai/m"],
+            engines=[MODE_DIRECT],
+            slot_builder=_fake_slots,
+            judge=judge,
+        ).run(DATASET)
+
+        assert [o.case_id for o in results.outcomes] == ["needle", "open"]
+        assert all(o.judge is None for o in results.outcomes)
+        assert all("429" in (o.judge_error or "") for o in results.outcomes)
+
+    def test_a_judge_reply_that_is_not_an_object_scores_unparsed(self) -> None:
+        class _ListJudgeLLM(_JudgeLLM):
+            def complete(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
+                return LLMResponseDTO(
+                    content="[4, 4]", model="judge", input_tokens=1, output_tokens=1
+                )
+
+        judge = JudgeScorer(_ListJudgeLLM(), model="judge/x")  # type: ignore[arg-type]
+        results = MatrixBenchmarkRunner(
+            providers=["openai/m"],
+            engines=[MODE_DIRECT],
+            slot_builder=_fake_slots,
+            judge=judge,
+        ).run(DATASET, case_ids=["needle"])
+
+        verdict = results.outcomes[0].judge
+        assert verdict is not None
+        assert verdict.parsed is False
+        assert results.outcomes[0].judge_error is None  # it answered, just not usefully
+
+
+class TestPartialResults:
+    """What a stopped run had already paid for is still worth keeping."""
+
+    def test_completed_cells_are_packaged_with_the_dataset_provenance(self) -> None:
+        runner = MatrixBenchmarkRunner(
+            providers=["openai/m"], engines=[MODE_DIRECT], slot_builder=_fake_slots
+        )
+        done: list[SlotOutcome] = []
+        runner_with_progress = MatrixBenchmarkRunner(
+            providers=["openai/m"],
+            engines=[MODE_DIRECT],
+            slot_builder=_fake_slots,
+            on_slot_complete=done.append,
+        )
+        runner_with_progress.run(DATASET, case_ids=["needle"])
+
+        partial = runner.partial_results(DATASET, done, skipped={"other": "no corpus"})
+
+        assert partial.dataset_name == DATASET.name
+        assert partial.case_ids == ["needle"]
+        assert partial.skipped == {"other": "no corpus"}
+        assert len(partial.outcomes) == len(done)
+        assert partial.finished_at

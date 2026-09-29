@@ -428,8 +428,11 @@ rlm-studio bench \
 - `--judge` runs the pointwise rubric from Settings → Judge on each usable answer; omit it for the deterministic accuracy column only. `--reps 3` reports judge scores as mean ± range.
 - `--note` lands in the page header — name local hardware and model versions here.
 - `--dry-run` runs everything on offline fakes (this is what CI does); `--limit N` and `--cases id,id` narrow a run while you set things up.
+- `--sandbox docker` lets the `rlm_official` cells run in parallel. Without it they share one in-process REPL, so the runner runs them one after another and a multi-provider grid takes longer; the other engines are unaffected either way.
 
 Outputs: `results.json` (every cell), `results.md` (summary + per-case table), and the results section of `BENCHMARKS.md` regenerated between its markers. Budgets per case (steps, wall-clock, cost) come from the dataset; failed and timed-out runs are counted in their own column rather than dropped.
+
+A run that stops part-way keeps what it paid for: the cells already completed are written to `results.partial.json` and the command exits with an error message. A judge call that fails costs only that cell its score, recorded against the cell as `judge_error`.
 
 ---
 

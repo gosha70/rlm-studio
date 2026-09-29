@@ -39,6 +39,9 @@ _FALLBACK_SCORE = 3.0
 _DIMENSION_MIN = 1.0
 _DIMENSION_MAX = 5.0
 _PUNCTUATION = string.punctuation + "“”‘’"
+# An expectation that is nothing but a number, with optional thousands
+# separators or decimals — the shape every counting case uses.
+_NUMERIC_EXPECTATION = re.compile(r"\d[\d.,]*")
 
 
 def normalise(text: str) -> str:
@@ -48,7 +51,13 @@ def normalise(text: str) -> str:
 
 
 def matches(answer: str, expected: str, match: str) -> bool:
-    """Whether *answer* satisfies *expected* under the ``match`` kind."""
+    """Whether *answer* satisfies *expected* under the ``match`` kind.
+
+    A numeric expectation is matched on token boundaries, never as a bare
+    substring: every counting case expects a bare number under ``contains``,
+    and ``"72" in "it appears 172 times"`` would otherwise score a wrong count
+    as correct and inflate the accuracy column on exactly those cases.
+    """
     got = normalise(answer)
     for alternative in expected.split(ANY_OF_SEPARATOR):
         want = normalise(alternative)
@@ -56,9 +65,16 @@ def matches(answer: str, expected: str, match: str) -> bool:
             continue
         if match == MATCH_EXACT and got == want:
             return True
-        if match == MATCH_CONTAINS and want in got:
+        if match == MATCH_CONTAINS and _contains(got, want):
             return True
     return False
+
+
+def _contains(got: str, want: str) -> bool:
+    """Substring test, tightened to token boundaries for a numeric expectation."""
+    if _NUMERIC_EXPECTATION.fullmatch(want):
+        return re.search(rf"(?<![\d.,]){re.escape(want)}(?![\d.,])", got) is not None
+    return want in got
 
 
 # ---------------------------------------------------------------------------
@@ -90,14 +106,22 @@ class JudgeVerdict:
 
 
 def parse_judge_json(text: str) -> dict[str, Any]:
-    """Extract the JSON object from a judge reply, tolerating markdown fences."""
+    """Extract the JSON object from a judge reply, tolerating markdown fences.
+
+    Raises ``ValueError`` when the reply parses to anything but an object — a
+    bare list or number is as unusable as malformed JSON, and the caller's
+    fallback path expects to hear about it rather than receive the wrong type.
+    """
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines)
-    result: dict[str, Any] = json.loads(text)
+    decoded = json.loads(text)
+    if not isinstance(decoded, dict):
+        raise ValueError(f"judge reply is {type(decoded).__name__}, not a JSON object")
+    result: dict[str, Any] = decoded
     return result
 
 

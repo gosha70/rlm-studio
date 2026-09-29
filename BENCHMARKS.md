@@ -54,9 +54,22 @@ rlm-studio bench --config benchmarks/longdoc-v1.yaml \
 ```
 
 `--fetch` downloads the two public texts into `benchmarks/corpus/` (verified
-against the pinned digests). Without it those cases are skipped and listed as
-such. `--dry-run` runs the whole pipeline on fakes with no network — CI does
-this on every push so the runner cannot rot.
+against the pinned digests; a file that fails its digest is discarded so the
+next `--fetch` replaces it rather than reusing a bad copy). Without it those
+cases are skipped and listed as such. `--dry-run` runs the whole pipeline on
+fakes with no network — CI does this on every push so the runner cannot rot.
+
+Add `--sandbox docker` if you want the `rlm_official` cells to run in
+parallel. Without it the official engine uses its in-process REPL, which admits
+one run at a time, so a grid with several providers runs those cells one after
+another and takes correspondingly longer. The runner arranges that itself; the
+other engines still run in parallel.
+
+If a run stops part-way — a provider outage, a rate limit, Ctrl-C — whatever
+had completed is written to `results.partial.json` in the output directory
+instead of being lost, and the run exits with an error rather than a
+traceback. A judge call that fails costs that one cell its score, recorded as
+`judge_error`, and the run continues.
 
 Expected cost of a full run at cheap cloud tiers: see the *total cost of this
 run* line under the results; the target is under ~$25.
@@ -65,6 +78,10 @@ run* line under the results; the target is under ~$25.
 
 - The judge is an LLM; treat its scores as a ranking aid, not ground truth.
   The accuracy column is deterministic and is the number to trust first.
+- Counting targets are computed from the text, and a counted phrase is matched
+  across line breaks — the public texts are hard-wrapped, so "MUST NOT" split
+  over two lines still counts. An answer's number has to appear as its own
+  number to pass: "172" does not satisfy an expected 72.
 - `rlm_official` does not stream, so its TTFT is always "—" and it ranks last
   on TTFT by construction. When the engine reports no price and Studio has
   none, the cell shows the run count with unknown cost instead of a $0 that

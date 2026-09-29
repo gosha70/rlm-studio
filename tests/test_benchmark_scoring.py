@@ -123,3 +123,51 @@ class TestJudgeScorer:
         assert not verdict.parsed
         assert verdict.overall == 3.0
         assert "Failed to parse" in verdict.reasoning
+
+
+class TestNumericExpectationsMatchOnBoundaries:
+    """Every counting case expects a bare number under ``contains``.
+
+    A plain substring test scores a wrong count as correct — "72" is inside
+    "172" — which inflates accuracy on exactly the cases meant to be hardest.
+    """
+
+    @pytest.mark.parametrize(
+        ("answer", "expected", "passes"),
+        [
+            ("It appears 72 times.", "72", True),
+            ("The count is 72", "72", True),
+            ("72", "72", True),
+            ("It occurs seventy-two (72) times", "72", True),
+            ("It appears 172 times.", "72", False),
+            ("I found 1,072 matches", "72", False),
+            ("appears 72,000 times", "72", False),
+            ("the answer is 72.5", "72", False),
+        ],
+    )
+    def test_a_count_must_appear_as_its_own_number(
+        self, answer: str, expected: str, passes: bool
+    ) -> None:
+        assert matches(answer, expected, MATCH_CONTAINS) is passes
+
+    def test_a_thousands_separated_expectation_is_matched_as_written(self) -> None:
+        assert matches("There are 1,234 of them", "1,234", MATCH_CONTAINS)
+        assert not matches("There are 11,234 of them", "1,234", MATCH_CONTAINS)
+
+    def test_text_expectations_are_still_plain_substrings(self) -> None:
+        assert matches("The answer is Netherfield Park.", "netherfield", MATCH_CONTAINS)
+
+
+class TestJudgeRepliesThatAreNotObjects:
+    def test_a_json_list_is_rejected_rather_than_returned(self) -> None:
+        with pytest.raises(ValueError, match="not a JSON object"):
+            parse_judge_json("[4, 4]")
+
+    def test_a_bare_number_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="not a JSON object"):
+            parse_judge_json("4")
+
+    def test_an_object_in_a_fence_still_parses(self) -> None:
+        assert parse_judge_json('```json\n{"dimensions": {"a": 4}}\n```') == {
+            "dimensions": {"a": 4}
+        }

@@ -174,3 +174,49 @@ class TestErrors:
 
         assert code == 1
         assert "not found" in capsys.readouterr().err
+
+
+class TestAStoppedRunKeepsWhatItPaidFor:
+    """A real run is hours of provider calls; an error at the end must not void it."""
+
+    def test_completed_cells_are_written_before_the_error_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from rlmstudio.benchmark import matrix_runner
+
+        real_run_case = matrix_runner.MatrixBenchmarkRunner._run_case
+        calls = {"n": 0}
+
+        def _explode_on_the_second_case(self: object, case: object, rep: int) -> object:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise RuntimeError("provider melted down")
+            return real_run_case(self, case, rep)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            matrix_runner.MatrixBenchmarkRunner, "_run_case", _explode_on_the_second_case
+        )
+
+        code = _run(
+            [
+                "--config",
+                str(LONGDOC),
+                "--dry-run",
+                "--limit",
+                "2",
+                "--providers",
+                "fake/ok",
+                "--engines",
+                MODE_DIRECT,
+                "--out",
+                str(tmp_path),
+            ]
+        )
+
+        assert code == 1  # a clean failure, not a traceback
+
+        partial = json.loads((tmp_path / "results.partial.json").read_text(encoding="utf-8"))
+        results = partial["results"]
+        assert results["outcomes"], "the first case's cells were paid for and must be kept"
+        assert "melted down" in results["metadata"]["incomplete"]
+        assert not (tmp_path / "results.json").exists()  # not a complete run

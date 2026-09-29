@@ -51,6 +51,10 @@ FACT_POSITION_END = "end"
 
 EXPECTED_COUNT_WORD = "count_word"
 EXPECTED_COUNT_SENTENCE = "count_sentence"
+# Extension a download carries until it is complete and verified.
+_PARTIAL_SUFFIX = ".part"
+# What separates the words of a counted phrase in a hard-wrapped document.
+_PHRASE_GAP = r"\s+"
 
 _CHARS_PER_TOKEN = 4
 
@@ -203,17 +207,39 @@ def _sha256(path: Path) -> str:
 
 
 def _fetch(url: str, dest: Path) -> None:
+    """Download *url* to *dest*, writing it into place only once complete.
+
+    A download interrupted half-way would otherwise leave a short file behind
+    that looks materialised to the next run.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 — pinned by sha256
-        dest.write_bytes(response.read())
+    partial = dest.with_name(dest.name + _PARTIAL_SUFFIX)
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 — pinned by sha256
+            partial.write_bytes(response.read())
+        partial.replace(dest)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _public_text(spec: dict[str, Any], corpus_dir: Path, *, fetch: bool) -> str | None:
-    """Return the text for a ``source_url`` spec, or ``None`` when absent and not fetching."""
+    """Return the text for a ``source_url`` spec, or ``None`` when absent and not fetching.
+
+    A file that fails its digest is deleted rather than left in the corpus
+    directory: fetching skips files that already exist, so keeping it would
+    fail every later run until someone removed it by hand.
+    """
     url = str(spec["source_url"])
     filename = str(spec.get("filename") or url.rsplit("/", 1)[-1])
     expected_sha = spec.get("sha256")
     path = corpus_dir / filename
+    if path.exists() and expected_sha and _sha256(path) != expected_sha:
+        path.unlink()
+        if not fetch:
+            raise CorpusError(
+                f"{filename}: sha256 mismatch, so the file was discarded; "
+                "re-run with --fetch to download it again"
+            )
     if not path.exists():
         if not fetch:
             return None
@@ -221,6 +247,7 @@ def _public_text(spec: dict[str, Any], corpus_dir: Path, *, fetch: bool) -> str 
     if expected_sha:
         actual = _sha256(path)
         if actual != expected_sha:
+            path.unlink()
             raise CorpusError(
                 f"{filename}: sha256 mismatch (expected {expected_sha[:12]}…, got {actual[:12]}…)"
             )
@@ -233,15 +260,28 @@ def _public_text(spec: dict[str, Any], corpus_dir: Path, *, fetch: bool) -> str 
 
 
 def count_word(text: str, word: str) -> int:
-    """Whole-word, case-insensitive occurrences."""
-    return len(re.findall(rf"\b{re.escape(word)}\b", text, flags=re.IGNORECASE))
+    """Whole-word, case-insensitive occurrences, tolerating wrapped phrases.
+
+    The gaps inside a multi-word phrase match any run of whitespace, because
+    the public texts are hard-wrapped: a literal space would miss every
+    ``"MUST NOT"`` that happens to straddle a line break, and a model that
+    counted correctly would then be scored as wrong.
+    """
+    pattern = _PHRASE_GAP.join(re.escape(part) for part in word.split())
+    return len(re.findall(rf"\b{pattern}\b", text, flags=re.IGNORECASE))
+
+
+def count_phrase(text: str, phrase: str) -> int:
+    """Case-sensitive occurrences of a phrase, tolerating wrapped whitespace."""
+    pattern = _PHRASE_GAP.join(re.escape(part) for part in phrase.split())
+    return len(re.findall(pattern, text))
 
 
 def derive_expected(text: str, spec: dict[str, Any]) -> str:
     if EXPECTED_COUNT_WORD in spec:
         return str(count_word(text, str(spec[EXPECTED_COUNT_WORD])))
     if EXPECTED_COUNT_SENTENCE in spec:
-        return str(text.count(str(spec[EXPECTED_COUNT_SENTENCE])))
+        return str(count_phrase(text, str(spec[EXPECTED_COUNT_SENTENCE])))
     raise CorpusError(f"Unknown expected_spec {sorted(spec)}")
 
 

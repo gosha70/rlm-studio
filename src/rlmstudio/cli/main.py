@@ -285,11 +285,18 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         )
         judge = JudgeScorer(judge_llm, model=args.judge)
 
+    # Kept so a run that dies part-way still leaves the cells it paid for on
+    # disk: a real run is hours of provider calls, and losing all of it to one
+    # unexpected error at the end would be the most expensive kind of bug.
+    completed: list[SlotOutcome] = []
+
     def _progress(outcome: SlotOutcome) -> None:
+        completed.append(outcome)
         marker = "✓" if outcome.success else "✗"
+        judge_note = f" · judge failed: {outcome.judge_error}" if outcome.judge_error else ""
         print(
             f"  {marker} {outcome.case_id} · {outcome.provider}/{outcome.model} · {outcome.engine}"
-            f" · {outcome.outcome} · {outcome.elapsed_seconds:.1f}s"
+            f" · {outcome.outcome} · {outcome.elapsed_seconds:.1f}s{judge_note}"
         )
 
     runner = MatrixBenchmarkRunner(
@@ -305,18 +312,37 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         sandbox_type=args.sandbox,
         on_slot_complete=_progress,
     )
-    results = runner.run(
-        dataset,
-        case_ids=_csv(args.cases) or None,
-        limit=args.limit,
-        skipped=materialised.skipped,
-    )
+    out_dir = Path(args.out)
+    try:
+        results = runner.run(
+            dataset,
+            case_ids=_csv(args.cases) or None,
+            limit=args.limit,
+            skipped=materialised.skipped,
+        )
+    except BaseException as exc:  # including KeyboardInterrupt: save, then re-raise
+        partial = runner.partial_results(dataset, completed, skipped=materialised.skipped)
+        partial.metadata.update(
+            {
+                RESULTS_METADATA_NOTE: args.note,
+                "dry_run": args.dry_run,
+                "config": str(config_path),
+                "incomplete": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        path = out_dir / "results.partial.json"
+        MatrixBenchmarkReport(partial).save_json(path)
+        print(
+            f"\n{CLI_NAME} bench: run stopped after {len(completed)} cell(s); "
+            f"wrote what completed to {path}",
+            file=sys.stderr,
+        )
+        raise
     results.metadata.update(
         {RESULTS_METADATA_NOTE: args.note, "dry_run": args.dry_run, "config": str(config_path)}
     )
 
     report = MatrixBenchmarkReport(results)
-    out_dir = Path(args.out)
     report.save_json(out_dir / "results.json")
     report.save_markdown(out_dir / "results.md")
     print()
@@ -339,7 +365,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "bench":
         try:
             return _cmd_bench(args)
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
+            # RuntimeError is what the LLM adapter raises for a provider that
+            # rate-limited, timed out or refused the key: a clean message, not a
+            # traceback.  Anything already completed has been saved by now.
             print(f"{CLI_NAME} bench: {exc}", file=sys.stderr)
             return 1
 

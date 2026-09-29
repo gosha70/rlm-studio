@@ -23,13 +23,18 @@ from datetime import datetime, timezone
 from typing import Any
 
 from rlmstudio.application.dto import RunConfigDTO
-from rlmstudio.application.sandbox_vars import RESULT_KEY_COST_KNOWN, RLM_DEFAULT_MAX_STEPS
+from rlmstudio.application.sandbox_vars import (
+    MODE_RLM_OFFICIAL,
+    RESULT_KEY_COST_KNOWN,
+    RLM_DEFAULT_MAX_STEPS,
+)
 from rlmstudio.application.services.outcome_classifier import classify_execution_outcome
 from rlmstudio.application.use_cases.run_matrix_comparison import (
     MatrixSlotDTO,
     MatrixSlotResultDTO,
     RunMatrixComparisonUseCase,
 )
+from rlmstudio.infrastructure.engines.rlms_adapter import SANDBOX_TYPE_DOCKER
 
 from .dataset import BenchmarkCase, BenchmarkDataset
 from .scoring import JudgeScorer, JudgeVerdict, matches
@@ -68,6 +73,7 @@ class SlotOutcome:
     median_ttft_ms: int | None
     match_pass: bool | None = None  # None when the case has no expected answer
     judge: JudgeVerdict | None = None
+    judge_error: str | None = None  # why this cell has no verdict, when it should have
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -89,6 +95,7 @@ class SlotOutcome:
             "median_ttft_ms": self.median_ttft_ms,
             "match_pass": self.match_pass,
             "judge": self.judge.to_dict() if self.judge else None,
+            "judge_error": self.judge_error,
         }
         return data
 
@@ -254,7 +261,37 @@ class MatrixBenchmarkRunner:
         if limit is not None:
             cases = cases[:limit]
 
-        results = BenchmarkResults(
+        results = self._empty_results(dataset, [c.id for c in cases], skipped)
+        for case in cases:
+            for rep in range(1, self._reps + 1):
+                results.outcomes.extend(self._run_case(case, rep))
+        results.finished_at = datetime.now(timezone.utc).isoformat()
+        return results
+
+    def partial_results(
+        self,
+        dataset: BenchmarkDataset,
+        outcomes: list[SlotOutcome],
+        *,
+        skipped: dict[str, str] | None = None,
+    ) -> BenchmarkResults:
+        """Package the cells a stopped run had already produced.
+
+        A real run is hours of paid provider calls, so whatever completed before
+        an interruption is worth keeping even though the grid is incomplete.
+        """
+        results = self._empty_results(dataset, sorted({o.case_id for o in outcomes}), skipped)
+        results.outcomes.extend(outcomes)
+        results.finished_at = datetime.now(timezone.utc).isoformat()
+        return results
+
+    def _empty_results(
+        self,
+        dataset: BenchmarkDataset,
+        case_ids: list[str],
+        skipped: dict[str, str] | None,
+    ) -> BenchmarkResults:
+        return BenchmarkResults(
             dataset_name=dataset.name,
             providers=list(self._providers),
             engines=list(self._engines),
@@ -263,32 +300,59 @@ class MatrixBenchmarkRunner:
             started_at=datetime.now(timezone.utc).isoformat(),
             judge_model=self._judge.model if self._judge else None,
             judge_prompt_version=self._judge.prompt_version if self._judge else None,
-            case_ids=[c.id for c in cases],
+            case_ids=case_ids,
             skipped=dict(skipped or {}),
         )
-        for case in cases:
-            for rep in range(1, self._reps + 1):
-                results.outcomes.extend(self._run_case(case, rep))
-        results.finished_at = datetime.now(timezone.utc).isoformat()
-        return results
 
     def _run_case(self, case: BenchmarkCase, rep: int) -> list[SlotOutcome]:
         base_config = budget_to_config(case.budget)
         slots = self._slot_builder(self._providers, self._engines, base_config, case)
         started = time.time()
-        matrix = RunMatrixComparisonUseCase().execute(case.content, case.query, slots)
+        slot_results = self._execute_slots(case, slots)
         logger.info(
             "bench case=%s rep=%d slots=%d elapsed=%.1fs",
             case.id,
             rep,
-            len(matrix.slots),
+            len(slot_results),
             time.time() - started,
         )
-        outcomes = [self._score(case, rep, slot) for slot in matrix.slots]
+        outcomes = [self._score(case, rep, slot) for slot in slot_results]
         if self._on_slot_complete is not None:
             for outcome in outcomes:
                 self._on_slot_complete(outcome)
         return outcomes
+
+    def _execute_slots(
+        self, case: BenchmarkCase, slots: list[MatrixSlotDTO]
+    ) -> list[MatrixSlotResultDTO]:
+        """Run a case's slots, keeping in-process official slots out of each other's way.
+
+        The official engine's in-process REPL admits one run at a time process
+        wide, and a queued run gives up rather than waiting out its whole
+        budget.  Left to the matrix's own thread pool, a grid with two providers
+        would therefore lose every official cell but one to "engine busy" — a
+        benchmark reporting failures it created itself.  So official slots run
+        one after another while the rest still run in parallel.  With the Docker
+        sandbox there is no shared REPL and no reason to hold them back.
+        """
+        official = [s for s in slots if s.mode == MODE_RLM_OFFICIAL]
+        serialise = len(official) > 1 and self._sandbox_type != SANDBOX_TYPE_DOCKER
+        if not serialise:
+            return list(RunMatrixComparisonUseCase().execute(case.content, case.query, slots).slots)
+
+        others = [s for s in slots if s.mode != MODE_RLM_OFFICIAL]
+        results: list[MatrixSlotResultDTO] = []
+        if others:
+            results.extend(
+                RunMatrixComparisonUseCase().execute(case.content, case.query, others).slots
+            )
+        logger.info("bench serialising %d official slots (in-process REPL)", len(official))
+        results.extend(
+            RunMatrixComparisonUseCase(max_workers=1)
+            .execute(case.content, case.query, official)
+            .slots
+        )
+        return results
 
     def _score(self, case: BenchmarkCase, rep: int, slot: MatrixSlotResultDTO) -> SlotOutcome:
         result = slot.result
@@ -300,13 +364,28 @@ class MatrixBenchmarkRunner:
             match_pass = usable and matches(result.answer, case.expected_answer, case.match)
 
         verdict: JudgeVerdict | None = None
+        judge_error: str | None = None
         if self._judge is not None and usable:
-            verdict = self._judge.score(
-                query=case.query,
-                response=result.answer,
-                source=case.content,
-                rubric_hint=case.rubric_hint,
-            )
+            try:
+                verdict = self._judge.score(
+                    query=case.query,
+                    response=result.answer,
+                    source=case.content,
+                    rubric_hint=case.rubric_hint,
+                )
+            except Exception as exc:  # one judge call must not end a paid run
+                # A rate limit or a dropped connection costs this cell its
+                # verdict, which the report already renders as missing; it does
+                # not cost the hours of provider calls already made.
+                judge_error = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "bench judge failed case=%s rep=%d provider=%s engine=%s: %s",
+                    case.id,
+                    rep,
+                    slot.provider,
+                    slot.mode,
+                    judge_error,
+                )
 
         return SlotOutcome(
             case_id=case.id,
@@ -327,4 +406,5 @@ class MatrixBenchmarkRunner:
             median_ttft_ms=median_ttft_ms(result.trace),
             match_pass=match_pass,
             judge=verdict,
+            judge_error=judge_error,
         )

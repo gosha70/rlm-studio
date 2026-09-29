@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from rlmstudio.benchmark import corpus as corpus_module
 from rlmstudio.benchmark.corpus import (
     CorpusError,
     MaterialiseReport,
@@ -164,6 +168,24 @@ class TestDerivedExpected:
         with pytest.raises(CorpusError):
             derive_expected("t", {"magic": 1})
 
+    def test_a_phrase_is_counted_across_a_line_break(self) -> None:
+        """The public texts are hard-wrapped, so a phrase can straddle a line.
+
+        A literal space in the pattern missed 5 of the 77 "MUST NOT" in the
+        pinned RFC 9110, and a model that counted correctly was scored wrong.
+        """
+        text = "The server MUST NOT do it.\nThe client MUST\n   NOT do it either.\nMUST  NOT."
+
+        assert count_word(text, "MUST NOT") == 3
+
+    def test_a_wrapped_phrase_still_respects_word_boundaries(self) -> None:
+        assert count_word("It MUST NOTIFY the client.", "MUST NOT") == 0
+
+    def test_a_counted_sentence_is_also_wrap_tolerant(self) -> None:
+        text = "Ends here. Ends\nhere. Ends here."
+
+        assert derive_expected(text, {"count_sentence": "Ends here."}) == "3"
+
 
 # ---------------------------------------------------------------------------
 # Materialise
@@ -201,6 +223,95 @@ class TestMaterialise:
         )
         with pytest.raises(CorpusError, match="sha256 mismatch"):
             materialise_case(case, base_dir=tmp_path, corpus_dir=corpus)
+
+    def test_a_file_that_fails_its_digest_is_discarded(self, tmp_path: Path) -> None:
+        """Fetching skips files that already exist.
+
+        Keeping a corrupt one would fail every later run until somebody deleted
+        it by hand, so it goes now and the error says to fetch again.
+        """
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        bad = corpus / "x.txt"
+        bad.write_text("tampered", encoding="utf-8")
+        case = BenchmarkCase(
+            id="c",
+            content="",
+            query="q",
+            content_spec={"source_url": "https://example.invalid/x.txt", "sha256": "0" * 64},
+        )
+
+        with pytest.raises(CorpusError, match="re-run with --fetch"):
+            materialise_case(case, base_dir=tmp_path, corpus_dir=corpus)
+
+        assert not bad.exists()
+
+    def test_a_corrupt_file_is_refetched_rather_than_reused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "x.txt").write_text("tampered", encoding="utf-8")
+        body = "Netherfield Park is let at last."
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        fetches: list[str] = []
+
+        def _fake_fetch(url: str, dest: Path) -> None:
+            fetches.append(url)
+            dest.write_text(body, encoding="utf-8")
+
+        monkeypatch.setattr(corpus_module, "_fetch", _fake_fetch)
+        case = BenchmarkCase(
+            id="c",
+            content="",
+            query="q",
+            content_spec={"source_url": "https://example.invalid/x.txt", "sha256": digest},
+        )
+
+        assert materialise_case(case, base_dir=tmp_path, corpus_dir=corpus, fetch=True) is None
+        assert fetches == ["https://example.invalid/x.txt"]
+        assert case.content == body
+
+    def test_a_download_that_dies_mid_read_leaves_nothing_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A half-written file would look materialised to the next run."""
+
+        @contextmanager
+        def _dying_urlopen(url: str, timeout: float = 0) -> Iterator[Any]:
+            class _Response:
+                def read(self) -> bytes:
+                    raise OSError("connection reset")
+
+            yield _Response()
+
+        monkeypatch.setattr(corpus_module.urllib.request, "urlopen", _dying_urlopen)
+        dest = tmp_path / "x.txt"
+
+        with pytest.raises(OSError, match="connection reset"):
+            corpus_module._fetch("https://example.invalid/x.txt", dest)
+
+        assert not dest.exists()
+        assert list(tmp_path.iterdir()) == []  # not even a partial file
+
+    def test_a_completed_download_is_moved_into_place(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        @contextmanager
+        def _urlopen(url: str, timeout: float = 0) -> Iterator[Any]:
+            class _Response:
+                def read(self) -> bytes:
+                    return b"body"
+
+            yield _Response()
+
+        monkeypatch.setattr(corpus_module.urllib.request, "urlopen", _urlopen)
+        dest = tmp_path / "nested" / "x.txt"
+
+        corpus_module._fetch("https://example.invalid/x.txt", dest)
+
+        assert dest.read_bytes() == b"body"
+        assert [p.name for p in dest.parent.iterdir()] == ["x.txt"]
 
     def test_public_text_is_read_when_present_and_valid(self, tmp_path: Path) -> None:
         corpus = tmp_path / "corpus"

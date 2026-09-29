@@ -88,6 +88,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Changed:** the public Python client's `compare_matrix()` now accepts
   `rlm_official`, and `rlmstudio.api.build_matrix_slots` /
   `build_llm_adapter` are public.
+- **Measurement integrity:** an answer's number must appear as its own number
+  to satisfy a counting case, so "172" no longer passes for an expected 72;
+  counted phrases are matched across line breaks, so the hard-wrapped public
+  texts no longer undercount ("MUST NOT" in RFC 9110 is 77, not 72); official
+  cells run one at a time unless `--sandbox docker` is given, so a
+  multi-provider grid no longer loses them to the engine's one-run-at-a-time
+  REPL; a failed judge call costs one cell its score rather than the run; a run
+  that stops part-way writes `results.partial.json`; and a corpus file that
+  fails its digest is discarded so the next `--fetch` replaces it.
 - **CI:** a `bench-smoke` step runs the whole pipeline on offline fakes
   (every engine through the real use cases, a failing provider, the judge
   path, page regeneration) on every push.
