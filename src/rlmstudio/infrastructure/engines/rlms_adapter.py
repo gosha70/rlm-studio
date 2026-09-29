@@ -147,6 +147,10 @@ NOTE_INTERRUPTED_TOTALS = (
     "The run was stopped by a cap, so the engine reported one combined token total "
     "instead of an input/output split; the total is recorded as input tokens."
 )
+NOTE_INTERRUPTED_TOKENS_UNKNOWN = (
+    "The run was stopped by a cap that reported no token count, so this run's tokens "
+    "are shown as 0; the cost, where known, is the figure the cap was checked against."
+)
 BUSY_REASON = (
     "Another official RLM run is still holding the in-process REPL, which only one run "
     "can use at a time. Select the Docker sandbox in Settings to run official slots "
@@ -615,8 +619,16 @@ class RlmsEngineAdapter:
         config: RunConfigDTO,
         *,
         cost_known: bool,
-        interrupted: bool = False,
+        interrupted_tokens: int | None = None,
     ) -> list[str]:
+        """Notes for one result.
+
+        ``interrupted_tokens`` is the token figure a cap breach reported: a
+        count when it had one, 0 when the breach reported none, and ``None``
+        for a run that was not interrupted.  The two cases get different notes
+        because claiming a combined total was recorded would be false when no
+        count was ever reported.
+        """
         notes = [NOTE_NO_STREAMING, NOTE_NO_STEP_TOKENS]
         if environment == _ENV_LOCAL:
             notes.append(NOTE_LOCAL_ENV)
@@ -624,8 +636,10 @@ class RlmsEngineAdapter:
             notes.append(NOTE_NO_SUBCALL_FLOOR)
         if not cost_known:
             notes.append(NOTE_COST_UNKNOWN)
-        if interrupted:
-            notes.append(NOTE_INTERRUPTED_TOTALS)
+        if interrupted_tokens is not None:
+            notes.append(
+                NOTE_INTERRUPTED_TOTALS if interrupted_tokens else NOTE_INTERRUPTED_TOKENS_UNKNOWN
+            )
         return notes
 
     def _to_result(
@@ -711,9 +725,13 @@ class RlmsEngineAdapter:
         still readable.  Reporting both is what keeps the most expensive runs
         from being recorded as the cheapest.
 
-        The engine reports interrupted usage as one combined token figure, so it
-        is recorded as input tokens and flagged with
-        :data:`NOTE_INTERRUPTED_TOTALS`.
+        What each breach knows differs, and neither figure may be invented from
+        the other: a token breach reports one combined token count, recorded as
+        input tokens under :data:`NOTE_INTERRUPTED_TOTALS`; a budget breach
+        reports money but no tokens, so the token count stays 0 under
+        :data:`NOTE_INTERRUPTED_TOKENS_UNKNOWN`; a timeout reports neither, so
+        the cost is unknown rather than $0 — a run does not become free by
+        being cut short.
         """
         captured = trajectory.get_trajectory() if hasattr(trajectory, "get_trajectory") else None
         partial = str(getattr(exc, "partial_answer", None) or "")
@@ -724,9 +742,16 @@ class RlmsEngineAdapter:
         )
         tokens_used = int(getattr(exc, "tokens_used", 0) or 0)
         spent: float | None = getattr(exc, "spent", None)
-        # A token breach knows the tokens but not the money, so the slot's cost
-        # table can still price it; only a timeout arrives with neither.
-        total_cost, cost_known = self._price(tokens_used, 0, spent)
+        if spent is not None:
+            total_cost, cost_known = float(spent), True
+        elif tokens_used:
+            # Tokens known, money not: the slot's cost table can price them.
+            total_cost, cost_known = self._price(tokens_used, 0, None)
+        else:
+            # Neither figure survived.  Zero tokens here means "not reported",
+            # not "none used", so the cost-table shortcut in _price for a run
+            # that genuinely used nothing must not apply.
+            total_cost, cost_known = 0.0, False
         answer = f"⚠️ **Execution error**.\n\n{error}"
         if partial:
             answer = f"{answer}\n\n**Partial answer**\n\n{partial}"
@@ -744,7 +769,7 @@ class RlmsEngineAdapter:
                 RESULT_KEY_ENGINE_VERSION: self.version,
                 RESULT_KEY_COST_KNOWN: cost_known,
                 RESULT_KEY_ENGINE_NOTES: self._notes(
-                    environment, config, cost_known=cost_known, interrupted=True
+                    environment, config, cost_known=cost_known, interrupted_tokens=tokens_used
                 ),
             },
         )

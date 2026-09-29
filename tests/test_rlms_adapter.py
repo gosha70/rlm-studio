@@ -47,6 +47,7 @@ from rlmstudio.infrastructure.engines.rlms_adapter import (
     BUSY_REASON,
     MAX_TRACE_RECURSION_DEPTH,
     NOTE_COST_UNKNOWN,
+    NOTE_INTERRUPTED_TOKENS_UNKNOWN,
     NOTE_INTERRUPTED_TOTALS,
     NOTE_LOCAL_ENV,
     NOTE_NO_STREAMING,
@@ -1006,20 +1007,61 @@ class TestInterruptedRunKeepsWhatWasSpent:
         assert result.total_cost == 0.31
         assert result.metadata[RESULT_KEY_COST_KNOWN] is True
 
-    def test_timeout_reports_no_cost_as_unknown_rather_than_zero(self, fake_rlm: _FakeRlm) -> None:
-        """A timeout carries no usage at all, so cost is unknown, not $0."""
+    @pytest.mark.parametrize("cost_fn", [None, lambda _in, _out: 0.0])
+    def test_timeout_reports_no_cost_as_unknown_rather_than_zero(
+        self, fake_rlm: _FakeRlm, cost_fn: Any
+    ) -> None:
+        """A timeout carries no usage at all, so cost is unknown, not $0.
+
+        Parametrised over the cost table because production always supplies one
+        — ``_build_rlm_engine`` passes the slot adapter's ``get_completion_cost``
+        — and asking it to price zero tokens answers $0, which must not be read
+        as "this run was free".
+        """
         fake_rlm.raise_on_completion = _raise(
             "TimeoutExceededError", "90.0s of 90.0s", elapsed=90.0
         )
 
-        result = _adapter().run("d", "q", _CONFIG)
+        result = _adapter(cost_fn=cost_fn).run("d", "q", _CONFIG)
 
         assert result.total_cost == 0.0
         assert result.metadata[RESULT_KEY_COST_KNOWN] is False
+        assert NOTE_COST_UNKNOWN in result.metadata[RESULT_KEY_ENGINE_NOTES]
         assert result.steps == 2
         assert classify_execution_outcome(result.success, result.error, result.answer).category is (
             OutcomeCategory.TIMEOUT
         )
+
+    def test_a_breach_with_no_token_count_says_so_instead_of_claiming_a_total(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        """A budget breach reports money but no tokens.
+
+        The run then shows 0 tokens in the dashboard totals, so the note has to
+        say the count was never reported rather than claim a combined total was
+        recorded as input tokens.
+        """
+        fake_rlm.raise_on_completion = _raise(
+            "BudgetExceededError", "spent $0.310000 of $0.250000", spent=0.31
+        )
+
+        result = _adapter(cost_fn=lambda _in, _out: 0.0).run("d", "q", _CONFIG)
+
+        assert result.total_tokens == 0
+        assert result.total_cost == 0.31
+        notes = result.metadata[RESULT_KEY_ENGINE_NOTES]
+        assert NOTE_INTERRUPTED_TOKENS_UNKNOWN in notes
+        assert NOTE_INTERRUPTED_TOTALS not in notes
+
+    def test_a_token_breach_keeps_the_combined_total_note(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = _raise(
+            "TokenLimitExceededError", "50,000 of 50,000 tokens", tokens_used=50_000
+        )
+
+        notes = _adapter().run("d", "q", _CONFIG).metadata[RESULT_KEY_ENGINE_NOTES]
+
+        assert NOTE_INTERRUPTED_TOTALS in notes
+        assert NOTE_INTERRUPTED_TOKENS_UNKNOWN not in notes
 
     def test_an_empty_logger_still_yields_a_classified_failure(self, fake_rlm: _FakeRlm) -> None:
         fake_rlm.logged_trajectory = None
