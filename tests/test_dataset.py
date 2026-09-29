@@ -194,7 +194,7 @@ cases:
 """
         f = tmp_path / "bad2.yaml"
         f.write_text(yaml_content)
-        with pytest.raises(ValueError, match="'content' and 'query'"):
+        with pytest.raises(ValueError, match="must have a 'query' field"):
             load_dataset(str(f))
 
     def test_load_sample_benchmark(self):

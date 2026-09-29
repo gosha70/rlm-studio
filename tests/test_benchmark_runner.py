@@ -15,7 +15,7 @@ from rlmstudio.application.sandbox_vars import (
 )
 from rlmstudio.application.services.outcome_classifier import OutcomeCategory
 from rlmstudio.application.use_cases.run_matrix_comparison import MatrixSlotDTO
-from rlmstudio.benchmark.dataset import MATCH_CONTAINS, load_dataset_from_dict
+from rlmstudio.benchmark.dataset import MATCH_CONTAINS, BenchmarkCase, load_dataset_from_dict
 from rlmstudio.benchmark.matrix_runner import (
     BenchmarkResults,
     MatrixBenchmarkRunner,
@@ -98,7 +98,10 @@ DATASET = load_dataset_from_dict(
 
 
 def _fake_slots(
-    providers: list[str], engines: list[str], base_config: RunConfigDTO
+    providers: list[str],
+    engines: list[str],
+    base_config: RunConfigDTO,
+    case: BenchmarkCase | None = None,
 ) -> list[MatrixSlotDTO]:
     slots: list[MatrixSlotDTO] = []
     for spec in providers:
@@ -256,9 +259,10 @@ class TestRunner:
         seen: list[RunConfigDTO] = []
 
         def builder(
-            providers: list[str], engines: list[str], base: RunConfigDTO
+            providers: list[str], engines: list[str], base: RunConfigDTO, case: BenchmarkCase
         ) -> list[MatrixSlotDTO]:
             seen.append(base)
+            assert case.id == "needle"
             return _fake_slots(providers, engines, base)
 
         MatrixBenchmarkRunner(

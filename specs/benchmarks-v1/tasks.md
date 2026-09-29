@@ -27,14 +27,14 @@ Branch `feat/benchmarks-v1` after `feat/rebrand-rlm-studio` merges (may run in p
 - [x] T3.2 `BENCHMARKS.md` skeleton (methodology, caveats, links) with markers. *(Root `BENCHMARKS.md`: "not the paper's benchmark" note, what is measured, how to reproduce (command, `--fetch`, `--dry-run`, cost target), caveats (judge, engine TTFT, unknown cost, contamination flag), links to the paper and `alexzhang13/rlm`, markers with a placeholder.)*
 
 ## Phase 4 — CLI + CI
-- [ ] T4.1 `rlm-studio bench` subcommand + `benchmarks/run_benchmark.py` wrapper; `--dry-run` with fakes.
-- [ ] T4.2 CI `bench-smoke` step (2 cases × 2 engines, no network).
+- [x] T4.1 `rlm-studio bench` subcommand + `benchmarks/run_benchmark.py` wrapper; `--dry-run` with fakes. *(2026-09-29: `bench --config --providers --engines --judge --out --page --reps --limit --cases --fetch --corpus-dir --dry-run --temperature --api-key --api-base --timeout --sandbox --note`; usage errors exit 2, runtime errors exit 1 with a one-line message. `benchmark/fakes.py` (`ScriptedLLM`, `ScriptedEmbedder`, `ScriptedEngine`, `dry_run_slot_builder`, `dry_run_judge_llm`) pushes every engine through the real use cases offline — a `"FINAL: …"` reply completes Studio's RLM loop, a hash-vector embedder drives RAG — answering each case's expected value so the pass path is exercised and a `fail` model so the failed column is. `rlmstudio.api.build_llm_adapter(spec)` added for the judge; `MATRIX_MODES` public. Slot builders now receive the case.)*
+- [x] T4.2 CI `bench-smoke` step (2 cases × 2 engines, no network). *(In the `build` job: 2 cases × 2 providers (one failing) × 4 engines, judge path, page regeneration on a scratch copy of BENCHMARKS.md, file/grep checks. Verified locally with the exact command. `tests/test_cli_bench.py` (5).)*
 
 ## Phase 5 — real run (owner)
 - [ ] T5.1 Configure providers (env vars per `docs/hosts/`); run cloud ×2, local ×1, engines ×3–4, three reps for cloud; commit `benchmarks/results/<date>/` + regenerated `BENCHMARKS.md`; log total cost.
 
 ## Phase 6 — docs
-- [ ] T6.1 README "Where RLM Studio shines" cites the table; `docs/rlm-studio-guide.md` "Reproducing the benchmarks"; CHANGELOG.
+- [x] T6.1 README "Where RLM Studio shines" cites the table; `docs/rlm-studio-guide.md` "Reproducing the benchmarks"; CHANGELOG. *(2026-09-29: README benchmarking paragraph links `BENCHMARKS.md` + a Documentation table row; guide gains a `## Benchmarks` section with the full command, flag semantics and outputs; CHANGELOG `[Unreleased]` "Reproducible benchmarks" entry.)*
 
 ## Phase 7 — acceptance
 - [ ] T7.1 AC-1..AC-4 from `spec.md`; record in `doc_internal/v1.0.0-rlm-studio/MANUAL_TEST_PLAN.md`.

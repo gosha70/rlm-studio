@@ -42,8 +42,8 @@ BUDGET_KEY_MAX_TIME_SECONDS = "max_time_seconds"
 BUDGET_KEY_MAX_COST = "max_cost"
 BUDGET_KEY_MAX_RECURSION_DEPTH = "max_recursion_depth"
 
-SlotBuilder = Callable[[list[str], list[str], RunConfigDTO], list[MatrixSlotDTO]]
-"""``(providers, engines, base_config) -> slots``; swapped for fakes by ``--dry-run``."""
+SlotBuilder = Callable[[list[str], list[str], RunConfigDTO, BenchmarkCase], list[MatrixSlotDTO]]
+"""``(providers, engines, base_config, case) -> slots``; swapped for fakes by ``--dry-run``."""
 
 
 @dataclass
@@ -190,6 +190,7 @@ class MatrixBenchmarkRunner:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | None = None,
+        sandbox_type: str | None = None,
         on_slot_complete: Callable[[SlotOutcome], None] | None = None,
     ) -> None:
         if reps < 1:
@@ -204,11 +205,16 @@ class MatrixBenchmarkRunner:
         self._api_key = api_key
         self._api_base = api_base
         self._timeout = timeout
+        self._sandbox_type = sandbox_type
         self._on_slot_complete = on_slot_complete
         self._slot_builder: SlotBuilder = slot_builder or self._default_slot_builder
 
     def _default_slot_builder(
-        self, providers: list[str], engines: list[str], base_config: RunConfigDTO
+        self,
+        providers: list[str],
+        engines: list[str],
+        base_config: RunConfigDTO,
+        case: BenchmarkCase,
     ) -> list[MatrixSlotDTO]:
         # Imported here: the api facade imports every adapter, and the runner
         # must stay importable in a dry run without provider credentials.
@@ -226,6 +232,7 @@ class MatrixBenchmarkRunner:
             num_retries=None,
             embedding_api_key=None,
             base_config=base_config,
+            sandbox_type=self._sandbox_type,
         )
         return slots
 
@@ -267,7 +274,7 @@ class MatrixBenchmarkRunner:
 
     def _run_case(self, case: BenchmarkCase, rep: int) -> list[SlotOutcome]:
         base_config = budget_to_config(case.budget)
-        slots = self._slot_builder(self._providers, self._engines, base_config)
+        slots = self._slot_builder(self._providers, self._engines, base_config, case)
         started = time.time()
         matrix = RunMatrixComparisonUseCase().execute(case.content, case.query, slots)
         logger.info(

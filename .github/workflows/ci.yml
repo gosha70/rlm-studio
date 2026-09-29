@@ -136,6 +136,17 @@ jobs:
       - run: uv sync --extra studio
       - name: Verify package imports
         run: uv run python -c "from rlmstudio.server.app import app; print('Server OK')"
+      - name: Benchmark smoke (dry run, no network)
+        # Keeps the runner / scorer / report from rotting: two cases, every
+        # engine, one failing provider, the judge path, and page regeneration
+        # on a scratch copy of BENCHMARKS.md.
+        run: |
+          mkdir -p /tmp/bench-smoke && cp BENCHMARKS.md /tmp/bench-smoke/page.md
+          uv run rlm-studio bench --config benchmarks/longdoc-v1.yaml --dry-run --limit 2 \
+            --providers fake/ok,fake/fail --engines direct,rag,rlm,rlm_official \
+            --judge fake/judge --out /tmp/bench-smoke --page /tmp/bench-smoke/page.md
+          test -s /tmp/bench-smoke/results.json && test -s /tmp/bench-smoke/results.md
+          grep -q "rlm_official" /tmp/bench-smoke/page.md
 
   wheel-smoke:
     name: Wheel Smoke (bundled UI, py${{ matrix.python }})

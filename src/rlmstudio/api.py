@@ -305,6 +305,36 @@ def _resolve_model(
     return m
 
 
+def build_llm_adapter(
+    spec: str,
+    *,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+    timeout: float | None = None,
+    num_retries: int | None = None,
+) -> LiteLLMAdapter:
+    """Build a :class:`LiteLLMAdapter` from a ``"provider/model"`` spec.
+
+    The same resolution :func:`compare_matrix` applies per slot (provider
+    prefix, local-provider retry default), exposed for callers that need one
+    adapter outside a matrix run — for example the benchmark judge.
+    """
+    provider, raw_model = _parse_provider_spec(spec)
+    return LiteLLMAdapter(
+        model=_resolve_model(provider, raw_model, api_base),
+        api_key=api_key,
+        api_base=api_base,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout if timeout is not None else 120.0,
+        num_retries=(
+            num_retries if num_retries is not None else 0 if provider in _LOCAL_PROVIDERS else 2
+        ),
+    )
+
+
 def _setup(
     content: str,
     query: str,
@@ -662,7 +692,9 @@ async def interact_async(
 # ---------------------------------------------------------------------------
 
 
-_MATRIX_MODE_SET: frozenset[str] = frozenset({MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL})
+MATRIX_MODES: frozenset[str] = frozenset({MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL})
+"""Every mode a Compare-matrix slot can run in."""
+_MATRIX_MODE_SET = MATRIX_MODES
 _MATRIX_RANKING_METRICS: frozenset[str] = frozenset(
     {"cost", "tokens", "latency", "answer_per_cost"}
 )
