@@ -1,0 +1,182 @@
+# Copyright (c) EGOGE - All Rights Reserved.
+# This software may be used and distributed according to the terms of the MIT license.
+
+"""Score benchmark answers: exact / contains matching and the pointwise LLM judge.
+
+Two independent signals, reported side by side (specs/benchmarks-v1 G3):
+
+- **match** — a cheap, deterministic accuracy proxy for cases that carry an
+  ``expected_answer`` (needle, aggregation, refusal). Both sides are
+  normalised (case, whitespace, edge punctuation); ``"a || b"`` lists
+  alternatives, any of which passes.
+- **judge** — the same ``judge_pointwise.yaml`` rubric the Studio judge uses,
+  sent through an :class:`LLMPort`, with the case's ``rubric_hint`` appended
+  to the query as grading guidance. The judge model and prompt version are
+  recorded on every verdict.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import string
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from rlmstudio.application.ports.llm_port import LLMPort
+from rlmstudio.prompts import templates as _prompt_templates
+
+from .dataset import MATCH_CONTAINS, MATCH_EXACT
+
+ANY_OF_SEPARATOR = " || "
+JUDGE_POINTWISE_PROMPT = "judge_pointwise.yaml"
+_PROMPTS_DIR = Path(_prompt_templates.__file__).parent
+_SOURCE_CAP_CHARS = 8000  # same cap as the Studio judge
+_FALLBACK_SCORE = 3.0
+_DIMENSION_MIN = 1.0
+_DIMENSION_MAX = 5.0
+_PUNCTUATION = string.punctuation + "“”‘’"
+
+
+def normalise(text: str) -> str:
+    """Casefold, collapse whitespace, strip edge punctuation."""
+    collapsed = re.sub(r"\s+", " ", text.casefold()).strip()
+    return collapsed.strip(_PUNCTUATION + " ")
+
+
+def matches(answer: str, expected: str, match: str) -> bool:
+    """Whether *answer* satisfies *expected* under the ``match`` kind."""
+    got = normalise(answer)
+    for alternative in expected.split(ANY_OF_SEPARATOR):
+        want = normalise(alternative)
+        if not want:
+            continue
+        if match == MATCH_EXACT and got == want:
+            return True
+        if match == MATCH_CONTAINS and want in got:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Judge
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class JudgeVerdict:
+    """Pointwise judge output, with provenance."""
+
+    overall: float
+    dimensions: dict[str, float]
+    reasoning: str
+    model: str
+    prompt_version: str
+    parsed: bool = True
+    raw: str = field(default="", repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "overall": self.overall,
+            "dimensions": self.dimensions,
+            "reasoning": self.reasoning,
+            "model": self.model,
+            "prompt_version": self.prompt_version,
+            "parsed": self.parsed,
+        }
+
+
+def parse_judge_json(text: str) -> dict[str, Any]:
+    """Extract the JSON object from a judge reply, tolerating markdown fences."""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    result: dict[str, Any] = json.loads(text)
+    return result
+
+
+def _load_prompt(path: Path) -> tuple[str, str]:
+    """Return ``(template, version)`` from a prompt YAML."""
+    with open(path, encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    return str(data["template"]), str(data.get("version", "unknown"))
+
+
+class JudgeScorer:
+    """Pointwise LLM judge over the Studio rubric.
+
+    Args:
+        llm: Adapter for the judge model (any :class:`LLMPort`).
+        model: Identifier recorded on verdicts (e.g. ``"openai/gpt-4o-mini"``).
+        prompt_path: Rubric YAML; defaults to Studio's ``judge_pointwise.yaml``.
+    """
+
+    def __init__(
+        self,
+        llm: LLMPort,
+        *,
+        model: str,
+        prompt_path: Path | None = None,
+    ) -> None:
+        self._llm = llm
+        self.model = model
+        self._template, self.prompt_version = _load_prompt(
+            prompt_path or _PROMPTS_DIR / JUDGE_POINTWISE_PROMPT
+        )
+
+    def score(
+        self,
+        *,
+        query: str,
+        response: str,
+        source: str,
+        rubric_hint: str | None = None,
+    ) -> JudgeVerdict:
+        if len(source) > _SOURCE_CAP_CHARS:
+            source_block = (
+                source[:_SOURCE_CAP_CHARS]
+                + f"\n\n[Source truncated at {_SOURCE_CAP_CHARS:,} characters"
+                f" — full document is {len(source):,} characters]"
+            )
+        else:
+            source_block = source or "Not provided — evaluate based on the response alone."
+        graded_query = query
+        if rubric_hint:
+            graded_query = f"{query}\n\nGrading guidance for the judge: {rubric_hint}"
+        prompt = self._template.format(
+            query=graded_query,
+            response=response,
+            source_document=source_block,
+        )
+        raw = self._llm.complete([{"role": "user", "content": prompt}]).content
+        try:
+            parsed = parse_judge_json(raw)
+            parsed_ok = True
+        except (json.JSONDecodeError, ValueError):
+            parsed = {"dimensions": {}, "reasoning": f"Failed to parse judge response: {raw[:200]}"}
+            parsed_ok = False
+
+        dimensions = {
+            key: max(_DIMENSION_MIN, min(_DIMENSION_MAX, float(value)))
+            for key, value in (parsed.get("dimensions") or {}).items()
+            if isinstance(value, (int, float))
+        }
+        if not dimensions:
+            dimensions = {"overall": _FALLBACK_SCORE}
+            parsed_ok = False
+        overall = round(sum(dimensions.values()) / len(dimensions), 2)
+        return JudgeVerdict(
+            overall=overall,
+            dimensions=dimensions,
+            reasoning=str(parsed.get("reasoning", "")),
+            model=self.model,
+            prompt_version=self.prompt_version,
+            parsed=parsed_ok,
+            raw=raw,
+        )

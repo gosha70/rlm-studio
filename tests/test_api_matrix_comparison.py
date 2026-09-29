@@ -444,9 +444,9 @@ class TestPerSlotConfig:
     def test_each_slot_gets_independent_config(self, mock_adapter: Any) -> None:
         """Per-slot MatrixSlotDTO.config must not share an `extra` dict
         across slots (one slot's RAG collection must not leak to another)."""
-        from rlmstudio.api import _build_matrix_slots
+        from rlmstudio.api import build_matrix_slots
 
-        slots = _build_matrix_slots(
+        slots = build_matrix_slots(
             ["openai/gpt-4o", "anthropic/claude"],
             ["direct", "direct"],
             api_key=None,
@@ -465,9 +465,9 @@ class TestPerSlotConfig:
 
     @patch("rlmstudio.api.LiteLLMAdapter", side_effect=_fake_adapter_factory)
     def test_max_steps_applied_to_slot_config(self, mock_adapter: Any) -> None:
-        from rlmstudio.api import _build_matrix_slots
+        from rlmstudio.api import build_matrix_slots
 
-        slots = _build_matrix_slots(
+        slots = build_matrix_slots(
             ["openai/gpt-4o"],
             ["rlm"],
             api_key=None,
