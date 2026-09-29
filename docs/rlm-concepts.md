@@ -251,6 +251,8 @@ Everything above is Studio's *own* RLM loop, so a natural objection to any numbe
 
 Two things differ by construction and are surfaced rather than hidden: the reference engine does not stream (no TTFT or decode timings) and reports token usage per run rather than per step; and its default environment executes model-written code in-process, so Studio maps its Docker sandbox onto the engine's Docker environment and flags every non-isolated run. The mode is optional — `pip install "rlm-studio[interop]"` — and the UI disables it with the reason when the package is absent.
 
+Two more differences are translated rather than surfaced. The projects count recursion from different ends: Studio counts levels of sub-RLM while the engine counts the depth at which a node degrades to a plain model call, and its root already occupies one level, so Studio asks for one level more than the budget says. And because the in-process environment redirects the whole process's streams and working directory while a code cell runs, official runs and their sub-calls are serialised — a comparison that wants official cells running in parallel needs the Docker sandbox.
+
 ---
 
 ## 10. Limitations and Open Work

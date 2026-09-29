@@ -22,12 +22,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   sandbox maps to the engine's Docker environment; any other sandbox runs the
   engine's in-process `local` REPL, which is not isolated and is flagged on
   every such run. Cells and traces carry an "official rlms x.y.z" badge.
+- **Depth and concurrency semantics:** Studio counts levels of sub-RLM while
+  the engine counts the depth at which a node degrades to a plain model call
+  and its root already occupies one level, so the recursion budget is
+  translated (N → N+1); a budget of 0 cannot be reproduced faithfully (the
+  engine downgrades sub-calls instead of refusing them) and says so in the
+  run's notes. Because the in-process `local` REPL redirects the whole
+  process's output and working directory around every code cell, official
+  runs and their batched sub-calls are serialised; a second official cell
+  that waits past its own timeout reports the engine as busy. The Docker
+  sandbox has neither restriction.
 - **Known limitations:** the engine does not stream (no TTFT / decode
   timings, no token events over WebSocket); it reports token usage per run,
   so step rows show 0 tokens while totals are exact; a run whose engine
   reports no price and for which Studio has none is flagged
   (`cost_known=false`) and ranks last on the cost metrics rather than
-  counting as free; conversation memory is not delivered to the engine; the
+  counting as free, and a $0 answer from Studio's price table for a run that
+  did consume tokens counts as no price rather than as free; a run the engine
+  stopped for breaking a cap still reports the spend, steps and partial
+  answer it had reached; conversation memory is not delivered to the engine; the
   mode is UI / REST only — the Python client's `compare_matrix()` does not
   accept it in 1.0. A REPL execution that never returns is stopped by
   Studio's wall-clock guard (the engine only checks its timeout between

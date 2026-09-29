@@ -378,14 +378,17 @@ The fourth mode runs the paper authors' own implementation — [alexzhang13/rlm]
 
 **Budgets.** The Chat Provider's *Max steps* and *Timeout* apply (`max_iterations` and the engine's own timeout); the recursion depth, token and cost caps from **Settings → Budget** map onto the engine's limits too. The engine checks its timeout *between* iterations, so an execution that never returns is stopped by Studio's own wall-clock guard and classified as a timeout like any other run.
 
-**Sandbox.** With the Docker sandbox selected in Settings the engine runs its REPL in a container; with any other sandbox it runs the engine's in-process `local` environment, which is **not isolated** — every such run carries a note saying so in its trace metadata.
+**Recursion depth.** The two projects count depth differently, and Studio translates. Studio counts levels of sub-RLM, so *Max recursion depth* 1 means the root loop may spawn one child that runs its own REPL; the engine instead counts the depth at which a node stops looping and becomes a plain model call, and its root already occupies one level. Studio therefore asks the engine for one more level than you set. Setting 0 is the one case it cannot reproduce faithfully: the engine has no way to refuse sub-calls outright, so they degrade to plain model calls and the run says so in its notes.
+
+**Sandbox.** With the Docker sandbox selected in Settings the engine runs its REPL in a container; with any other sandbox it runs the engine's in-process `local` environment, which is **not isolated** — every such run carries a note saying so in its trace metadata. That environment also redirects this process's output and working directory around every code cell, so Studio runs official slots **one at a time**: a second official cell waits for the first, and reports the engine as busy if it waits past its own timeout. Pick the Docker sandbox to run official cells in parallel.
 
 **What you will notice.**
 
 - Cells carry an **official rlms x.y.z** badge (Compare and Traces).
 - No streaming: no TTFT / decode timings, and no token-by-token output in Chat.
 - The engine reports token usage per run, not per step, so step rows show 0 tokens while the run totals are exact.
-- If the engine reports no price for a model and Studio has none either, the cell shows $0 but is flagged `cost_known=false` and ranks **last** on the cost metrics rather than winning as "free".
+- If the engine reports no price for a model and Studio has none either, the cell shows $0 but is flagged `cost_known=false` and ranks **last** on the cost metrics rather than winning as "free". A model Studio's price table answers $0 for while the run really did consume tokens counts as no price, not as free.
+- A run the engine stopped for breaking a cap still reports what it spent up to that point, plus the steps it had taken and any partial answer, instead of looking like a run that cost nothing.
 - Conversation memory is not delivered to the engine — it receives only the document and the question.
 - The Python client's `compare_matrix()` does not accept the mode in 1.0; use the UI or `POST /api/chat/compare-matrix`.
 
