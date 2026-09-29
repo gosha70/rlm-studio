@@ -70,7 +70,9 @@ import {
   MODE_DIRECT,
   MODE_RLM,
   MODE_RAG,
+  displayModeName,
 } from "@/lib/constants";
+import { StrategySelectItems } from "@/components/settings/strategy-select-items";
 
 // Backend keys the Settings form accepts. The deep-link banner only
 // renders when `?provider=` matches one of these, so a random or
@@ -1084,8 +1086,8 @@ function SettingsPageInner() {
                   {selectedProfile && (
                     <div className="rounded-lg border border-muted bg-muted/30 p-4 space-y-1">
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground capitalize">
-                          {selectedProfile.strategy}
+                        <span className="inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground">
+                          {displayModeName(selectedProfile.strategy)}
                         </span>
                         {selectedProfile.description && (
                           <span className="text-xs text-muted-foreground">{selectedProfile.description}</span>
@@ -1221,8 +1223,8 @@ function SettingsPageInner() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground capitalize">
-                        {provider.execution_mode}
+                      <span className="inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground">
+                        {displayModeName(provider.execution_mode)}
                       </span>
                       <Button
                         variant="ghost"
@@ -1306,8 +1308,8 @@ function SettingsPageInner() {
                     </div>
                     {editProfile && (
                       <div className="rounded-lg border border-muted bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                        <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs font-medium capitalize">
-                          {editProfile.strategy}
+                        <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs font-medium">
+                          {displayModeName(editProfile.strategy)}
                         </span>
                         <p>Temp {editProfile.runtime_settings.temperature} · Max tokens {editProfile.runtime_settings.max_output_tokens} · Steps {editProfile.budget.max_steps}</p>
                       </div>
@@ -1417,9 +1419,7 @@ function SettingsPageInner() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={MODE_DIRECT}>Direct</SelectItem>
-                      <SelectItem value={MODE_RLM}>RLM</SelectItem>
-                      <SelectItem value={MODE_RAG}>RAG</SelectItem>
+                      <StrategySelectItems />
                     </SelectContent>
                   </Select>
                   <Button

@@ -23,7 +23,7 @@ const BACKEND_BASE =
 // Types matching the backend Pydantic models
 // ---------------------------------------------------------------------------
 
-export type ChatMode = "auto" | "rlm" | "direct" | "rag" | "compare";
+export type ChatMode = "auto" | "rlm" | "direct" | "rag" | "compare" | "rlm_official";
 
 export interface ChatRequest {
   content?: string | null;
@@ -48,7 +48,7 @@ export interface ChatResponse {
 // Matrix compare — POST /api/chat/compare-matrix
 // ---------------------------------------------------------------------------
 
-export type MatrixSlotMode = "direct" | "rlm" | "rag";
+export type MatrixSlotMode = "direct" | "rlm" | "rag" | "rlm_official";
 
 export type MatrixRankingMetric =
   | "cost"
@@ -374,7 +374,7 @@ export interface ChatProviderConfig {
   llm_model?: string;     // old: model name
   profile_id?: string | null;
   profile_name?: string | null;
-  execution_mode: "direct" | "rlm" | "rag";
+  execution_mode: "direct" | "rlm" | "rag" | "rlm_official";
   runtime_settings: RuntimeSettings;
   rag_config?: RAGConfig | null;
   rlm_max_steps: number;
@@ -389,7 +389,7 @@ export interface ChatProviderCreateRequest {
   name: string;
   llm_provider_id: string;  // UUID of LLMProviderConfig
   profile_id?: string | null;
-  execution_mode?: "direct" | "rlm" | "rag";
+  execution_mode?: "direct" | "rlm" | "rag" | "rlm_official";
   rag_config?: RAGConfig | null;
   rlm_max_steps?: number | null;
   rlm_timeout_seconds?: number | null;
@@ -402,7 +402,7 @@ export interface ChatProviderUpdateRequest {
   name?: string | null;
   llm_model?: string | null;
   profile_id?: string | null;
-  execution_mode?: "direct" | "rlm" | "rag" | null;
+  execution_mode?: "direct" | "rlm" | "rag" | "rlm_official" | null;
   runtime_settings?: RuntimeSettings | null;
   rag_config?: RAGConfig | null;
   rlm_max_steps?: number | null;
@@ -578,6 +578,23 @@ export interface DiagnosticsResponse {
 
 export const getDiagnostics = () =>
   fetchJSON<DiagnosticsResponse>("/api/diagnostics");
+
+// ---------------------------------------------------------------------------
+// Engines — third-party RLM engines (GET /api/engines)
+// ---------------------------------------------------------------------------
+
+export interface EngineStatus {
+  available: boolean;
+  /** User-facing: the version when available, otherwise why not. */
+  reason: string;
+  version?: string | null;
+}
+
+export interface EnginesResponse {
+  rlm_official: EngineStatus;
+}
+
+export const getEngines = () => fetchJSON<EnginesResponse>("/api/engines");
 
 // ---------------------------------------------------------------------------
 // Docs — Learn tab allowlisted markdown loader

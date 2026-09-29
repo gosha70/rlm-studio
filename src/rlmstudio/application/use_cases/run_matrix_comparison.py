@@ -16,20 +16,30 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
 from rlmstudio.application.ports.embedding_port import EmbeddingPort
 from rlmstudio.application.ports.llm_port import LLMPort
+from rlmstudio.application.ports.rlm_engine_port import RLMEnginePort
 from rlmstudio.application.ports.sandbox_port import SandboxPort
 from rlmstudio.application.ports.storage_port import StoragePort
+from rlmstudio.application.sandbox_vars import (
+    MODE_DIRECT,
+    MODE_RAG,
+    MODE_RLM,
+    MODE_RLM_OFFICIAL,
+    RESULT_KEY_COST_KNOWN,
+    ExecutionMode,
+)
 from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
 from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
 from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
+from rlmstudio.application.use_cases.run_rlm_official import RunRLMOfficialUseCase
 
 logger = logging.getLogger(__name__)
 
-SlotMode = Literal["direct", "rag", "rlm"]
+SlotMode: TypeAlias = ExecutionMode
 RankingMetric = Literal[
     "cost",
     "tokens",
@@ -45,7 +55,7 @@ RankingMetric = Literal[
     "cache_hit_rate",
 ]
 
-_SUPPORTED_MODES: frozenset[str] = frozenset({"direct", "rag", "rlm"})
+_SUPPORTED_MODES: frozenset[str] = frozenset({MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL})
 
 
 @dataclass
@@ -68,6 +78,9 @@ class MatrixSlotDTO:
             slot only — useful when different slots need different profile
             settings (e.g. per-provider RLM max_steps or system prompt).
             Callers must ensure ``config.mode`` matches :attr:`mode`.
+        engine: Third-party RLM engine (required for rlm_official mode,
+            ignored otherwise).  The slot's ``llm`` still prices the run
+            when the engine reports no cost.
     """
 
     slot_id: str
@@ -80,6 +93,7 @@ class MatrixSlotDTO:
     embedder: EmbeddingPort | None = None
     storage: StoragePort | None = None
     config: RunConfigDTO | None = None
+    engine: RLMEnginePort | None = None
 
 
 @dataclass
@@ -244,6 +258,10 @@ class RunMatrixComparisonUseCase:
                 raise ValueError(f"Slot {slot.slot_id!r}: mode='rlm' requires a sandbox adapter")
             if slot.mode == "rag" and (slot.embedder is None or slot.storage is None):
                 raise ValueError(f"Slot {slot.slot_id!r}: mode='rag' requires embedder and storage")
+            if slot.mode == MODE_RLM_OFFICIAL and slot.engine is None:
+                raise ValueError(
+                    f"Slot {slot.slot_id!r}: mode={MODE_RLM_OFFICIAL!r} requires an engine adapter"
+                )
 
     def _execute_slot(
         self,
@@ -275,6 +293,9 @@ class RunMatrixComparisonUseCase:
                 result = RunRAGUseCase(slot.llm, slot.embedder, slot.storage).execute(
                     content, query, cfg
                 )
+            elif slot.mode == MODE_RLM_OFFICIAL:
+                assert slot.engine is not None  # validated
+                result = RunRLMOfficialUseCase(slot.engine).execute(content, query, cfg)
             else:  # pragma: no cover — validated upstream
                 raise ValueError(f"Unsupported mode: {slot.mode}")
         except Exception as exc:
@@ -343,7 +364,11 @@ class RunMatrixComparisonUseCase:
         def _key(i: int) -> tuple[float, int]:
             r = slots[i].result
             if metric == "cost":
-                # Lower is better; break ties by earlier input order.
+                # Lower is better; break ties by earlier input order. A slot
+                # whose engine reported no price (``cost_known`` False) is
+                # not "free" — it sorts last among successes.
+                if r.metadata.get(RESULT_KEY_COST_KNOWN, True) is False:
+                    return (float("inf"), i)
                 return (r.total_cost, i)
             if metric == "tokens":
                 return (float(r.total_tokens), i)
@@ -351,6 +376,8 @@ class RunMatrixComparisonUseCase:
                 return (r.elapsed_time, i)
             if metric == "answer_per_cost":
                 # Higher is better — invert so smaller sorts first.
+                if r.metadata.get(RESULT_KEY_COST_KNOWN, True) is False:
+                    return (float("inf"), i)
                 answer_length = len(r.answer)
                 if r.total_cost <= 0:
                     # Free slots are best; penalize only zero-length answers.

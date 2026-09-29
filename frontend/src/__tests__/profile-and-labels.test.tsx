@@ -12,6 +12,7 @@ import { render, screen, fireEvent, within } from "@testing-library/react";
 import { vi, describe, test, expect, beforeEach } from "vitest";
 import { FieldLabel } from "@/components/settings/field-label";
 import { ProfileCard } from "@/components/settings/profile-card";
+import { displayModeName, MODE_RLM, MODE_RLM_OFFICIAL } from "@/lib/constants";
 import type { RunProfile, SystemPromptTemplate } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -148,7 +149,16 @@ describe("ProfileCard — read-only view", () => {
   test("displays profile name and strategy badge", () => {
     render(<ProfileCard profile={makeProfile()} />);
     expect(screen.getByText("Test Profile")).toBeInTheDocument();
-    expect(screen.getByText("rlm")).toBeInTheDocument();
+    // The badge shows the mode's display name, never the raw identifier —
+    // `rlm_official` would otherwise read as "Rlm_official".
+    expect(screen.getByText(displayModeName(MODE_RLM))).toBeInTheDocument();
+    expect(screen.queryByText(MODE_RLM)).not.toBeInTheDocument();
+  });
+
+  test("displays the official engine's name for an rlm_official profile", () => {
+    render(<ProfileCard profile={makeProfile({ strategy: MODE_RLM_OFFICIAL })} />);
+    expect(screen.getByText(displayModeName(MODE_RLM_OFFICIAL))).toBeInTheDocument();
+    expect(screen.queryByText(MODE_RLM_OFFICIAL)).not.toBeInTheDocument();
   });
 
   test("shows prompt template name when set", () => {

@@ -351,7 +351,7 @@ The Compare page — also known as the **LLM Tuner** — runs the same query aga
 ### Workflow
 
 1. Pick one or more **LLM providers** (each becomes a column).
-2. Pick one or more **execution modes** — Direct, RLM, RAG (each becomes a row).
+2. Pick one or more **execution modes** — Direct, RLM, RAG, and, when the `interop` extra is installed, Official RLM (each becomes a row).
 3. Optionally upload a document, then type a query.
 4. Pick a **ranking metric** (see below).
 5. Click **Run** — every cell executes in parallel against `POST /api/chat/compare-matrix`.
@@ -367,6 +367,34 @@ Each cell shows the answer, token count, cost, and latency. The winner for your 
 | **Latency** | Lowest wall-clock time |
 | **Answer per cost** | Best answer-length-per-dollar ratio |
 | **Judge score** | Highest LLM-as-judge `overall_score` (requires a judge Chat Provider set in Settings; see [Judge & scoring](#judge--scoring)) |
+
+### Official RLM engine (`rlm_official`)
+
+The fourth mode runs the paper authors' own implementation — [alexzhang13/rlm](https://github.com/alexzhang13/rlm), PyPI package `rlms` — as an engine inside the matrix, so one run can put Official-RLM, Studio-RLM, Direct and RAG side by side on the same document, provider and budget, with the same traces, telemetry and ranking. Skeptical of whether a number reflects the RLM idea or Studio's implementation? This is the row that answers it.
+
+**Install.** `pip install "rlm-studio[interop]"` (included in `[all]`), then restart the server. `GET /api/engines` reports whether the engine can run; until it can, the option is shown disabled with the reason as its tooltip, and a request naming the mode is rejected with the same reason before anything is recorded.
+
+**Providers.** `openai` and `anthropic` use the engine's native clients with the LLM Provider's key. `ollama`, `lmstudio` and `vllm` go through the engine's OpenAI-compatible client pointed at the provider's endpoint (`/v1` is appended when missing). Same model id, same endpoint, same key as the sibling Studio cells — that is what makes the comparison honest. See [docs/hosts/README.md §8](hosts/README.md#8-official-rlm-engine-rlm_official--provider-mapping) for the matrix.
+
+**Budgets.** The Chat Provider's *Max steps* and *Timeout* apply (`max_iterations` and the engine's own timeout); the recursion depth, token and cost caps from **Settings → Budget** map onto the engine's limits too. The engine checks its timeout *between* iterations, so an execution that never returns is stopped by Studio's own wall-clock guard and classified as a timeout like any other run.
+
+**Recursion depth.** The two projects count depth differently, and Studio translates. Studio counts levels of sub-RLM, so *Max recursion depth* 1 means the root loop may spawn one child that runs its own REPL; the engine instead counts the depth at which a node stops looping and becomes a plain model call, and its root already occupies one level. Studio therefore asks the engine for one more level than you set. Setting 0 is the one case it cannot reproduce faithfully: the engine has no way to refuse sub-calls outright, so they degrade to plain model calls and the run says so in its notes.
+
+**Sandbox.** With the Docker sandbox selected in Settings the engine runs its REPL in a container; with any other sandbox it runs the engine's in-process `local` environment, which is **not isolated** — every such run carries a note saying so in its trace metadata. That environment also redirects this process's output and working directory around every code cell, so Studio runs official slots **one at a time**: a second official cell waits for the first, and reports the engine as busy if the first is still holding the REPL after a quarter of the waiting cell's timeout. Time spent waiting comes off that cell's budget, so a cell that does get through still has most of its timeout to work with. Pick the Docker sandbox to run official cells in parallel.
+
+The one-at-a-time rule covers official runs against each other. Studio's own in-process sandbox redirects output the same way while it executes model-written code, and that is not part of this guarantee, so an official cell and an `rlm` cell in the same grid can still overlap.
+
+One consequence is worth knowing before you use the in-process path on a shared server. Studio can stop *waiting* for a REPL execution that never returns, but it cannot stop the execution itself — the engine runs model-written code inside the server process. Code that truly never finishes therefore keeps the server's output redirected and its working directory moved, and every later official run reports the engine as busy, until the server restarts. Docker is the answer if that matters: the container owns the runaway code, and nothing in the server is affected.
+
+**What you will notice.**
+
+- Cells carry an **official rlms x.y.z** badge (Compare and Traces).
+- No streaming: no TTFT / decode timings, and no token-by-token output in Chat.
+- The engine reports token usage per run, not per step, so step rows show 0 tokens while the run totals are exact.
+- If the engine reports no price for a model and Studio has none either, the cell shows $0 but is flagged `cost_known=false` and ranks **last** on the cost metrics rather than winning as "free". A *cloud* model that Studio's price table answers $0 for while the run really did consume tokens counts as no price, not as free. A locally served model is different: $0 is its real price, so it stays priced and keeps its place in the cost ranking, exactly as Studio's own cells on that model do.
+- A run the engine stopped for breaking a cap still reports what it spent up to that point, plus the steps it had taken and any partial answer, instead of looking like a run that cost nothing. The engine's own deadline is set a little inside Studio's wall-clock budget so that a run which runs out of time stops itself and can report those figures; the wall-clock guard remains the backstop for a REPL execution stuck inside a single iteration, and a run it has to abandon reports its cost as unknown rather than as $0.
+- Conversation memory is not delivered to the engine — it receives only the document and the question.
+- The Python client's `compare_matrix()` does not accept the mode in 1.0; use the UI or `POST /api/chat/compare-matrix`.
 
 ### Ephemeral Chat Providers
 

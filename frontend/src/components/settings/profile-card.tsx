@@ -31,7 +31,8 @@ import {
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Trash2, Lock, Edit2, Copy, Download, ChevronDown, ChevronUp } from "lucide-react";
-import { MODE_DIRECT, MODE_RLM, MODE_RAG } from "@/lib/constants";
+import { displayModeName } from "@/lib/constants";
+import { StrategySelectItems } from "./strategy-select-items";
 
 interface ProfileCardProps {
   profile: RunProfile;
@@ -266,8 +267,8 @@ export function ProfileCard({
                 Built-in
               </Badge>
             )}
-            <Badge variant="outline" className="text-xs capitalize">
-              {profile.strategy}
+            <Badge variant="outline" className="text-xs">
+              {displayModeName(profile.strategy)}
             </Badge>
           </div>
           <div className="flex gap-1">
@@ -397,9 +398,7 @@ export function ProfileCard({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={MODE_DIRECT}>Direct</SelectItem>
-                  <SelectItem value={MODE_RLM}>RLM</SelectItem>
-                  <SelectItem value={MODE_RAG}>RAG</SelectItem>
+                  <StrategySelectItems />
                 </SelectContent>
               </Select>
             </div>

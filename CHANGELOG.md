@@ -5,6 +5,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Official-engine interop (`rlm_official`)
+
+- **Added:** a fourth execution mode, `rlm_official`, that runs the paper
+  authors' implementation ([alexzhang13/rlm](https://github.com/alexzhang13/rlm),
+  PyPI `rlms`) as an engine inside the Compare matrix and Chat — under the
+  same budgets, traces, telemetry and ranking as Studio's own loop — so one
+  run can benchmark Official-RLM vs Studio-RLM vs Direct vs RAG on the same
+  document, provider and model. Optional: `pip install "rlm-studio[interop]"`
+  (included in `[all]`). `GET /api/engines` reports availability; the UI
+  disables the option with the reason while the package is absent, and a
+  request naming the mode is rejected with the same reason before any
+  session or telemetry side effect. Provider mapping: `openai` / `anthropic`
+  use the engine's native clients; `ollama` / `lmstudio` / `vllm` go through
+  its OpenAI-compatible client at the provider's endpoint. Studio's `docker`
+  sandbox maps to the engine's Docker environment; any other sandbox runs the
+  engine's in-process `local` REPL, which is not isolated and is flagged on
+  every such run. Cells and traces carry an "official rlms x.y.z" badge.
+- **Depth and concurrency semantics:** Studio counts levels of sub-RLM while
+  the engine counts the depth at which a node degrades to a plain model call
+  and its root already occupies one level, so the recursion budget is
+  translated (N → N+1); a budget of 0 cannot be reproduced faithfully (the
+  engine downgrades sub-calls instead of refusing them) and says so in the
+  run's notes. Because the in-process `local` REPL redirects the whole
+  process's output and working directory around every code cell, official
+  runs and their batched sub-calls are serialised; a cell may spend up to a
+  quarter of its timeout queueing, that time comes off its own budget, and a
+  cell still waiting after it reports the engine as busy. The rule covers
+  official runs against each other, not Studio's own in-process sandbox. The
+  engine's deadline is also set just inside Studio's wall-clock guard so a run
+  that runs out of time stops itself and reports its spend, leaving the guard
+  as the backstop for a REPL stuck inside one iteration. The Docker sandbox
+  has none of these restrictions.
+- **Known limitations:** the engine does not stream (no TTFT / decode
+  timings, no token events over WebSocket); it reports token usage per run,
+  so step rows show 0 tokens while totals are exact; a run whose engine
+  reports no price and for which Studio has none is flagged
+  (`cost_known=false`) and ranks last on the cost metrics rather than
+  counting as free, and a $0 answer from Studio's price table for a *cloud*
+  model that did consume tokens counts as no price rather than as free, while a
+  locally served model keeps $0 as its real price; a run the engine
+  stopped for breaking a cap still reports the spend, steps and partial
+  answer it had reached, and a token breach with no price attached is priced
+  from the slot's own cost table; conversation memory is not delivered to the engine; the
+  mode is UI / REST only — the Python client's `compare_matrix()` does not
+  accept it in 1.0. A REPL execution that never returns is stopped by
+  Studio's wall-clock guard (the engine only checks its timeout between
+  iterations); with the `local` environment the abandoned thread lives on
+  until the server restarts, and because the engine runs that code inside the
+  server process, code that never finishes keeps the process's output
+  redirected and its working directory moved and makes every later official
+  run report the engine as busy. The Docker sandbox has none of that: the
+  container owns the runaway code.
+- **Architecture:** new `RLMEnginePort` (application layer) and
+  `infrastructure/engines/rlms_adapter.py`; `RunRLMOfficialUseCase` enforces
+  the wall-clock and post-run token / cost caps around the engine. Mode
+  literals are now centralised as the `ExecutionMode` / `ChatMode` aliases
+  next to the `MODE_*` constants.
+
+### Security
+
+- `anyio>=4.14.2` — CVE-2026-63374 (TLSStream IDNA-2003 host-name encoding
+  enables certificate spoofing; critical) and CVE-2026-64847 (transitive via
+  httpx / anthropic / google-genai).
+
 ### Rebrand: RLMKit → RLM Studio
 
 - **BREAKING:** the project is now **RLM Studio**. PyPI distribution

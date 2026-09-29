@@ -10,11 +10,20 @@ interface ComparisonChartProps {
   rlmData: ModeSummary | undefined;
   directData: ModeSummary | undefined;
   ragData?: ModeSummary | undefined;
+  /** Runs by the paper authors' engine (`rlm_official`). */
+  officialData?: ModeSummary | undefined;
 }
 
-export function ComparisonChart({ rlmData, directData, ragData }: ComparisonChartProps) {
+const OFFICIAL_SERIES = "Official RLM";
+
+export function ComparisonChart({
+  rlmData,
+  directData,
+  ragData,
+  officialData,
+}: ComparisonChartProps) {
   const tooltipStyle = useChartTooltipStyle();
-  if (!rlmData && !directData && !ragData) {
+  if (!rlmData && !directData && !ragData && !officialData) {
     return (
       <Card>
         <CardHeader>
@@ -35,6 +44,7 @@ export function ComparisonChart({ rlmData, directData, ragData }: ComparisonChar
       ...(directData ? { Direct: directData.total_tokens } : {}),
       ...(rlmData ? { RLM: rlmData.total_tokens } : {}),
       ...(ragData ? { RAG: ragData.total_tokens } : {}),
+      ...(officialData ? { [OFFICIAL_SERIES]: officialData.total_tokens } : {}),
     },
   ];
   const costData = [
@@ -43,6 +53,7 @@ export function ComparisonChart({ rlmData, directData, ragData }: ComparisonChar
       ...(directData ? { Direct: directData.total_cost_usd } : {}),
       ...(rlmData ? { RLM: rlmData.total_cost_usd } : {}),
       ...(ragData ? { RAG: ragData.total_cost_usd } : {}),
+      ...(officialData ? { [OFFICIAL_SERIES]: officialData.total_cost_usd } : {}),
     },
   ];
 
@@ -64,6 +75,9 @@ export function ComparisonChart({ rlmData, directData, ragData }: ComparisonChar
                 {directData && <Bar dataKey="Direct" fill="#7c3aed" radius={[4, 4, 0, 0]} />}
                 {rlmData && <Bar dataKey="RLM" fill="#2563eb" radius={[4, 4, 0, 0]} />}
                 {ragData && <Bar dataKey="RAG" fill="#10b981" radius={[4, 4, 0, 0]} />}
+                {officialData && (
+                  <Bar dataKey={OFFICIAL_SERIES} fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                )}
               </BarChart>
             )}
           </ChartContainer>
@@ -78,6 +92,9 @@ export function ComparisonChart({ rlmData, directData, ragData }: ComparisonChar
                 {directData && <Bar dataKey="Direct" fill="#7c3aed" radius={[4, 4, 0, 0]} />}
                 {rlmData && <Bar dataKey="RLM" fill="#2563eb" radius={[4, 4, 0, 0]} />}
                 {ragData && <Bar dataKey="RAG" fill="#10b981" radius={[4, 4, 0, 0]} />}
+                {officialData && (
+                  <Bar dataKey={OFFICIAL_SERIES} fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                )}
               </BarChart>
             )}
           </ChartContainer>

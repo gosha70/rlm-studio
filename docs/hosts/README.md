@@ -111,3 +111,17 @@ If a provider flips to **offline** and you think it shouldn't have, check:
 | LM Studio | [lmstudio.md](lmstudio.md) |
 | vLLM | [vllm.md](vllm.md) |
 | DGX Spark | [dgx-spark.md](dgx-spark.md) |
+
+## 8. Official RLM engine (`rlm_official`) — provider mapping
+
+The `rlm_official` execution mode runs the paper authors' implementation ([alexzhang13/rlm](https://github.com/alexzhang13/rlm), PyPI `rlms`; `pip install "rlm-studio[interop]"`) against the **same** LLM Provider as the sibling Studio cells. The engine has its own client layer, so RLM Studio maps each backend onto it:
+
+| Studio backend | Engine client | What is passed | Notes |
+|----------------|---------------|----------------|-------|
+| `openai` | native `openai` | model id, the provider's API key | Falls back to `OPENAI_API_KEY` if no key is stored |
+| `anthropic` | native `anthropic` | model id, the provider's API key | An API key is required — the engine has no env-var fallback here; the option reports "needs an API key" until one is stored |
+| `ollama` | `openai` (OpenAI-compatible) | model tag, `<endpoint>/v1`, placeholder key | Default endpoint `http://localhost:11434` gets `/v1` appended |
+| `lmstudio` | `openai` (OpenAI-compatible) | model id, endpoint, placeholder key | Default endpoint already ends in `/v1` |
+| `vllm` | `openai` (OpenAI-compatible) | model id, endpoint, placeholder key | Same as LM Studio; the engine does not use `hosted_vllm/`-style prefixes |
+
+Sandbox: the engine runs its REPL in a container only when **Settings → Sandbox** is `docker` (Studio's image name is passed through); with any other sandbox it uses the engine's in-process `local` environment, which is not isolated — each such run says so in its trace metadata. That environment also redirects the server process's output and working directory around every code cell, so official runs take it one at a time: pick the Docker sandbox if you want official cells in a Compare grid to run in parallel. The engine does not stream and reports token usage per run, so TTFT / decode timings are absent and step rows show 0 tokens; the run totals are exact. Runtime settings (temperature, top-p) are not forwarded to the engine in 1.0.

@@ -5,6 +5,8 @@ infrastructure skips them on return), so they live here as the single
 source of truth rather than as magic strings scattered across files.
 """
 
+from typing import Literal, TypeAlias
+
 # ---------------------------------------------------------------------------
 # Sandbox variable names — bound via sandbox.set_variable(), read by model
 # code inside the subprocess, and excluded from the child → parent return
@@ -59,9 +61,21 @@ MODE_RLM = "rlm"
 MODE_RAG = "rag"
 MODE_COMPARE = "compare"
 MODE_AUTO = "auto"
+MODE_RLM_OFFICIAL = "rlm_official"
+"""The paper authors' reference implementation (``rlms``) run as an engine."""
+
+ExecutionMode: TypeAlias = Literal["direct", "rlm", "rag", "rlm_official"]
+"""Modes a Chat Provider or a Compare-matrix slot executes in.
+
+The literal is spelled here, next to the ``MODE_*`` constants, so every
+request model and use case imports one alias instead of repeating the set.
+"""
+
+ChatMode: TypeAlias = Literal["auto", "rlm", "direct", "rag", "compare", "rlm_official"]
+"""Modes accepted by ``POST /api/chat``.  ``auto`` never resolves to ``rlm_official``."""
 
 # Modes that use RLM internally (RLM run config applies)
-MODES_RLM_INTERNAL = frozenset({MODE_RLM, MODE_AUTO, MODE_COMPARE})
+MODES_RLM_INTERNAL = frozenset({MODE_RLM, MODE_AUTO, MODE_COMPARE, MODE_RLM_OFFICIAL})
 
 # ---------------------------------------------------------------------------
 # Mode groupings — which execution modes use which history path
@@ -109,6 +123,16 @@ TRACE_KEY_ELAPSED_SECONDS = "elapsed_seconds"
 TRACE_KEY_MODEL = "model"
 TRACE_KEY_MODE = "mode"
 TRACE_KEY_CLAMP = "clamp"
+
+TRACE_KEY_RECURSION_DEPTH = "recursion_depth"
+"""Depth of a nested sub-call entry (``1`` = a child query spawned from the root REPL)."""
+
+RESULT_KEY_ENGINE_VERSION = "engine_version"
+"""``RunResultDTO.metadata`` key: version of the third-party engine that ran."""
+RESULT_KEY_COST_KNOWN = "cost_known"
+"""``RunResultDTO.metadata`` key: ``False`` when no price was reported or derivable, so ``total_cost`` is 0 by ignorance, not by measurement."""
+RESULT_KEY_ENGINE_NOTES = "engine_notes"
+"""``RunResultDTO.metadata`` key: user-facing caveats about the engine run (list of strings)."""
 
 MODES_INPROMPT = frozenset({MODE_DIRECT, MODE_COMPARE, MODE_RAG})
 """Modes that carry history as native user/assistant chat messages."""

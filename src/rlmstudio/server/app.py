@@ -26,6 +26,7 @@ from rlmstudio.server.routes import (
     config,
     diagnostics,
     docs,
+    engines,
     evaluations,
     files,
     llm_providers,
@@ -166,6 +167,7 @@ def create_app() -> FastAPI:
     app.include_router(evaluations.router)
     app.include_router(diagnostics.router)
     app.include_router(docs.router)
+    app.include_router(engines.router)
     app.include_router(replays.router)
 
     @app.get("/health")

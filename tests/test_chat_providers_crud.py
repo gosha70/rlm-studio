@@ -246,8 +246,8 @@ class TestCreateChatProvider:
     def test_all_execution_modes_accepted(
         self, client: TestClient, created_llm_provider: dict[str, Any]
     ) -> None:
-        """All three execution modes must be accepted."""
-        for mode in ("direct", "rlm", "rag"):
+        """All four execution modes must be accepted."""
+        for mode in ("direct", "rlm", "rag", "rlm_official"):
             resp = client.post(
                 "/api/chat-providers",
                 json={

@@ -13,15 +13,30 @@ export const MODE_RLM = "rlm" as const;
 export const MODE_RAG = "rag" as const;
 export const MODE_COMPARE = "compare" as const;
 export const MODE_AUTO = "auto" as const;
+/** The paper authors' reference implementation (`rlms`) run as an engine. */
+export const MODE_RLM_OFFICIAL = "rlm_official" as const;
 
 /** All execution modes the user can select in the UI. */
-export const ALL_EXECUTION_MODES = [MODE_DIRECT, MODE_RLM, MODE_RAG] as const;
+export const ALL_EXECUTION_MODES = [MODE_DIRECT, MODE_RLM, MODE_RAG, MODE_RLM_OFFICIAL] as const;
 
 /** Default mode for new profiles and Chat Providers. */
 export const DEFAULT_MODE = MODE_DIRECT;
 
 /** Default enabled modes for ModeConfig. */
 export const DEFAULT_ENABLED_MODES = [MODE_DIRECT, MODE_RLM] as const;
+
+/**
+ * Human-readable names for execution modes — the single source of truth for
+ * how a mode is spelled in the UI.  Raw identifiers must never be rendered:
+ * `rlm_official` would read as "Rlm_official" under a `capitalize` class, and
+ * the acronyms need casing no CSS transform can produce.
+ */
+export const MODE_DISPLAY_NAMES: Record<string, string> = {
+  [MODE_DIRECT]: "Direct",
+  [MODE_RLM]: "RLM",
+  [MODE_RAG]: "RAG",
+  [MODE_RLM_OFFICIAL]: "Official RLM (rlms)",
+};
 
 // ---------------------------------------------------------------------------
 // LLM backend identifiers
@@ -74,4 +89,13 @@ export const ENDPOINT_PLACEHOLDER: Record<string, string> = {
 /** Map a raw backend key to a human-readable name. */
 export function displayProviderName(key: string): string {
   return BACKEND_DISPLAY_NAMES[key] ?? key;
+}
+
+/**
+ * Map a raw mode identifier to its human-readable name.  Unknown modes fall
+ * back to the identifier so a server that grows a mode ahead of the UI still
+ * renders something.
+ */
+export function displayModeName(key: string): string {
+  return MODE_DISPLAY_NAMES[key] ?? key;
 }

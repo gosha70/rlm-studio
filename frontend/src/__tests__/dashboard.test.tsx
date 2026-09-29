@@ -26,7 +26,11 @@ vi.mock("recharts", () => {
     BarChart: Passthrough,
     LineChart: Passthrough,
     PieChart: Passthrough,
-    Bar: () => null,
+    // Marks which series a chart actually drew, keyed by dataKey.  Renders no
+    // text, so it cannot collide with a getByText assertion.
+    Bar: ({ dataKey }: { dataKey?: string | number }) => (
+      <div data-testid={`bar-series-${String(dataKey)}`} />
+    ),
     Line: () => null,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     Pie: ({ data }: { data?: Array<{ name: string; value: number }>; [k: string]: any }) => {
@@ -166,6 +170,39 @@ describe("ComparisonChart", () => {
     // Should render without throwing even with no data
     render(<ComparisonChart rlmData={undefined} directData={undefined} />);
     expect(screen.getByText("Mode Comparison")).toBeInTheDocument();
+  });
+
+  test("charts the official engine as a fourth series on its own", () => {
+    render(
+      <ComparisonChart
+        rlmData={undefined}
+        directData={undefined}
+        officialData={makeModeSummary({ total_tokens: 640, total_cost_usd: 0.03 })}
+      />,
+    );
+    // Not the empty state: both chart panels render for rlm_official runs alone.
+    expect(screen.queryByText(/Run queries in multiple modes/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: /Bar chart comparing mode/ })).toHaveLength(2);
+    // The series itself is drawn, in the tokens panel and the cost panel.
+    expect(screen.getAllByTestId("bar-series-Official RLM")).toHaveLength(2);
+    // And no bar is invented for the three modes that have no runs.
+    for (const absent of ["Direct", "RLM", "RAG"]) {
+      expect(screen.queryByTestId(`bar-series-${absent}`)).not.toBeInTheDocument();
+    }
+  });
+
+  test("draws all four mode series side by side when every mode has runs", () => {
+    render(
+      <ComparisonChart
+        rlmData={makeModeSummary()}
+        directData={makeModeSummary()}
+        ragData={makeModeSummary()}
+        officialData={makeModeSummary()}
+      />,
+    );
+    for (const series of ["Direct", "RLM", "RAG", "Official RLM"]) {
+      expect(screen.getAllByTestId(`bar-series-${series}`)).toHaveLength(2);
+    }
   });
 });
 

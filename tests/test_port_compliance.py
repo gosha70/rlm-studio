@@ -21,6 +21,76 @@ def _has_port_methods(obj: object, method_names: list[str]) -> bool:
 
 _LLM_PORT_METHODS = ["complete", "complete_stream", "count_tokens", "get_pricing"]
 _SANDBOX_PORT_METHODS = ["execute", "reset", "is_healthy", "set_variable", "get_variable"]
+_RLM_ENGINE_PORT_METHODS = ["run", "run_async", "is_available"]
+# ``version`` is a property, not a method, so it is checked separately: the
+# project rule is structural checks over isinstance against a Protocol, which
+# only compares member names and would pass for any object carrying them.
+_RLM_ENGINE_PORT_ATTRIBUTES = ["version"]
+
+
+def _has_port_attributes(obj: object, attribute_names: list[str]) -> bool:
+    """Check that *obj* exposes all required non-callable members."""
+    return all(hasattr(obj, name) for name in attribute_names)
+
+
+class TestFakeRLMEngineCompliance:
+    """Verify the shared FakeRLMEngine satisfies RLMEnginePort structurally.
+
+    The real ``rlms`` adapter is checked the same way once it exists; keeping
+    the fake honest is what makes the use-case tests meaningful.
+    """
+
+    def _make_engine(self):
+        from tests.fakes.fake_rlm_engine import FakeRLMEngine
+
+        return FakeRLMEngine()
+
+    def test_has_all_rlm_engine_port_methods(self):
+        assert _has_port_methods(self._make_engine(), _RLM_ENGINE_PORT_METHODS)
+
+    def test_exposes_version(self):
+        assert isinstance(self._make_engine().version, str)
+
+    def test_is_available_returns_flag_and_reason(self):
+        available, reason = self._make_engine().is_available()
+        assert isinstance(available, bool)
+        assert isinstance(reason, str)
+
+    def test_exposes_the_whole_port_surface(self):
+        engine = self._make_engine()
+        assert _has_port_methods(engine, _RLM_ENGINE_PORT_METHODS)
+        assert _has_port_attributes(engine, _RLM_ENGINE_PORT_ATTRIBUTES)
+
+
+class TestRlmsEngineAdapterCompliance:
+    """Verify the ``rlms`` adapter satisfies RLMEnginePort structurally.
+
+    Constructing the adapter and calling ``is_available`` never imports
+    ``rlm`` eagerly, so this passes with or without the ``interop`` extra.
+    """
+
+    def _make_engine(self):
+        from rlmstudio.infrastructure.engines import RlmsEngineAdapter
+
+        return RlmsEngineAdapter(backend="openai", model="gpt-4o-mini", api_key="sk-test")
+
+    def test_has_all_rlm_engine_port_methods(self):
+        assert _has_port_methods(self._make_engine(), _RLM_ENGINE_PORT_METHODS)
+
+    def test_exposes_version_attribute(self):
+        engine = self._make_engine()
+        assert engine.version is None or isinstance(engine.version, str)
+
+    def test_is_available_returns_flag_and_reason(self):
+        available, reason = self._make_engine().is_available()
+        assert isinstance(available, bool)
+        assert isinstance(reason, str)
+        assert reason  # never silent — either the version or the install hint
+
+    def test_exposes_the_whole_port_surface(self):
+        engine = self._make_engine()
+        assert _has_port_methods(engine, _RLM_ENGINE_PORT_METHODS)
+        assert _has_port_attributes(engine, _RLM_ENGINE_PORT_ATTRIBUTES)
 
 
 class TestMockLLMAdapterCompliance:
