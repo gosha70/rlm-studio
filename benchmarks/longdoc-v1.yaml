@@ -1,0 +1,294 @@
+name: "longdoc-v1"
+description: >
+  Reproducible long-document task set behind BENCHMARKS.md (specs/benchmarks-v1).
+  Cases describe how to obtain their document instead of embedding it: deterministic
+  synthetic documents with planted facts (contamination-free), this repository's own
+  docs, and two public texts fetched on demand and verified by sha256. Aggregation
+  targets on the public texts are derived from the text itself, so they are
+  contamination-free too. Sizes are chars/4 token estimates.
+
+metadata:
+  version: "1.0"
+  created_by: "rlm-studio"
+  size_buckets:
+    small: 5000
+    medium: 50000
+    large: 150000
+  token_estimate: "chars/4 — deterministic, no tokenizer dependency"
+  budgets: >
+    Per-case `budget` overrides RunConfigDTO (max_steps, max_time_seconds, max_cost);
+    the runner's --max-cost / --timeout flags cap them further.
+  refusal_matching: >
+    Refusal cases list acceptable phrasings separated by " || " — the answer passes
+    when it contains any of them; the judge grades the rest.
+
+sources:
+  - id: synthetic
+    title: "Deterministic synthetic technical documents (generated at run time)"
+    url: "src/rlmstudio/benchmark/corpus.py"
+    license: "MIT (this repository)"
+    notes: "Facts are invented and planted per run; a model cannot know them without reading."
+  - id: repo-docs
+    title: "RLM Studio documentation (docs/)"
+    url: "https://github.com/gosha70/rlm-studio/tree/master/docs"
+    license: "MIT"
+  - id: rfc9112
+    title: "RFC 9112 — HTTP/1.1 (Fielding, Nottingham, Reschke; June 2022)"
+    url: "https://www.rfc-editor.org/rfc/rfc9112.txt"
+    license: "IETF Trust Legal Provisions (BCP 78): reproduction and distribution permitted"
+    sha256: "e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937"
+    approx_tokens: 27000
+  - id: rfc9110
+    title: "RFC 9110 — HTTP Semantics (Fielding, Nottingham, Reschke; June 2022)"
+    url: "https://www.rfc-editor.org/rfc/rfc9110.txt"
+    license: "IETF Trust Legal Provisions (BCP 78): reproduction and distribution permitted"
+    sha256: "21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a"
+    approx_tokens: 125000
+  - id: gutenberg-1342
+    title: "Pride and Prejudice — Jane Austen (Project Gutenberg eBook #1342, plain text)"
+    url: "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"
+    license: "Public domain in the USA; the file is distributed under the Project Gutenberg License"
+    sha256: "3f6bb9d6f78e0293b56acd4714dd68cb7d6d1d293402031ce9d5a216bcaf9d75"
+    approx_tokens: 193000
+
+cases:
+  # ------------------------------------------------------------------ small (~5K)
+  - id: docs-guide-synthesis
+    source: repo-docs
+    content_file: ../docs/rlm-studio-guide.md
+    task_type: synthesis
+    min_tokens: 5000
+    category: synthesis
+    difficulty: easy
+    tags: [small, repo-docs]
+    query: "Which ranking metrics does the Compare page offer, and what does each one reward?"
+    rubric_hint: >
+      The Ranking metrics table: Cost (lowest total USD), Tokens (fewest tokens), Latency
+      (lowest wall-clock), Answer per cost (best answer-length per dollar), Judge score
+      (highest LLM-as-judge overall score, needs a judge Chat Provider). Prefill/decode
+      metrics (TTFT, decode tokens/s, cache hit rate) may also be mentioned.
+    budget: { max_steps: 8, max_time_seconds: 300, max_cost: 0.25 }
+
+  - id: docs-operations-needle
+    source: repo-docs
+    content_file: ../docs/OPERATIONS.md
+    task_type: needle
+    min_tokens: 4000
+    category: factual
+    difficulty: easy
+    tags: [small, repo-docs]
+    query: "Where does RLM Studio keep its state on disk by default?"
+    expected_answer: ".rlm-studio"
+    match: contains
+    budget: { max_steps: 8, max_time_seconds: 300, max_cost: 0.25 }
+
+  - id: synthetic-5k-needle
+    source: synthetic
+    generator: synthetic
+    tokens: 5000
+    seed: 101
+    title: "Platform Operations Handbook"
+    facts:
+      - sentence: "The designated maintenance window for the Orion cluster is 03:15 UTC on the second Tuesday of each month."
+        position: middle
+    task_type: needle
+    min_tokens: 5000
+    category: factual
+    difficulty: easy
+    tags: [small, synthetic]
+    query: "What is the designated maintenance window for the Orion cluster?"
+    expected_answer: "03:15 UTC on the second Tuesday"
+    match: contains
+    budget: { max_steps: 8, max_time_seconds: 300, max_cost: 0.25 }
+
+  - id: synthetic-5k-refusal
+    source: synthetic
+    generator: synthetic
+    tokens: 5000
+    seed: 102
+    title: "Platform Operations Handbook"
+    task_type: refusal
+    min_tokens: 5000
+    category: refusal
+    difficulty: medium
+    tags: [small, synthetic]
+    query: "Who is named as the chief financial officer in this document?"
+    expected_answer: "not mention || does not || no mention || not specified || not stated || no information || cannot be determined || not provided || isn't mentioned || not found || not included || not named"
+    match: contains
+    rubric_hint: "The document names no chief financial officer. A correct answer says so plainly and does not invent a name."
+    budget: { max_steps: 8, max_time_seconds: 300, max_cost: 0.25 }
+
+  # ----------------------------------------------------------------- medium (~50K)
+  - id: synthetic-50k-needle
+    source: synthetic
+    generator: synthetic
+    tokens: 50000
+    seed: 201
+    title: "Service Ownership Register"
+    facts:
+      - sentence: "Ownership of the Tessellate service sits with the Harbour Platform team."
+        position: middle
+    task_type: needle
+    min_tokens: 50000
+    category: factual
+    difficulty: medium
+    tags: [medium, synthetic]
+    query: "Which team owns the Tessellate service?"
+    expected_answer: "Harbour Platform"
+    match: contains
+    budget: { max_steps: 16, max_time_seconds: 600, max_cost: 0.5 }
+
+  - id: synthetic-50k-aggregation
+    source: synthetic
+    generator: synthetic
+    tokens: 50000
+    seed: 202
+    title: "Incident Review Digest"
+    repeat:
+      sentence: "Incident INC-4471 was escalated to the Kestrel on-call rotation."
+      times: 17
+    task_type: aggregation
+    min_tokens: 50000
+    category: aggregation
+    difficulty: hard
+    tags: [medium, synthetic]
+    query: "How many times does the document mention incident INC-4471? Answer with the number."
+    expected:
+      count_word: "INC-4471"
+    match: contains
+    budget: { max_steps: 16, max_time_seconds: 600, max_cost: 0.5 }
+
+  - id: synthetic-50k-refusal
+    source: synthetic
+    generator: synthetic
+    tokens: 50000
+    seed: 203
+    title: "Capacity Planning Notes"
+    task_type: refusal
+    min_tokens: 50000
+    category: refusal
+    difficulty: medium
+    tags: [medium, synthetic]
+    query: "What annual revenue figure does this document report?"
+    expected_answer: "not mention || does not || no mention || not specified || not stated || no information || cannot be determined || not provided || isn't mentioned || not found || not included || no revenue"
+    match: contains
+    rubric_hint: "The document reports no revenue figure. A correct answer says so and does not fabricate a number."
+    budget: { max_steps: 16, max_time_seconds: 600, max_cost: 0.5 }
+
+  - id: rfc9112-synthesis
+    source: rfc9112
+    source_url: "https://www.rfc-editor.org/rfc/rfc9112.txt"
+    sha256: "e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937"
+    task_type: synthesis
+    min_tokens: 25000
+    category: synthesis
+    difficulty: medium
+    tags: [medium, public-text]
+    metadata: { contamination_risk: "high — well-known standard; graded by the judge against the rubric" }
+    query: "According to this document, how must a message that carries both a Transfer-Encoding and a Content-Length header field be handled, and why?"
+    rubric_hint: >
+      Section 6.3: Transfer-Encoding overrides Content-Length; such a message might be an
+      attempt at request smuggling or response splitting and ought to be handled as an
+      error; an intermediary that forwards it MUST first remove the received
+      Content-Length and process the Transfer-Encoding; a sender MUST NOT send both.
+    budget: { max_steps: 16, max_time_seconds: 600, max_cost: 0.5 }
+
+  - id: rfc9112-aggregation
+    source: rfc9112
+    source_url: "https://www.rfc-editor.org/rfc/rfc9112.txt"
+    sha256: "e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937"
+    task_type: aggregation
+    min_tokens: 25000
+    category: aggregation
+    difficulty: hard
+    tags: [medium, public-text]
+    query: "How many times does the whole word 'chunked' (case-insensitive) occur in this document? Answer with the number."
+    expected:
+      count_word: "chunked"
+    match: contains
+    budget: { max_steps: 16, max_time_seconds: 600, max_cost: 0.5 }
+
+  # ----------------------------------------------------------------- large (150K+)
+  - id: synthetic-150k-needle
+    source: synthetic
+    generator: synthetic
+    tokens: 150000
+    seed: 301
+    title: "Disaster Recovery Runbook"
+    facts:
+      - sentence: "The Meridian failover drill is rehearsed on the 19th day of the first month of every quarter."
+        position: middle
+    task_type: needle
+    min_tokens: 150000
+    category: factual
+    difficulty: hard
+    tags: [large, synthetic]
+    query: "On which day is the Meridian failover drill rehearsed?"
+    expected_answer: "19th"
+    match: contains
+    budget: { max_steps: 24, max_time_seconds: 900, max_cost: 1.0 }
+
+  - id: synthetic-150k-aggregation
+    source: synthetic
+    generator: synthetic
+    tokens: 150000
+    seed: 302
+    title: "Postmortem Archive"
+    repeat:
+      sentence: "Ticket OPS-8820 was reopened after the postmortem review."
+      times: 23
+    task_type: aggregation
+    min_tokens: 150000
+    category: aggregation
+    difficulty: hard
+    tags: [large, synthetic]
+    query: "How many times is ticket OPS-8820 mentioned in the document? Answer with the number."
+    expected:
+      count_word: "OPS-8820"
+    match: contains
+    budget: { max_steps: 24, max_time_seconds: 900, max_cost: 1.0 }
+
+  - id: rfc9110-aggregation
+    source: rfc9110
+    source_url: "https://www.rfc-editor.org/rfc/rfc9110.txt"
+    sha256: "21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a"
+    task_type: aggregation
+    min_tokens: 100000
+    category: aggregation
+    difficulty: hard
+    tags: [large, public-text]
+    query: "How many times does the exact phrase 'MUST NOT' occur in this document? Answer with the number."
+    expected:
+      count_word: "MUST NOT"
+    match: contains
+    budget: { max_steps: 24, max_time_seconds: 900, max_cost: 1.0 }
+
+  - id: gutenberg-pride-aggregation
+    source: gutenberg-1342
+    source_url: "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"
+    sha256: "3f6bb9d6f78e0293b56acd4714dd68cb7d6d1d293402031ce9d5a216bcaf9d75"
+    task_type: aggregation
+    min_tokens: 150000
+    category: aggregation
+    difficulty: hard
+    tags: [large, public-text]
+    query: "How many times does the word 'Netherfield' occur in this text (whole word, any capitalisation)? Answer with the number."
+    expected:
+      count_word: "Netherfield"
+    match: contains
+    budget: { max_steps: 24, max_time_seconds: 900, max_cost: 1.0 }
+
+  - id: gutenberg-pride-header-needle
+    source: gutenberg-1342
+    source_url: "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"
+    sha256: "3f6bb9d6f78e0293b56acd4714dd68cb7d6d1d293402031ce9d5a216bcaf9d75"
+    task_type: needle
+    min_tokens: 150000
+    category: factual
+    difficulty: medium
+    tags: [large, public-text]
+    metadata: { note: "File-specific header line, pinned by the sha256 above — not knowable from the novel itself." }
+    query: "According to the Project Gutenberg header of this file, on what date was the eBook most recently updated?"
+    expected_answer: "September 1, 2026"
+    match: contains
+    budget: { max_steps: 24, max_time_seconds: 900, max_cost: 1.0 }

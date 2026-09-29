@@ -9,12 +9,14 @@ Under the hood these delegate to Clean Architecture use cases
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
+from rlmstudio.application.sandbox_vars import MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL
 from rlmstudio.application.use_cases.run_comparison import (
     ComparisonResultDTO,
     RunComparisonUseCase,
@@ -28,9 +30,11 @@ from rlmstudio.application.use_cases.run_matrix_comparison import (
 from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
 from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
 from rlmstudio.infrastructure.embedding.litellm_embedding_adapter import LiteLLMEmbeddingAdapter
+from rlmstudio.infrastructure.engines.rlms_adapter import RlmsEngineAdapter
 from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
 from rlmstudio.infrastructure.sandbox.sandbox_factory import create_sandbox
 from rlmstudio.infrastructure.storage.sqlite_adapter import SQLiteStorageAdapter
+from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY
 
 # Type alias for interaction modes
 InteractionMode = Literal["direct", "rag", "rlm", "compare", "auto"]
@@ -299,6 +303,36 @@ def _resolve_model(
     if prefix and not m.startswith(prefix):
         m = f"{prefix}{m}"
     return m
+
+
+def build_llm_adapter(
+    spec: str,
+    *,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+    timeout: float | None = None,
+    num_retries: int | None = None,
+) -> LiteLLMAdapter:
+    """Build a :class:`LiteLLMAdapter` from a ``"provider/model"`` spec.
+
+    The same resolution :func:`compare_matrix` applies per slot (provider
+    prefix, local-provider retry default), exposed for callers that need one
+    adapter outside a matrix run — for example the benchmark judge.
+    """
+    provider, raw_model = _parse_provider_spec(spec)
+    return LiteLLMAdapter(
+        model=_resolve_model(provider, raw_model, api_base),
+        api_key=api_key,
+        api_base=api_base,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout if timeout is not None else 120.0,
+        num_retries=(
+            num_retries if num_retries is not None else 0 if provider in _LOCAL_PROVIDERS else 2
+        ),
+    )
 
 
 def _setup(
@@ -658,7 +692,9 @@ async def interact_async(
 # ---------------------------------------------------------------------------
 
 
-_MATRIX_MODE_SET: frozenset[str] = frozenset({"direct", "rag", "rlm"})
+MATRIX_MODES: frozenset[str] = frozenset({MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL})
+"""Every mode a Compare-matrix slot can run in."""
+_MATRIX_MODE_SET = MATRIX_MODES
 _MATRIX_RANKING_METRICS: frozenset[str] = frozenset(
     {"cost", "tokens", "latency", "answer_per_cost"}
 )
@@ -687,7 +723,13 @@ def _parse_provider_spec(spec: str) -> tuple[str, str]:
     return provider, model
 
 
-def _build_matrix_slots(
+def _default_endpoint(provider: str) -> str | None:
+    """Catalog default endpoint for local providers (``None`` for cloud backends)."""
+    entry = PROVIDERS_BY_KEY.get(provider)
+    return entry.default_endpoint if entry else None
+
+
+def build_matrix_slots(
     providers: list[str],
     modes: list[str],
     *,
@@ -699,13 +741,23 @@ def _build_matrix_slots(
     max_steps: int,
     num_retries: int | None,
     embedding_api_key: str | None,
+    base_config: RunConfigDTO | None = None,
+    sandbox_type: str | None = None,
 ) -> list[MatrixSlotDTO]:
     """Build per-slot :class:`MatrixSlotDTO`s from the public API args.
 
     Each slot gets its own :class:`LiteLLMAdapter` so one slot's streaming
     state cannot bleed into another's, a fresh sandbox for ``rlm`` slots,
-    and a fresh in-memory :class:`SQLiteStorageAdapter` +
-    :class:`LiteLLMEmbeddingAdapter` for ``rag`` slots.
+    a fresh in-memory :class:`SQLiteStorageAdapter` +
+    :class:`LiteLLMEmbeddingAdapter` for ``rag`` slots, and an
+    :class:`RlmsEngineAdapter` (priced by the slot's LLM adapter) for
+    ``rlm_official`` slots.
+
+    ``base_config`` seeds every slot's :class:`RunConfigDTO` — the benchmark
+    runner uses it to apply per-case budgets (wall-clock, cost, depth); when
+    given, its ``max_steps`` wins over the ``max_steps`` argument.
+    ``sandbox_type`` selects the engine's environment for ``rlm_official``
+    (``docker`` → the engine's Docker environment; default → in-process).
     """
     slots: list[MatrixSlotDTO] = []
     for spec in providers:
@@ -729,24 +781,36 @@ def _build_matrix_slots(
                 ),
             )
 
-            sandbox = create_sandbox() if mode == "rlm" else None
+            sandbox = create_sandbox() if mode == MODE_RLM else None
+
+            engine = None
+            if mode == MODE_RLM_OFFICIAL:
+                engine = RlmsEngineAdapter(
+                    backend=provider,
+                    model=raw_model,
+                    api_key=api_key,
+                    base_url=api_base or _default_endpoint(provider),
+                    cost_fn=llm.get_completion_cost,
+                    **({"sandbox_type": sandbox_type} if sandbox_type else {}),
+                )
 
             embedder: LiteLLMEmbeddingAdapter | None = None
             storage: SQLiteStorageAdapter | None = None
             extra: dict[str, Any] = {}
-            if mode == "rag":
+            if mode == MODE_RAG:
                 emb_key = _resolve_embedding_key(provider, api_key, embedding_api_key)
                 embedder = LiteLLMEmbeddingAdapter(api_key=emb_key)
                 storage = SQLiteStorageAdapter(":memory:")
                 extra = {"collection": f"rag_{uuid.uuid4().hex}"}
 
-            slot_config = RunConfigDTO(
+            base = base_config or RunConfigDTO(max_steps=max_steps)
+            slot_config = dataclasses.replace(
+                base,
                 mode=mode,
                 provider=provider,
                 model=prefixed_model,
                 api_key=api_key,
-                max_steps=max_steps,
-                extra=extra,
+                extra={**base.extra, **extra},
             )
 
             slots.append(
@@ -761,6 +825,7 @@ def _build_matrix_slots(
                     provider=provider,
                     model=raw_model,
                     config=slot_config,
+                    engine=engine,
                 )
             )
     return slots
@@ -819,7 +884,8 @@ def _validate_matrix_inputs(
         raise ValueError("modes must be a non-empty list")
     for mode in modes:
         if mode not in _MATRIX_MODE_SET:
-            raise ValueError(f"Invalid matrix mode: {mode!r}. Valid: 'direct', 'rag', 'rlm'.")
+            valid = ", ".join(repr(m) for m in sorted(_MATRIX_MODE_SET))
+            raise ValueError(f"Invalid matrix mode: {mode!r}. Valid: {valid}.")
     if ranking_metric not in _MATRIX_RANKING_METRICS:
         raise ValueError(
             f"Invalid ranking_metric: {ranking_metric!r}. Valid: {sorted(_MATRIX_RANKING_METRICS)}."
@@ -894,7 +960,7 @@ def compare_matrix(
         modes = ["direct"]
     _validate_matrix_inputs(content, query, providers, modes, ranking_metric)
 
-    slots = _build_matrix_slots(
+    slots = build_matrix_slots(
         providers,
         modes,
         api_key=api_key,

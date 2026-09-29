@@ -406,6 +406,36 @@ The matrix endpoint is synchronous — the UI waits until every cell completes (
 
 ---
 
+## Benchmarks
+
+[`BENCHMARKS.md`](../BENCHMARKS.md) publishes numbers produced by the tool itself on a reproducible long-document task set ([`benchmarks/longdoc-v1.yaml`](../benchmarks/longdoc-v1.yaml)): 14 cases across ~5K / ~50K / ~150K tokens and four task types (needle, synthesis, aggregation, refusal), run through the same code path as the Compare page for every provider × engine you name.
+
+### Reproducing the benchmarks
+
+```bash
+pip install "rlm-studio[all]"          # includes the rlm_official engine
+rlm-studio bench \
+  --config benchmarks/longdoc-v1.yaml \
+  --providers openai/gpt-4o-mini,ollama/qwen3:8b \
+  --engines direct,rag,rlm,rlm_official \
+  --judge openai/gpt-4o-mini --reps 3 --fetch \
+  --out benchmarks/results/$(date +%F)/ --page BENCHMARKS.md \
+  --note "Ollama 0.12 on an M3 Max, 64 GB"
+```
+
+- `--providers` takes `backend/model` specs; every engine of a provider uses the same model, endpoint and key, which is what makes the rows comparable.
+- `--fetch` downloads the two public texts into `benchmarks/corpus/` and verifies them against the digests pinned in the dataset; without it those cases are skipped and listed as such.
+- `--judge` runs the pointwise rubric from Settings → Judge on each usable answer; omit it for the deterministic accuracy column only. `--reps 3` reports judge scores as mean ± range.
+- `--note` lands in the page header — name local hardware and model versions here.
+- `--dry-run` runs everything on offline fakes (this is what CI does); `--limit N` and `--cases id,id` narrow a run while you set things up.
+- `--sandbox docker` lets the `rlm_official` cells run in parallel. Without it they share one in-process REPL, so the runner runs them one after another and a multi-provider grid takes longer; the other engines are unaffected either way.
+
+Outputs: `results.json` (every cell), `results.md` (summary + per-case table), and the results section of `BENCHMARKS.md` regenerated between its markers. Budgets per case (steps, wall-clock, cost) come from the dataset; failed and timed-out runs are counted in their own column rather than dropped.
+
+A run that stops part-way keeps what it paid for: the cells already completed are written to `results.partial.json` and the command exits with an error message. A judge call that fails costs only that cell its score, recorded against the cell as `judge_error`.
+
+---
+
 ## Judge & scoring
 
 LLM-as-judge is an optional scoring layer: a dedicated judge LLM rates every answer on a rubric, producing an `overall_score` you can sort and compare by. The Compare page uses it as a ranking metric; the Traces page shows it per execution.

@@ -10,10 +10,40 @@ from typing import Any
 
 import yaml
 
+# Task types of the longdoc-v1 set (specs/benchmarks-v1 G2).
+TASK_TYPE_GENERAL = "general"
+TASK_TYPE_NEEDLE = "needle"
+TASK_TYPE_SYNTHESIS = "synthesis"
+TASK_TYPE_AGGREGATION = "aggregation"
+TASK_TYPE_REFUSAL = "refusal"
+TASK_TYPES: frozenset[str] = frozenset(
+    {
+        TASK_TYPE_GENERAL,
+        TASK_TYPE_NEEDLE,
+        TASK_TYPE_SYNTHESIS,
+        TASK_TYPE_AGGREGATION,
+        TASK_TYPE_REFUSAL,
+    }
+)
+
+# How ``expected_answer`` is checked by the scorer.
+MATCH_EXACT = "exact"
+MATCH_CONTAINS = "contains"
+MATCH_KINDS: frozenset[str] = frozenset({MATCH_EXACT, MATCH_CONTAINS})
+
+# YAML keys that describe how to obtain a case's document (see corpus.py).
+_CONTENT_SPEC_KEYS = ("content_file", "generator", "source_url", "sha256", "filename")
+# Generator parameters live at the case level next to ``generator``.
+_GENERATOR_KEYS = ("tokens", "seed", "title", "facts", "repeat")
+
 
 @dataclass
 class BenchmarkCase:
-    """A single benchmark case: content + query + optional expected answer."""
+    """A single benchmark case: content + query + optional expected answer.
+
+    ``content`` may be empty on load when the YAML gives a ``content_spec``
+    instead; :func:`rlmstudio.benchmark.corpus.materialise` fills it in.
+    """
 
     id: str
     content: str
@@ -23,6 +53,15 @@ class BenchmarkCase:
     difficulty: str = "medium"  # easy, medium, hard
     tags: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # --- longdoc-v1 additions (specs/benchmarks-v1 FR-2) ---
+    task_type: str = TASK_TYPE_GENERAL
+    min_tokens: int | None = None  # the size bucket the case is meant to occupy
+    rubric_hint: str | None = None  # extra guidance handed to the judge
+    match: str = MATCH_CONTAINS  # how expected_answer is checked
+    budget: dict[str, Any] = field(default_factory=dict)  # RunConfigDTO overrides
+    source: str | None = None  # id into BenchmarkDataset.sources
+    content_spec: dict[str, Any] | None = None  # how to materialise content
+    expected_spec: dict[str, Any] | None = None  # how to derive expected_answer
 
     @property
     def content_length(self) -> int:
@@ -38,6 +77,12 @@ class BenchmarkCase:
             "difficulty": self.difficulty,
             "tags": self.tags,
             "metadata": self.metadata,
+            "task_type": self.task_type,
+            "min_tokens": self.min_tokens,
+            "rubric_hint": self.rubric_hint,
+            "match": self.match,
+            "budget": self.budget,
+            "source": self.source,
         }
 
 
@@ -49,6 +94,7 @@ class BenchmarkDataset:
     description: str = ""
     cases: list[BenchmarkCase] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    sources: list[dict[str, Any]] = field(default_factory=list)  # {id, title, url, license}
 
     def __len__(self) -> int:
         return len(self.cases)
@@ -101,7 +147,56 @@ class BenchmarkDataset:
             "categories": self.categories,
             "cases": [c.to_dict() for c in self.cases],
             "metadata": self.metadata,
+            "sources": self.sources,
         }
+
+
+def _case_from_dict(index: int, case_data: Any) -> BenchmarkCase:
+    """Validate one YAML case mapping and build a :class:`BenchmarkCase`."""
+    if not isinstance(case_data, dict):
+        raise ValueError(f"Case {index} must be a mapping")
+    if "query" not in case_data:
+        raise ValueError(f"Case {index} must have a 'query' field")
+
+    content_spec = {k: case_data[k] for k in _CONTENT_SPEC_KEYS if k in case_data}
+    if "generator" in content_spec:
+        content_spec.update({k: case_data[k] for k in _GENERATOR_KEYS if k in case_data})
+    if "content" not in case_data and not content_spec:
+        raise ValueError(
+            f"Case {index} must have 'content' or one of {', '.join(_CONTENT_SPEC_KEYS[:3])}"
+        )
+
+    task_type = case_data.get("task_type", TASK_TYPE_GENERAL)
+    if task_type not in TASK_TYPES:
+        raise ValueError(f"Case {index}: unknown task_type {task_type!r}")
+    match = case_data.get("match", MATCH_CONTAINS)
+    if match not in MATCH_KINDS:
+        raise ValueError(f"Case {index}: unknown match {match!r}")
+
+    expected = case_data.get("expected")
+    expected_spec = expected if isinstance(expected, dict) else None
+    expected_answer = case_data.get("expected_answer")
+    if expected_answer is None and isinstance(expected, str):
+        expected_answer = expected
+
+    return BenchmarkCase(
+        id=case_data.get("id", f"case_{index}"),
+        content=case_data.get("content", ""),
+        query=case_data["query"],
+        expected_answer=expected_answer,
+        category=case_data.get("category", "general"),
+        difficulty=case_data.get("difficulty", "medium"),
+        tags=case_data.get("tags", []),
+        metadata=case_data.get("metadata", {}),
+        task_type=task_type,
+        min_tokens=case_data.get("min_tokens"),
+        rubric_hint=case_data.get("rubric_hint"),
+        match=match,
+        budget=case_data.get("budget", {}),
+        source=case_data.get("source"),
+        content_spec=content_spec or None,
+        expected_spec=expected_spec,
+    )
 
 
 def load_dataset(path: str) -> BenchmarkDataset:
@@ -130,54 +225,19 @@ def load_dataset(path: str) -> BenchmarkDataset:
     if not isinstance(data, dict):
         raise ValueError(f"Dataset file must contain a YAML mapping, got {type(data).__name__}")
 
-    cases = []
-    for i, case_data in enumerate(data.get("cases", [])):
-        if not isinstance(case_data, dict):
-            raise ValueError(f"Case {i} must be a mapping")
-        if "content" not in case_data or "query" not in case_data:
-            raise ValueError(f"Case {i} must have 'content' and 'query' fields")
-
-        cases.append(
-            BenchmarkCase(
-                id=case_data.get("id", f"case_{i}"),
-                content=case_data["content"],
-                query=case_data["query"],
-                expected_answer=case_data.get("expected_answer"),
-                category=case_data.get("category", "general"),
-                difficulty=case_data.get("difficulty", "medium"),
-                tags=case_data.get("tags", []),
-                metadata=case_data.get("metadata", {}),
-            )
-        )
-
-    return BenchmarkDataset(
-        name=data.get("name", filepath.stem),
-        description=data.get("description", ""),
-        cases=cases,
-        metadata=data.get("metadata", {}),
-    )
+    dataset = load_dataset_from_dict(data)
+    if dataset.name == "unnamed":
+        dataset.name = filepath.stem
+    return dataset
 
 
 def load_dataset_from_dict(data: dict[str, Any]) -> BenchmarkDataset:
     """Load a benchmark dataset from an in-memory dictionary (same schema as YAML)."""
-    cases = []
-    for i, case_data in enumerate(data.get("cases", [])):
-        cases.append(
-            BenchmarkCase(
-                id=case_data.get("id", f"case_{i}"),
-                content=case_data["content"],
-                query=case_data["query"],
-                expected_answer=case_data.get("expected_answer"),
-                category=case_data.get("category", "general"),
-                difficulty=case_data.get("difficulty", "medium"),
-                tags=case_data.get("tags", []),
-                metadata=case_data.get("metadata", {}),
-            )
-        )
-
+    cases = [_case_from_dict(i, case_data) for i, case_data in enumerate(data.get("cases", []))]
     return BenchmarkDataset(
         name=data.get("name", "unnamed"),
         description=data.get("description", ""),
         cases=cases,
         metadata=data.get("metadata", {}),
+        sources=list(data.get("sources", []) or []),
     )
