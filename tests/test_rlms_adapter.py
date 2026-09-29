@@ -14,8 +14,9 @@ import dataclasses
 import importlib.metadata
 import sys
 import threading
+import time
 import types
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -63,6 +64,10 @@ from rlmstudio.infrastructure.engines.rlms_adapter import (
 
 ROOT_MODEL = "gpt-4o-mini"
 FINAL = "The document has 3 sections."
+# Async-abandonment test: the caller gives up well before the fake engine
+# settles, so the worker thread finishes while the loop is still running.
+_TIGHT_TIMEOUT_SECONDS = 0.05
+_SETTLE_AFTER_TIMEOUT_SECONDS = 0.3
 
 SUBCALL_USAGE = {
     "model_usage_summaries": {
@@ -551,6 +556,9 @@ class _FakeRlm:
         self.closed = False
         self.completion: _FakeCompletion = _FakeCompletion()
         self.raise_on_completion: BaseException | None = None
+        # Called inside the fake engine's ``completion()``, on whichever thread
+        # the adapter put it on.
+        self.on_completion: Callable[..., None] | None = None
         # What the logger the adapter owns would hand back mid-run; the adapter
         # reads it when the engine raises instead of returning a completion.
         self.logged_trajectory: dict[str, Any] | None = TRAJECTORY
@@ -573,6 +581,8 @@ def fake_rlm(monkeypatch: pytest.MonkeyPatch) -> _FakeRlm:
 
         def completion(self, prompt: Any, root_prompt: str | None = None) -> _FakeCompletion:
             state.completion_calls.append({"prompt": prompt, "root_prompt": root_prompt})
+            if state.on_completion is not None:
+                state.on_completion(prompt=prompt, root_prompt=root_prompt)
             if state.raise_on_completion is not None:
                 raise state.raise_on_completion
             return state.completion
@@ -813,6 +823,68 @@ class TestRun:
 
         assert result.success
         assert fake_rlm.completion_calls[0]["root_prompt"] == "q"
+
+    def test_run_async_propagates_engine_exceptions(self, fake_rlm: _FakeRlm) -> None:
+        import asyncio
+
+        fake_rlm.raise_on_completion = RuntimeError("connection refused")
+
+        with pytest.raises(RuntimeError, match="connection refused"):
+            asyncio.run(_adapter().run_async("d", "q", _CONFIG))
+
+
+class TestRunAsyncDoesNotOutliveTheServer:
+    """The async path must not hand a stuck run to a non-daemon thread.
+
+    ``asyncio.to_thread`` borrows the loop's default executor, whose threads are
+    joined at interpreter exit — a run stuck in the engine's in-process REPL
+    would then hang the server's shutdown instead of being abandoned.
+    """
+
+    def test_the_engine_runs_on_a_daemon_thread(self, fake_rlm: _FakeRlm) -> None:
+        import asyncio
+
+        seen: dict[str, bool] = {}
+
+        def _record(**_kwargs: Any) -> None:
+            current = threading.current_thread()
+            seen["daemon"] = current.daemon
+
+        fake_rlm.on_completion = _record
+        asyncio.run(_adapter().run_async("d", "q", _CONFIG))
+
+        assert seen == {"daemon": True}
+
+    def test_a_timed_out_run_settling_later_does_not_disturb_the_loop(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        """The caller's ``wait_for`` gives up first; the thread finishes after.
+
+        Resolving an already-cancelled future would surface as an
+        ``InvalidStateError`` through the loop's exception handler.
+        """
+        import asyncio
+
+        def _slow(**_kwargs: Any) -> None:
+            time.sleep(_SETTLE_AFTER_TIMEOUT_SECONDS)
+
+        fake_rlm.on_completion = _slow
+        loop_errors: list[dict[str, Any]] = []
+
+        async def _scenario() -> None:
+            asyncio.get_running_loop().set_exception_handler(
+                lambda _loop, context: loop_errors.append(context)
+            )
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(
+                    _adapter().run_async("d", "q", _CONFIG), timeout=_TIGHT_TIMEOUT_SECONDS
+                )
+            # Outlive the abandoned thread so it settles while the loop still runs.
+            await asyncio.sleep(_SETTLE_AFTER_TIMEOUT_SECONDS)
+
+        asyncio.run(_scenario())
+
+        assert loop_errors == []
 
 
 def _raise(exc_name: str, message: str, **attrs: Any) -> BaseException:

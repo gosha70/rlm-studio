@@ -438,7 +438,48 @@ class RlmsEngineAdapter:
         return self._to_result(completion, start, environment, config)
 
     async def run_async(self, content: str, query: str, config: RunConfigDTO) -> RunResultDTO:
-        return await asyncio.to_thread(self.run, content, query, config)
+        """Run on a daemon thread and await the result.
+
+        Deliberately not ``asyncio.to_thread``: that borrows the loop's default
+        executor, whose threads are **not** daemons, so a run stuck in the
+        engine's in-process REPL would be joined at interpreter exit and hang
+        the server's shutdown.  The caller's timeout (the use case wraps this
+        in ``asyncio.wait_for``) abandons the thread instead, matching what the
+        synchronous path already does.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[RunResultDTO] = loop.create_future()
+
+        def _settle(setter: Any, value: Any) -> None:
+            # The awaiting side may already have timed out and cancelled.
+            if not future.done():
+                setter(value)
+
+        def _target() -> None:
+            try:
+                result = self.run(content, query, config)
+            except BaseException as exc:  # delivered to the awaiting caller
+                self._hand_back(loop, _settle, future.set_exception, exc)
+            else:
+                self._hand_back(loop, _settle, future.set_result, result)
+
+        threading.Thread(target=_target, name="rlm-engine-async", daemon=True).start()
+        return await future
+
+    @staticmethod
+    def _hand_back(
+        loop: asyncio.AbstractEventLoop,
+        settle: Any,
+        setter: Any,
+        value: Any,
+    ) -> None:
+        """Deliver a worker-thread outcome to the loop, tolerating a closed loop."""
+        try:
+            loop.call_soon_threadsafe(settle, setter, value)
+        except RuntimeError:
+            # The loop is gone (server shut down while the engine was running);
+            # nobody is waiting for this result any more.
+            logger.debug("Official RLM engine finished after its event loop closed")
 
     # ------------------------------------------------------------------
     # Internals
