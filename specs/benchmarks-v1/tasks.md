@@ -23,8 +23,8 @@ Branch `feat/benchmarks-v1` after `feat/rebrand-rlm-studio` merges (may run in p
 - [x] T2.2 `benchmark/scoring.py` (exact/contains + judge via `LLMPort`, `judge_pointwise.yaml`); tests with fakes. *(`matches()` normalises case/whitespace/edge punctuation and accepts `"a || b"` alternatives; `JudgeScorer` reuses `judge_pointwise.yaml` through any `LLMPort`, appends the case `rubric_hint` as grading guidance, truncates the source like the Studio judge, records model + prompt version, flags unparseable verdicts (fallback 3.0). Tests: `test_benchmark_scoring.py`, `test_benchmark_runner.py`, `test_api_build_matrix_slots.py`.)*
 
 ## Phase 3 — report + page
-- [ ] T3.1 Markdown table + aggregates in `report.py`; marker-based `BENCHMARKS.md` regeneration; idempotency test.
-- [ ] T3.2 `BENCHMARKS.md` skeleton (methodology, caveats, links) with markers.
+- [x] T3.1 Markdown table + aggregates in `report.py`; marker-based `BENCHMARKS.md` regeneration; idempotency test. *(2026-09-29: `MatrixBenchmarkReport` — per provider × engine `CellSummary` (cases, runs, accuracy n/N, judge mean ± range across repetitions, failed / timed-out, tokens, cost with unknown-cost run count, TTFT p50, mean wall time, outcome histogram), header with provenance + skipped cases, summary table for the page and a per-case table for `results.md`, `save_json` / `save_markdown`; `regenerate_page()` replaces the block between `<!-- bench:start -->` / `<!-- bench:end -->`, idempotent, raises when markers are missing. `tests/test_benchmark_report.py` (8).)*
+- [x] T3.2 `BENCHMARKS.md` skeleton (methodology, caveats, links) with markers. *(Root `BENCHMARKS.md`: "not the paper's benchmark" note, what is measured, how to reproduce (command, `--fetch`, `--dry-run`, cost target), caveats (judge, engine TTFT, unknown cost, contamination flag), links to the paper and `alexzhang13/rlm`, markers with a placeholder.)*
 
 ## Phase 4 — CLI + CI
 - [ ] T4.1 `rlm-studio bench` subcommand + `benchmarks/run_benchmark.py` wrapper; `--dry-run` with fakes.
