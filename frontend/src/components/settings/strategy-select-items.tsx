@@ -14,27 +14,31 @@
 
 import { SelectItem } from "@/components/ui/select";
 import { useEngineAvailability } from "@/components/shared/use-engines";
-import { MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL } from "@/lib/constants";
+import {
+  displayModeName,
+  MODE_DIRECT,
+  MODE_RAG,
+  MODE_RLM,
+  MODE_RLM_OFFICIAL,
+} from "@/lib/constants";
 
-export const OFFICIAL_STRATEGY_LABEL = "Official RLM (rlms)";
 export const OFFICIAL_STRATEGY_UNAVAILABLE_SUFFIX = " — not installed";
 
 export function StrategySelectItems() {
   const { unavailableReasonFor } = useEngineAvailability();
   const reason = unavailableReasonFor(MODE_RLM_OFFICIAL);
+  const officialLabel = displayModeName(MODE_RLM_OFFICIAL);
   return (
     <>
-      <SelectItem value={MODE_DIRECT}>Direct</SelectItem>
-      <SelectItem value={MODE_RLM}>RLM</SelectItem>
-      <SelectItem value={MODE_RAG}>RAG</SelectItem>
+      <SelectItem value={MODE_DIRECT}>{displayModeName(MODE_DIRECT)}</SelectItem>
+      <SelectItem value={MODE_RLM}>{displayModeName(MODE_RLM)}</SelectItem>
+      <SelectItem value={MODE_RAG}>{displayModeName(MODE_RAG)}</SelectItem>
       <SelectItem
         value={MODE_RLM_OFFICIAL}
         disabled={reason !== null}
         title={reason ?? undefined}
       >
-        {reason === null
-          ? OFFICIAL_STRATEGY_LABEL
-          : OFFICIAL_STRATEGY_LABEL + OFFICIAL_STRATEGY_UNAVAILABLE_SUFFIX}
+        {reason === null ? officialLabel : officialLabel + OFFICIAL_STRATEGY_UNAVAILABLE_SUFFIX}
       </SelectItem>
     </>
   );

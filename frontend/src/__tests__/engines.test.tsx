@@ -30,14 +30,29 @@ vi.mock("@/components/shared/app-shell", () => ({
 
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { ENGINES_SWR_KEY, unavailableReasonFor } from "@/components/shared/use-engines";
-import { StrategySelectItems } from "@/components/settings/strategy-select-items";
+import {
+  OFFICIAL_STRATEGY_UNAVAILABLE_SUFFIX,
+  StrategySelectItems,
+} from "@/components/settings/strategy-select-items";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MODE_DIRECT, MODE_RLM, MODE_RLM_OFFICIAL } from "@/lib/constants";
+import {
+  ALL_EXECUTION_MODES,
+  displayModeName,
+  MODE_DIRECT,
+  MODE_DISPLAY_NAMES,
+  MODE_RAG,
+  MODE_RLM,
+  MODE_RLM_OFFICIAL,
+} from "@/lib/constants";
 import type { EnginesResponse, ExecutionSummary, LLMProviderConfig } from "@/lib/api";
 import ComparePage from "@/app/compare/page";
 import TracesPage from "@/app/traces/page";
 
 const INSTALL_HINT = 'The official RLM engine needs the `interop` extra: pip install "rlm-studio[interop]"';
+
+/** Every picker labels a mode through the shared display-name map. */
+const OFFICIAL_LABEL = displayModeName(MODE_RLM_OFFICIAL);
+const RLM_LABEL = displayModeName(MODE_RLM);
 
 const AVAILABLE: EnginesResponse = {
   rlm_official: { available: true, reason: "rlms 0.1.3", version: "0.1.3" },
@@ -142,18 +157,18 @@ describe("Compare mode picker", () => {
     mockSWR(UNAVAILABLE);
     render(<ComparePage />);
 
-    const button = screen.getByRole("button", { name: MODE_RLM_OFFICIAL });
+    const button = screen.getByRole("button", { name: OFFICIAL_LABEL });
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("title", INSTALL_HINT);
     // Built-in modes are untouched by the engine status.
-    expect(screen.getByRole("button", { name: MODE_RLM })).toBeEnabled();
+    expect(screen.getByRole("button", { name: RLM_LABEL })).toBeEnabled();
   });
 
   test("offers rlm_official normally when the engine is available", () => {
     mockSWR(AVAILABLE);
     render(<ComparePage />);
 
-    const button = screen.getByRole("button", { name: MODE_RLM_OFFICIAL });
+    const button = screen.getByRole("button", { name: OFFICIAL_LABEL });
     expect(button).toBeEnabled();
     expect(button).toHaveAttribute("title", "Paper authors' reference implementation (rlms)");
   });
@@ -166,8 +181,8 @@ describe("Compare selection when the engine status arrives late", () => {
   const selectThenReport = (answer: EnginesResponse, extra: Omit<MockData, "engines"> = {}) => {
     mockSWR(undefined, extra);
     const view = render(<ComparePage />);
-    fireEvent.click(screen.getByRole("button", { name: MODE_RLM_OFFICIAL }));
-    expect(screen.getByRole("button", { name: MODE_RLM_OFFICIAL })).toHaveAttribute(
+    fireEvent.click(screen.getByRole("button", { name: OFFICIAL_LABEL }));
+    expect(screen.getByRole("button", { name: OFFICIAL_LABEL })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -179,7 +194,7 @@ describe("Compare selection when the engine status arrives late", () => {
   test("deselects the mode once the engine is reported unavailable", () => {
     selectThenReport(UNAVAILABLE);
 
-    const button = screen.getByRole("button", { name: MODE_RLM_OFFICIAL });
+    const button = screen.getByRole("button", { name: OFFICIAL_LABEL });
     // Still un-clickable, but no longer part of the run.
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("aria-pressed", "false");
@@ -189,7 +204,7 @@ describe("Compare selection when the engine status arrives late", () => {
   test("keeps the mode selected when the engine is reported available", () => {
     selectThenReport(AVAILABLE);
 
-    const button = screen.getByRole("button", { name: MODE_RLM_OFFICIAL });
+    const button = screen.getByRole("button", { name: OFFICIAL_LABEL });
     expect(button).toBeEnabled();
     expect(button).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("Modes (2 selected)")).toBeInTheDocument();
@@ -280,17 +295,72 @@ describe("Profile strategy options", () => {
     mockSWR(UNAVAILABLE);
     renderOpen();
 
-    const option = screen.getByRole("option", { name: /Official RLM \(rlms\) — not installed/ });
+    const option = screen.getByRole("option", {
+      name: OFFICIAL_LABEL + OFFICIAL_STRATEGY_UNAVAILABLE_SUFFIX,
+    });
     expect(option).toHaveAttribute("aria-disabled", "true");
     expect(option).toHaveAttribute("title", INSTALL_HINT);
-    expect(screen.getByRole("option", { name: "RLM" })).not.toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("option", { name: RLM_LABEL })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   test("offers the official engine normally when available", () => {
     mockSWR(AVAILABLE);
     renderOpen();
 
-    const option = screen.getByRole("option", { name: "Official RLM (rlms)" });
+    const option = screen.getByRole("option", { name: OFFICIAL_LABEL });
     expect(option).not.toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+describe("Mode wording", () => {
+  test("the display-name map is the only spelling of each mode", () => {
+    // Guards the wording itself: the selects, the Compare picker and the
+    // settings badges all read these strings, so a change here is a change
+    // everywhere rather than a fourth spelling.
+    expect(MODE_DISPLAY_NAMES).toEqual({
+      [MODE_DIRECT]: "Direct",
+      [MODE_RLM]: "RLM",
+      [MODE_RAG]: "RAG",
+      [MODE_RLM_OFFICIAL]: "Official RLM (rlms)",
+    });
+  });
+
+  test("an unknown mode falls back to its identifier", () => {
+    expect(displayModeName("some_future_mode")).toBe("some_future_mode");
+  });
+
+  test("the Compare picker labels modes, never raw identifiers", () => {
+    mockSWR(AVAILABLE);
+    render(<ComparePage />);
+
+    for (const mode of ALL_EXECUTION_MODES) {
+      expect(screen.getByRole("button", { name: displayModeName(mode) })).toBeInTheDocument();
+      // `rlm_official` is the only identifier that differs from its label.
+      if (displayModeName(mode) !== mode) {
+        expect(screen.queryByRole("button", { name: mode })).not.toBeInTheDocument();
+      }
+    }
+  });
+
+  test("the profile strategy select labels modes, never raw identifiers", () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.hasPointerCapture = vi.fn().mockReturnValue(false);
+    mockSWR(AVAILABLE);
+    render(
+      <Select open value={MODE_DIRECT}>
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <StrategySelectItems />
+        </SelectContent>
+      </Select>,
+    );
+
+    expect(screen.getByRole("option", { name: OFFICIAL_LABEL })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: MODE_RLM_OFFICIAL })).not.toBeInTheDocument();
   });
 });

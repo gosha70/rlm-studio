@@ -19,6 +19,7 @@ import { Save, RotateCcw } from "lucide-react";
 import {
   ALL_EXECUTION_MODES,
   DEFAULT_ENABLED_MODES,
+  displayModeName,
   MODE_AUTO,
   MODE_DIRECT,
   MODE_RLM,
@@ -91,8 +92,8 @@ export function ExecutionConfig({ config, onChange }: ExecutionConfigProps) {
             {ALL_EXECUTION_MODES.map((mode) => (
               <div key={mode} className="flex items-center justify-between">
                 <div>
-                  <Label htmlFor={`mode-${mode}`} className="capitalize font-medium">
-                    {mode}
+                  <Label htmlFor={`mode-${mode}`} className="font-medium">
+                    {displayModeName(mode)}
                   </Label>
                   <p className="text-xs text-muted-foreground">
                     {mode === MODE_DIRECT && "Send query directly to LLM"}
@@ -106,7 +107,7 @@ export function ExecutionConfig({ config, onChange }: ExecutionConfigProps) {
                   id={`mode-${mode}`}
                   checked={local.enabled_modes.includes(mode)}
                   onCheckedChange={() => toggleMode(mode)}
-                  aria-label={`Enable ${mode} mode`}
+                  aria-label={`Enable ${displayModeName(mode)} mode`}
                 />
               </div>
             ))}
@@ -124,8 +125,8 @@ export function ExecutionConfig({ config, onChange }: ExecutionConfigProps) {
               <SelectContent>
                 <SelectItem value={MODE_AUTO}>Auto (system decides)</SelectItem>
                 {ALL_EXECUTION_MODES.map((mode) => (
-                  <SelectItem key={mode} value={mode} className="capitalize">
-                    {mode}
+                  <SelectItem key={mode} value={mode}>
+                    {displayModeName(mode)}
                   </SelectItem>
                 ))}
               </SelectContent>

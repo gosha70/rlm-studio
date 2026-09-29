@@ -78,7 +78,7 @@ import {
   type RAGConfig,
   type CompareMatrixRequestV2,
 } from "@/lib/api";
-import { ALL_EXECUTION_MODES, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
+import { ALL_EXECUTION_MODES, displayModeName, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { useEngineAvailability } from "@/components/shared/use-engines";
 
@@ -646,7 +646,7 @@ export default function ComparePage() {
                       aria-pressed={active}
                       title={unavailableReason ?? MODE_DESCRIPTIONS[mode]}
                     >
-                      {mode}
+                      {displayModeName(mode)}
                     </button>
                   );
                 })}

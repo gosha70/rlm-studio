@@ -31,6 +31,7 @@ import {
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Trash2, Lock, Edit2, Copy, Download, ChevronDown, ChevronUp } from "lucide-react";
+import { displayModeName } from "@/lib/constants";
 import { StrategySelectItems } from "./strategy-select-items";
 
 interface ProfileCardProps {
@@ -266,8 +267,8 @@ export function ProfileCard({
                 Built-in
               </Badge>
             )}
-            <Badge variant="outline" className="text-xs capitalize">
-              {profile.strategy}
+            <Badge variant="outline" className="text-xs">
+              {displayModeName(profile.strategy)}
             </Badge>
           </div>
           <div className="flex gap-1">

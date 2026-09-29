@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { type ChatProviderConfig, type LLMProviderConfig } from "@/lib/api";
-import { MODE_RLM_OFFICIAL } from "@/lib/constants";
+import { MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
 interface ChatProviderSelectorProps {
@@ -16,9 +16,9 @@ interface ChatProviderSelectorProps {
 }
 
 const MODE_BADGES: Record<string, string> = {
-  direct: "D",
-  rlm: "R",
-  rag: "G",
+  [MODE_DIRECT]: "D",
+  [MODE_RLM]: "R",
+  [MODE_RAG]: "G",
   [MODE_RLM_OFFICIAL]: "O",
 };
 
