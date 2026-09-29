@@ -71,9 +71,19 @@ def matches(answer: str, expected: str, match: str) -> bool:
 
 
 def _contains(got: str, want: str) -> bool:
-    """Substring test, tightened to token boundaries for a numeric expectation."""
+    """Substring test, tightened to number boundaries for a numeric expectation.
+
+    The boundary has to separate "part of a longer number" from "followed by
+    punctuation", which is why the trailing side rejects a digit or a
+    separator *followed by a digit* rather than any separator: a count that
+    ends a sentence or a clause — ``"77. This includes…"``, ``"17, by my
+    count"`` — is a correct answer, and rejecting it would understate accuracy
+    as surely as the plain substring test overstated it.  Punctuation is only
+    stripped from the ends of the whole answer, so it is still there mid-text.
+    """
     if _NUMERIC_EXPECTATION.fullmatch(want):
-        return re.search(rf"(?<![\d.,]){re.escape(want)}(?![\d.,])", got) is not None
+        pattern = rf"(?<![\d.,]){re.escape(want)}(?![\d]|[.,]\d)"
+        return re.search(pattern, got) is not None
     return want in got
 
 

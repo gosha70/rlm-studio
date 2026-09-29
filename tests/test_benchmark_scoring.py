@@ -143,12 +143,34 @@ class TestNumericExpectationsMatchOnBoundaries:
             ("I found 1,072 matches", "72", False),
             ("appears 72,000 times", "72", False),
             ("the answer is 72.5", "72", False),
+            ("it appears 720 times", "72", False),
+            ("the ratio is .72", "72", False),
         ],
     )
     def test_a_count_must_appear_as_its_own_number(
         self, answer: str, expected: str, passes: bool
     ) -> None:
         assert matches(answer, expected, MATCH_CONTAINS) is passes
+
+    @pytest.mark.parametrize(
+        ("answer", "expected"),
+        [
+            ("The count is 17, based on a regex scan.", "17"),
+            ("77. This count includes wrapped occurrences.", "77"),
+            ("Answer: 77.", "77"),
+            ("I counted 77; that includes wrapped ones", "77"),
+        ],
+    )
+    def test_punctuation_after_the_number_is_not_part_of_it(
+        self, answer: str, expected: str
+    ) -> None:
+        """A count that ends a sentence or a clause is still a correct count.
+
+        Edge punctuation is stripped from the whole answer only, so it survives
+        mid-text; rejecting it would understate accuracy as surely as the plain
+        substring test overstated it.
+        """
+        assert matches(answer, expected, MATCH_CONTAINS)
 
     def test_a_thousands_separated_expectation_is_matched_as_written(self) -> None:
         assert matches("There are 1,234 of them", "1,234", MATCH_CONTAINS)
