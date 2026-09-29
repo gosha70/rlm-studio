@@ -53,6 +53,37 @@ class TestFakeRLMEngineCompliance:
         assert isinstance(self._make_engine(), RLMEnginePort)
 
 
+class TestRlmsEngineAdapterCompliance:
+    """Verify the ``rlms`` adapter satisfies RLMEnginePort structurally.
+
+    Constructing the adapter and calling ``is_available`` never imports
+    ``rlm`` eagerly, so this passes with or without the ``interop`` extra.
+    """
+
+    def _make_engine(self):
+        from rlmstudio.infrastructure.engines import RlmsEngineAdapter
+
+        return RlmsEngineAdapter(backend="openai", model="gpt-4o-mini", api_key="sk-test")
+
+    def test_has_all_rlm_engine_port_methods(self):
+        assert _has_port_methods(self._make_engine(), _RLM_ENGINE_PORT_METHODS)
+
+    def test_exposes_version_attribute(self):
+        engine = self._make_engine()
+        assert engine.version is None or isinstance(engine.version, str)
+
+    def test_is_available_returns_flag_and_reason(self):
+        available, reason = self._make_engine().is_available()
+        assert isinstance(available, bool)
+        assert isinstance(reason, str)
+        assert reason  # never silent — either the version or the install hint
+
+    def test_isinstance_rlm_engine_port(self):
+        from rlmstudio.application.ports.rlm_engine_port import RLMEnginePort
+
+        assert isinstance(self._make_engine(), RLMEnginePort)
+
+
 class TestMockLLMAdapterCompliance:
     """Verify MockLLMAdapter satisfies LLMPort structurally."""
 
