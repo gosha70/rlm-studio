@@ -15,9 +15,9 @@ OQ-1..3 in `spec.md` §5 unless the owner answers otherwise in Phase 0.
 
 ## Phase 0 — confirmations (no edits)
 - [x] T0.1 D1 confirmed (controller-side registry, no `r<K>` sandbox binding); plan-r1 D2 (stdout-cap raise) **rejected** and replaced by controller-dispatched deterministic actions. *(2026-09-30 review: both in-process sandboxes buffer the whole stdout before truncating, a sandbox-side cut leaves nothing to spill, docker has no cap plumbing; the subprocess child re-injects only the content tools so the `subcall` closure never survives the JSON namespace transfer. Default sandbox is `restricted`; `local` maps to subprocess at `server/dependencies.py:1431`.)*
-- [ ] T0.2 Confirm `LiteLLMAdapter.count_tokens(messages=...)` cost is acceptable per step for the configured providers (it calls `litellm.token_counter`); if it is slow for local models, cache per message and count only appended messages.
+- [x] T0.2 Accepted. Full candidate-message counting once per controller step is acceptable for 1.x. It duplicates `_build_params()` tokenization when `context_window` is configured, but this is CPU-local bounded work and preferable to weakening the pre-compaction estimate. Do not add per-message caching in this feature; profile after AC-9 and optimise only if token counting becomes material. If the duplicate is removed later, prefer making `_build_params()` consume a precomputed estimate over a content-sensitive cache. *(Owner, 2026-09-30.)*
 - [x] T0.3 Frontend has no trace-role union to widen: `frontend/src/lib/api.ts::TraceStep.action_type` is `string`. The canonical layer is where the work is: `domain/entities.py::TraceStep.action_type` Literal, `server/routes/_helpers.py::_canonical_action_type` (unknown → `inspect`, last row of a success → `final`), `trace_to_replay.py` (four actions). *(2026-09-30 review; see plan D7.)*
-- [ ] T0.4 Owner answers OQ-1..3 or accepts defaults.
+- [x] T0.4 OQ-1 no sandbox bindings (`r<K>` controller-only); OQ-2 `read_result` consumes a step; OQ-3 prompt version 2.2. *(Owner, 2026-09-30; rationale recorded in `spec.md` §5.)* Phase 0 closed; the wall-clock guarantee in PR 3 softened to a between-steps rule (plan D6).
 
 ## Phase 1 — result registry + `read_result` (PR 1)
 - [ ] T1.1 `application/services/result_registry.py` + `tests/test_result_registry.py` (ids, `last`, canonical JSON for list/dict, character slice/clamp, spill with character→byte checkpoints on CJK/emoji, eviction order, accounting hook, `close()` on exception).
@@ -40,8 +40,8 @@ OQ-1..3 in `spec.md` §5 unless the owner answers otherwise in Phase 0.
 
 ## Phase 3 — batched subcalls + ledger (PR 3)
 - [ ] T3.1 `core/actions.py`: `calls` + `max_concurrency` on `SubcallAction`; single form unchanged; parser tests for both.
-- [ ] T3.2 `application/services/subcall_ledger.py` + tests (equal split of cost/tokens/steps, release/re-reserve, shared absolute deadline, lock under a thread pool, parent fold-in).
-- [ ] T3.3 `run_rlm.py`: controller-dispatched subcalls (D2/D6): delete the `subcall` sandbox binding, `_make_subcall`, `parent_budget_snapshot`, `subcall_usage`; `_run_subcalls` with `copy.copy(llm)` + sandbox copy per child, pool wait bounded by the parent deadline; ordered results → one registered list result; per-child error isolation; single call = one-element batch.
+- [ ] T3.2 `application/services/subcall_ledger.py` + tests (equal split of cost/tokens/steps, release/re-reserve, common absolute deadline carried unchanged into every allowance, lock under a thread pool, parent fold-in).
+- [ ] T3.3 `run_rlm.py`: controller-dispatched subcalls (D2/D6): delete the `subcall` sandbox binding, `_make_subcall`, `parent_budget_snapshot`, `subcall_usage`; `_run_subcalls` with `copy.copy(llm)` + sandbox copy per child, each child's between-steps time limit = parent deadline (no hard pool bound, plan D6); ordered results → one registered list result; per-child error isolation; single call = one-element batch.
 - [ ] T3.4 `RunConfigDTO.subcall_max_concurrency`; provider-kind defaults (2 local / 4 cloud) in `server/dependencies.py` and `api.py`; action value `min`'d.
 - [ ] T3.5 Prompt 2.2 batched example + `chunk()` map-reduce workflow.
 - [ ] T3.6 AC-6, AC-6a, AC-7 loop tests on both paths (AC-6a with the subprocess sandbox configured); `tests/test_json_subcall.py` and `tests/integration/test_budget_enforcement.py` still green or updated for controller dispatch.

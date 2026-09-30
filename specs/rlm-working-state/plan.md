@@ -91,11 +91,16 @@ green by end of week 3; batching becomes a follow-up PR against the same spec.
   `copy.copy(llm)` and their own sandbox copy, launched by the controller
   (D2); the ledger replaces the `parent_budget_snapshot` / `subcall_usage`
   pair, which is deleted. Cost, tokens and steps are pre-reserved (equal
-  split, unused headroom released). **Wall-clock time is not split:** every
-  child gets the parent's absolute deadline and the pool wait is bounded by
-  it; two parallel children with 90 s remaining may each run up to that
-  deadline. Equal-splitting time would make batching weaker than today's
-  serial semantics.
+  split, unused headroom released). **Wall-clock time is not divided among
+  siblings:** every child gets the parent's common absolute deadline and
+  must not start another controller/LLM step after it; two parallel
+  children with 90 s remaining may each run up to that deadline.
+  Equal-splitting time would make batching weaker than today's serial
+  semantics. This is a between-steps guarantee only: `max_time_seconds` is
+  checked between actions, a copied adapter keeps its own request timeout,
+  and `ThreadPoolExecutor` cannot kill a running worker, so an in-flight
+  provider call may outlive the deadline. Clamping each child's provider
+  request timeout to the remaining headroom is out of scope for PR 3.
 - **D7 — `compaction` is a canonical action type.** Today
   `domain/entities.py::TraceStep.action_type` is
   `Literal["inspect","subcall","final","error"]`,
@@ -163,8 +168,8 @@ green by end of week 3; batching becomes a follow-up PR against the same spec.
 
 ### Item 3 — batched subcalls
 12. `core/actions.py`: `SubcallAction` accepts either `prompt`+`query` or `calls: list[{prompt, query}]` (≥1, each validated) and optional `max_concurrency`; single form unchanged.
-13. `subcall_ledger.py`: `SubcallLedger(config, parent_state, deadline, lock)` with `reserve(n_children) -> list[ChildAllowance]` (equal split of remaining cost/tokens/steps; every allowance carries the parent's absolute deadline), `release(allowance, actual_usage)`; folds actual spend into parent totals under the lock.
-14. `run_rlm.py`: controller-dispatched subcalls (D2): delete the `subcall` sandbox binding, `_make_subcall`, `parent_budget_snapshot` and `subcall_usage`; add `_run_subcalls(calls, max_concurrency)` using `ThreadPoolExecutor` with `copy.copy(llm)` and a sandbox copy per child, pool wait bounded by the parent deadline; results in order → one registered list result; per-child failure becomes an error string in that slot, never fails the batch. The single-call form is the one-element batch.
+13. `subcall_ledger.py`: `SubcallLedger(config, parent_state, deadline, lock)` with `reserve(n_children) -> list[ChildAllowance]` (equal split of remaining cost/tokens/steps; every allowance carries the parent's common absolute deadline, never a share of it), `release(allowance, actual_usage)`; folds actual spend into parent totals under the lock.
+14. `run_rlm.py`: controller-dispatched subcalls (D2): delete the `subcall` sandbox binding, `_make_subcall`, `parent_budget_snapshot` and `subcall_usage`; add `_run_subcalls(calls, max_concurrency)` using `ThreadPoolExecutor` with `copy.copy(llm)` and a sandbox copy per child, each child carrying the parent's absolute deadline as its between-steps limit (the pool wait is not a hard bound, see D6); results in order → one registered list result; per-child failure becomes an error string in that slot, never fails the batch. The single-call form is the one-element batch.
 15. Concurrency cap: `RunConfigDTO.subcall_max_concurrency`; `server/dependencies.py` / `api.py` set 2 for local providers, 4 for cloud from the provider catalog; the action's `max_concurrency` is `min`'d against it.
 16. Prompt 2.2: batched example after the single-call example; `chunk()` → batched subcall map-reduce workflow.
 
@@ -186,5 +191,6 @@ green by end of week 3; batching becomes a follow-up PR against the same spec.
 | Large `grep`/`chunk` results held in the parent process | Complete value goes to the registry first; above `spill_result_above_bytes` it is on disk; AC-3 asserts the in-memory bound |
 | Token estimate undercounts → overflow anyway | Overflow retry path (G6) is the backstop; reserve default 4,096 leaves margin |
 | Ledger equal split starves a heavy child | Unused headroom is released and re-reservable; a child that runs out stops with a classified error, batch continues; time is shared, never split |
+| Child provider call outlives the parent deadline | Documented limitation (D6): between-steps guarantee only; revisit by clamping child request timeouts to remaining headroom if AC-9 shows it matters |
 | Local backends flooded by parallel children | Provider-kind cap (2) is authoritative over the model's request |
 | Prompt growth on small models | 2.2 adds one table row and two short examples; measured by the same bench run |

@@ -113,10 +113,13 @@ fallback. The new tool tightens this rather than widening it.
 - G9 **Budget ledger.** Lock-protected, owned by the parent run. Cost,
   tokens and steps are additive: pre-reserved per child before launch (equal
   split), unused headroom returned on completion. **Wall-clock time is not
-  split:** every child receives the parent's absolute deadline, and the batch
-  wait is bounded by that same deadline, so parallel children overlap rather
-  than each consuming a slice. Children get an isolated adapter
-  (`copy.copy`) — `_active_model` is mutable.
+  divided among siblings:** every child receives the parent's common
+  absolute deadline and must not start another controller/LLM step after
+  it; parallel children overlap rather than each consuming a slice.
+  In-flight provider calls remain subject to the provider adapter's
+  existing request-timeout semantics (`max_time_seconds` is a
+  between-actions check and cannot interrupt a call in progress). Children
+  get an isolated adapter (`copy.copy`) — `_active_model` is mutable.
 - G9a **Subcalls are controller-dispatched.** The `subcall` action no longer
   compiles to `subcall(...)` Python sent through the sandbox; the controller
   runs the child `RunRLMUseCase` itself. This also fixes an existing defect:
@@ -149,7 +152,9 @@ sandbox-side truncation leaves the controller nothing to spill).
   original payload byte-for-byte.
 - I4 Sum of children's reserved cost/tokens/steps never exceeds the parent's
   remaining budget at reservation time; the parent's totals fold in every
-  child's actual spend; no child outlives the parent's deadline.
+  child's actual spend; no child starts a controller/LLM step after the
+  parent's deadline (an in-flight provider call may still run to the
+  adapter's request timeout).
 - I4a A v2 `subcall` (single or batched) never executes Python in the sandbox.
 - I5 The base v2 prompt gains one tool and one example; the "exactly one JSON
   object" rule is not weakened.
@@ -181,10 +186,11 @@ Hard (deterministic fakes, run in CI):
   retry of N; raising twice on N → existing fallback with `overflow_at_step`
   recorded.
 - AC-6 Four concurrent children never exceed the parent's `max_cost` /
-  `max_tokens` / `max_steps`; two children each running for most of the
-  parent's remaining time complete within the parent's deadline (time is
-  shared, not split); a local-provider profile is capped at 2 regardless of
-  the requested `max_concurrency`.
+  `max_tokens` / `max_steps`; two children may each consume most of the
+  same remaining wall-clock interval, and the ledger does not divide that
+  interval by child count; neither child starts a step after the parent's
+  deadline; a local-provider profile is capped at 2 regardless of the
+  requested `max_concurrency`.
 - AC-6a A single and a batched v2 `subcall` complete correctly with the
   subprocess sandbox configured (the sandbox is never invoked for them).
 - AC-7 Telemetry attributes each child's spend to the parent run; the batched
@@ -199,12 +205,14 @@ Regression (benchmark, owner-run, not a merge gate):
   accuracy regression; judge deltas within rep-to-rep range. Reaching
   `final` on every case is not required.
 
-## 5. Open questions (defaults apply if unanswered)
+## 5. Open questions (resolved)
+All three resolved by the owner on 2026-09-30 (tasks T0.4).
 - OQ-1 Bind `r<K>` into the sandbox namespace for the in-process sandboxes
-  (restricted/local) only? Default: **no** in this feature; `read_result` is
-  the only access path (plan D1). Deterministic actions never touch the
-  sandbox (G0), so the question only concerns the v1 code path.
-- OQ-2 Should `read_result` count toward `max_steps`? Default: **yes**
-  (it is an LLM turn; budgets stay honest).
-- OQ-3 Bump the v2 prompt version to 2.2? Default: **yes**; the loop's
-  runtime fingerprint records it.
+  only? **No.** `r<K>` stays controller-only; G0 makes that the clean
+  architecture, and binding selected sandboxes would reintroduce divergent
+  behaviour for no v2 benefit.
+- OQ-2 Should `read_result` count toward `max_steps`? **Yes.** It is
+  another model/controller turn; a free readback would let repeated reads
+  evade the convergence guard.
+- OQ-3 Bump the v2 prompt version to 2.2? **Yes.** `read_result` now and the
+  extended `subcall` later change the deterministic protocol surface.
