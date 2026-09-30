@@ -29,35 +29,57 @@ class ToolType(str, Enum):
     OUTLINE_FILE = "outline_file"
     SELECT = "select"
     CHUNK = "chunk"
+    READ_RESULT = "read_result"
 
 
 @dataclass
 class InspectAction:
     """Action to inspect content using tools."""
 
-    tool: str  # grep, peek, grep_file, peek_file, outline_file, select, chunk
+    tool: str  # grep, peek, grep_file, peek_file, outline_file, select, chunk, read_result
     args: dict[str, Any]
     note: str | None = None
 
     def validate(self) -> None:
         """Validate the inspect action."""
-        if self.tool not in [
-            "grep",
-            "peek",
-            "grep_file",
-            "peek_file",
-            "outline_file",
-            "select",
-            "chunk",
-        ]:
+        if self.tool not in INSPECT_TOOLS:
             raise ValueError(
-                "Invalid tool: "
-                f"{self.tool}. Must be one of: grep, peek, grep_file, peek_file, "
-                "outline_file, select, chunk"
+                f"Invalid tool: {self.tool}. Must be one of: {', '.join(INSPECT_TOOLS)}"
             )
 
         if not isinstance(self.args, dict):
             raise ValueError(f"args must be a dictionary, got: {type(self.args)}")
+
+        if self.tool == "read_result":
+            self._validate_read_result_args()
+
+    def _validate_read_result_args(self) -> None:
+        name = self.args.get("name", "last")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("read_result 'name' must be 'last' or a result id such as 'r3'")
+        for key in ("start", "end", "max_chars"):
+            value = self.args.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"read_result {key!r} must be an integer, got {value!r}")
+        max_chars = self.args.get("max_chars")
+        if max_chars is not None and max_chars <= 0:
+            raise ValueError("read_result 'max_chars' must be positive")
+
+
+INSPECT_TOOLS: tuple[str, ...] = (
+    "grep",
+    "peek",
+    "grep_file",
+    "peek_file",
+    "outline_file",
+    "select",
+    "chunk",
+    "read_result",
+)
+"""Tools a v2 ``inspect`` action may name.  ``read_result`` reads back a
+registered result (``specs/rlm-working-state``); the others navigate ``P``."""
 
 
 @dataclass

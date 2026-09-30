@@ -20,15 +20,17 @@ OQ-1..3 in `spec.md` §5 unless the owner answers otherwise in Phase 0.
 - [x] T0.4 OQ-1 no sandbox bindings (`r<K>` controller-only); OQ-2 `read_result` consumes a step; OQ-3 prompt version 2.2. *(Owner, 2026-09-30; rationale recorded in `spec.md` §5.)* Phase 0 closed; the wall-clock guarantee in PR 3 softened to a between-steps rule (plan D6).
 
 ## Phase 1 — result registry + `read_result` (PR 1)
-- [ ] T1.1 `application/services/result_registry.py` + `tests/test_result_registry.py` (ids, `last`, canonical JSON for list/dict, character slice/clamp, spill with character→byte checkpoints on CJK/emoji, eviction order, accounting hook, `close()` on exception).
-- [ ] T1.2 `application/services/inspect_dispatcher.py` + tests (each content tool with validated args; bad-arg error path); a parametrised test runs each tool through the dispatcher and through the restricted sandbox and compares.
-- [ ] T1.3 `application/services/execution_preview.py`; `_format_execution` delegates for registered results; marker text per spec G3; tests.
-- [ ] T1.4 `core/actions.py`: `read_result` in the tool list + arg validation; parser tests.
-- [ ] T1.5 `run_rlm.py` sync loop: registry lifecycle; v2 `inspect` and `_auto_inspect_missing_file` through the dispatcher (register full value, then preview); `read_result` answered from the registry (D4); v1 code path untouched.
-- [ ] T1.6 `run_rlm.py` async loop: same call sites; a test asserts normalised-semantic-trace equality for the same scripted run on both paths (timing/stream fields excluded).
-- [ ] T1.7 `RunConfigDTO` (`spill_result_above_bytes`, `max_registry_bytes`, `max_spill_bytes`) + `rlm_studio_config.default.yaml` + `server/dependencies.py` / `api.py` plumbing.
-- [ ] T1.8 Prompt 2.2 (tool row, example, marker note); fingerprint records version; `docs/rlm-prompt-tuning.md` note.
-- [ ] T1.9 AC-1, AC-2, AC-3, AC-3a loop tests on both paths; existing v1 sandbox tests still green on restricted + subprocess (docker as `integration`).
+- [x] T1.1 `application/services/result_registry.py` + `tests/test_result_registry.py` (ids, `last`, canonical JSON for list/dict, character slice/clamp, spill with character→byte checkpoints on CJK/emoji, eviction order, accounting hook, `close()` on exception).
+- [x] T1.2 `application/services/inspect_dispatcher.py` + tests (each content tool with validated args; bad-arg error path); a parametrised test runs each tool through the dispatcher and through the restricted sandbox and compares.
+- [x] T1.3 `application/services/execution_preview.py`; `_format_execution` delegates for registered results; marker text per spec G3; tests.
+- [x] T1.4 `core/actions.py`: `read_result` in the tool list + arg validation; parser tests.
+- [x] T1.5 `run_rlm.py` sync loop: registry lifecycle; v2 `inspect` and `_auto_inspect_missing_file` through the dispatcher (register full value, then preview); `read_result` answered from the registry (D4); v1 code path untouched.
+- [x] T1.6 `run_rlm.py` async loop: same call sites; a test asserts normalised-semantic-trace equality for the same scripted run on both paths (timing/stream fields excluded).
+- [x] T1.7 `RunConfigDTO` (`spill_result_above_bytes`, `max_registry_bytes`, `max_spill_bytes`) + `rlm_studio_config.default.yaml` + `server/dependencies.py` / `api.py` plumbing.
+- [x] T1.8 Prompt 2.2 (tool row, example, marker note); fingerprint records version; `docs/rlm-prompt-tuning.md` note.
+- [x] T1.9 AC-1, AC-2, AC-3, AC-3a loop tests on both paths; existing v1 sandbox tests still green on restricted + subprocess (docker as `integration`).
+
+*(Phase 1 landed 2026-09-30: `result_registry.py` (ids, `last`, canonical JSON, character-exact spill with 64K-char checkpoints, memory/spill bounds, eviction never `last`, `close()`), `inspect_dispatcher.py` (all seven tools + `read_result`, display code byte-identical to the old sandbox code, errors as text), `execution_preview.py`; `read_result` in `core/actions.py`; `ParsedResponse.inspect_action`; both loops dispatch v2 inspects and the coverage auto-inspect on the controller, register the full value, preview it, and re-mark message-side cuts with the registry offset (readbacks carry `readback_of`); `RunConfigDTO` caps plumbed from the library `execution:` config through `api.py` and the server; prompt 2.2 with `prompt_version` in the fingerprint; tests `test_result_registry.py` (AC-3/3a), `test_inspect_dispatcher.py`, `test_rlm_working_state_loop.py` (AC-1, AC-2 without the subcall leg — subcall registration arrives with PR 3, AC-3, sync/async parity on a normalised trace). Registry accounting bug found by AC-3 during implementation: a result that spilled immediately was never counted in memory, so the spill went negative; fixed by counting first, spilling second.)*
 
 ## Phase 2 — lossless compaction (PR 2)
 - [ ] T2.1 `application/services/context_compaction.py` (`MessageTokenCounter` protocol per D4a, `estimate_tokens`, `should_compact`, `compact_messages`) + tests (threshold on candidate `call_messages`, capability vs fallback, idempotency, stub text, index sync).

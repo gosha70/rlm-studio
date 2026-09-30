@@ -13,8 +13,23 @@ from pathlib import Path
 from typing import Any
 
 # Cache for loaded templates
+_prompt_version_cache: dict[str, str] = {}
 _template_cache: dict[str, str] = {}
 _yaml_doc_cache: dict[str, Any] = {}
+
+
+def get_system_prompt_version(version: str = "2.0") -> str:
+    """The ``version`` recorded inside the prompt file for ``version``.
+
+    The file is selected by the *major* version (``2.0`` →
+    ``system_prompt_v2_0.yaml``); its metadata carries the exact protocol
+    revision (``2.2`` once ``read_result`` exists), which the RLM runtime
+    fingerprint records so a trace says which prompt the model saw.
+    """
+    cache_key = f"system_prompt_v{version}"
+    if cache_key not in _prompt_version_cache:
+        get_default_system_prompt(version=version)
+    return _prompt_version_cache.get(cache_key, version)
 
 
 def get_default_system_prompt(version: str = "2.0") -> str:
@@ -63,6 +78,7 @@ def get_default_system_prompt(version: str = "2.0") -> str:
             raise ValueError(f"YAML prompt file must have a 'template' key: {filename}")
         template = str(data["template"])
         _template_cache[cache_key] = template
+        _prompt_version_cache[cache_key] = str(data.get("version") or version)
         return template
 
     raise ValueError(

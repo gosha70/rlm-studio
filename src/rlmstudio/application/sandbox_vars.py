@@ -101,6 +101,20 @@ RLM_DEFAULT_MAX_TOKENS_BUDGET = 50000
 RLM_DEFAULT_MAX_COST_USD = 2.0
 RLM_DEFAULT_MAX_RECURSION_DEPTH = 5
 
+# Result registry (specs/rlm-working-state): every v2 inspect / subcall
+# result is kept in full on the controller side and previewed to the model.
+RLM_DEFAULT_RESULT_PREVIEW_CHARS = 10000
+"""Characters of a registered result shown to the model per step; the rest
+stays addressable through the ``read_result`` inspect tool."""
+RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES = 16 * 1024 * 1024
+"""In-memory per-result threshold: a larger result is spilled to the run's
+scratch directory (it is kept, not dropped)."""
+RLM_DEFAULT_MAX_REGISTRY_BYTES = 64 * 1024 * 1024
+"""In-memory total for all registered results of one run."""
+RLM_DEFAULT_MAX_SPILL_BYTES = 256 * 1024 * 1024
+"""On-disk total for spilled results of one run; beyond it the oldest spilled
+results are evicted (never the most recent one)."""
+
 RUNTIME_DEFAULT_TEMPERATURE = 0.7
 RUNTIME_DEFAULT_TOP_P = 1.0
 RUNTIME_DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -123,6 +137,13 @@ TRACE_KEY_ELAPSED_SECONDS = "elapsed_seconds"
 TRACE_KEY_MODEL = "model"
 TRACE_KEY_MODE = "mode"
 TRACE_KEY_CLAMP = "clamp"
+
+TRACE_KEY_RESULT_ID = "result_id"
+"""Registry id (``r<K>``) of the result an execution trace row previews."""
+TRACE_KEY_RESULT_CHARS = "result_chars"
+"""Full character length of that registered result (the row shows a preview)."""
+TRACE_KEY_READBACK_OF = "readback_of"
+"""On a ``read_result`` execution row: the id of the result that was read."""
 
 TRACE_KEY_RECURSION_DEPTH = "recursion_depth"
 """Depth of a nested sub-call entry (``1`` = a child query spawned from the root REPL)."""

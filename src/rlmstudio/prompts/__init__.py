@@ -8,6 +8,7 @@ from .templates import (
     get_default_system_prompt,
     get_mode_system_prompt,
     get_rlm_message,
+    get_system_prompt_version,
 )
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "format_system_prompt",
     "get_mode_system_prompt",
     "get_rlm_message",
+    "get_system_prompt_version",
 ]

@@ -11,9 +11,13 @@ from typing import Any
 
 from rlmstudio.application.sandbox_vars import (
     MODE_AUTO,
+    RLM_DEFAULT_MAX_REGISTRY_BYTES,
+    RLM_DEFAULT_MAX_SPILL_BYTES,
     RLM_DEFAULT_MAX_STEPS,
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
+    RLM_DEFAULT_RESULT_PREVIEW_CHARS,
+    RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES,
     RLM_DEFAULT_STALL_LIMIT,
 )
 
@@ -148,6 +152,10 @@ class RunConfigDTO:
     repeat_limit: int = RLM_DEFAULT_REPEAT_LIMIT
     nudge_at_fraction: float = RLM_DEFAULT_NUDGE_AT_FRACTION
     system_prompt_extra: str | None = None  # appended to the built-in RLM system prompt
+    result_preview_chars: int = RLM_DEFAULT_RESULT_PREVIEW_CHARS
+    spill_result_above_bytes: int = RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES
+    max_registry_bytes: int = RLM_DEFAULT_MAX_REGISTRY_BYTES
+    max_spill_bytes: int = RLM_DEFAULT_MAX_SPILL_BYTES
     verbose: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 

@@ -198,6 +198,17 @@ _PROVIDER_PREFIXES: dict[str, str] = {
 }
 
 
+def _registry_config_kwargs() -> dict[str, int]:
+    """Result-registry limits from the library config (``execution:`` section)."""
+    from rlmstudio.config import get_default_config
+
+    try:
+        kwargs: dict[str, int] = get_default_config().execution.registry_kwargs()
+    except Exception:  # config unreadable — fall back to the DTO defaults
+        return {}
+    return kwargs
+
+
 def _auto_detect_provider() -> str | None:
     """Detect the LLM provider from environment variables."""
     if os.environ.get("OPENAI_API_KEY"):
@@ -417,6 +428,7 @@ def _setup(
         model=prefixed_model,
         max_steps=max_steps,
         stall_limit=stall_limit,
+        **_registry_config_kwargs(),
     )
 
     resolved_emb_key = (
@@ -803,7 +815,7 @@ def build_matrix_slots(
                 storage = SQLiteStorageAdapter(":memory:")
                 extra = {"collection": f"rag_{uuid.uuid4().hex}"}
 
-            base = base_config or RunConfigDTO(max_steps=max_steps)
+            base = base_config or RunConfigDTO(max_steps=max_steps, **_registry_config_kwargs())
             slot_config = dataclasses.replace(
                 base,
                 mode=mode,

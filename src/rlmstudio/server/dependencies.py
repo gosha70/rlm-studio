@@ -1443,7 +1443,24 @@ class AppState:
             max_recursion_depth=b.max_recursion_depth,
             repeat_limit=b.repeat_limit,
             nudge_at_fraction=b.nudge_at_fraction,
+            **_registry_config_kwargs(),
         )
+
+
+def _registry_config_kwargs() -> dict[str, int]:
+    """Result-registry limits from the library config (``execution:`` section).
+
+    The Studio config file (``~/.rlm-studio/config.json``) has no UI for these
+    yet; they come from the YAML library config and fall back to the DTO
+    defaults when it cannot be read.
+    """
+    from rlmstudio.config import get_default_config
+
+    try:
+        kwargs: dict[str, int] = get_default_config().execution.registry_kwargs()
+    except Exception:
+        return {}
+    return kwargs
 
 
 # Singleton state -- created once at startup, injected into routes
