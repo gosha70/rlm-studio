@@ -11,6 +11,7 @@ origin:
     - https://arxiv.org/abs/2608.23552                    # Prime Agent paper
   transcripts:
     - "Owner + external review, 2026-09-30: design review of #77 closed at revision 3; 'move #77 into implementation planning', order 1 → 2 → 3, item 1 establishes the registry API that compaction and batching both consume."
+    - "External review of plan r1, 2026-09-30: keep D1 (controller-side registry) with a corrected rationale; replace D2 (stdout-cap raise) with controller-dispatched deterministic actions; fix registry representation, spill offsets, the compaction API boundary, canonical trace types, and wall-clock semantics in the ledger."
   origin_claim: |
     Studio's RLM loop discards information that should stay in the run's
     working state: inspect output past the stdout cap is lost, a context
@@ -52,6 +53,12 @@ fallback. The new tool tightens this rather than widening it.
 
 ## 2. Goals / non-goals
 **Goals**
+- G0 **Deterministic actions are controller operations.** Every v2 JSON
+  action (`inspect` tools, `read_result`, single and batched `subcall`) is
+  executed by the controller against `content` directly; the sandbox runs
+  only free-form Python (the v1 code-block path). Pipeline:
+  parse JSON action → controller executes it → registry owns the full result
+  → the model receives a bounded preview.
 - G1 **Result registry.** Every *primary* result (inspect tools other than
   `read_result`, single/batched subcalls, automatic coverage inspections) gets
   a monotonically increasing id `r1, r2, …` from a registry counter
@@ -64,50 +71,86 @@ fallback. The new tool tightens this rather than widening it.
 - G3 **Preview marker.** A truncated preview ends with
   `... (preview truncated: N chars total; read_result('r<K>', start=<cap>) for more)`
   naming the id explicitly.
-- G4 **Enforceable memory bound.** Per-result cap `max_result_bytes`
-  (16 MiB), in-memory total `max_registry_bytes` (64 MiB), spill budget
-  `max_spill_bytes` (256 MiB). Oversized/displaced results spill to a
-  per-run scratch directory, never dropped while spill budget remains; `last`
-  is never dropped; scratch dir removed at run end, including on exceptions.
-- G5 **Deterministic, lossless compaction.** Before each LLM call estimate
-  the *pending* `call_messages` (adapter `count_tokens(messages=...)`;
-  fallback `last_clamp_info` + chars/4 for what was appended since). Compact
-  when estimate > `context_window − reserve_tokens` (4,096). Keep system +
+- G4 **Enforceable memory bound.** In-memory per-result threshold
+  `spill_result_above_bytes` (16 MiB), in-memory total `max_registry_bytes`
+  (64 MiB), spill budget `max_spill_bytes` (256 MiB). A result above the
+  threshold, or displaced by the total, spills to a per-run scratch
+  directory and is never dropped while spill budget remains; `last` is never
+  dropped; scratch dir removed at run end, including on exceptions. The
+  registry always receives the *complete* returned value (G0), so nothing is
+  lost before it can be spilled.
+- G4a **Canonical representation.** A registered result is one text payload:
+  a `str` result is stored unchanged; a structured result (`chunk()` →
+  `list[str]`, a batched subcall → `list[str]`) is stored as stable JSON
+  (`json.dumps(..., ensure_ascii=False, indent=2)`). `read_result` always
+  slices that one canonical text by **character** offset.
+- G4b **Character offsets on spilled files.** Byte quotas and character
+  reads are reconciled by storing, per spilled result, a sparse
+  character→byte checkpoint table (every 64 K characters) built while
+  writing UTF-8; a read decodes from the nearest checkpoint. Reads on
+  non-ASCII content are exact (tested with CJK and emoji).
+- G5 **Deterministic, lossless compaction.** Before each LLM call, build
+  the candidate `call_messages` first (nudges and the last-step
+  `force_final_nudge` included), estimate *that exact payload* through a
+  message-token-counter capability (see plan D4) with a `last_clamp_info`
+  + chars/4 fallback, compact `messages` if needed, then rebuild
+  `call_messages`. Compact when estimate > `context_window − reserve_tokens`
+  (4,096). Keep system +
   query + last `keep_last` (4) assistant/execution pairs; older execution
   messages become `[result r4: 31,842 chars; read_result('r4', ...)]`
   stubs, older assistant actions become their one-line code. Idempotent.
 - G6 **Overflow → compact → retry once** on the same controller step; a
   second overflow falls through to today's fallback with the step recorded.
-- G7 **Compaction trace entry** (`role: compaction`; step, tokens
-  before/after, ids stubbed, reason `threshold` | `overflow_retry`) shown in
-  Traces and Replay, counted by the outcome classifier.
+- G7 **Compaction is a first-class canonical action.** Raw trace row
+  `role: compaction` (step, tokens before/after, ids stubbed, reason
+  `threshold` | `overflow_retry`) → canonical `action_type: compaction` in
+  `domain/entities.py::TraceStep`, the server canonicaliser and telemetry;
+  never coerced to `inspect` and never promoted to `final`; rendered as its
+  own Replay step and timeline row.
 - G8 **Batched subcall action**, backward compatible:
   `{"type":"subcall","calls":[{prompt,query},…],"max_concurrency":int}`;
   results in order, registered as one primary list result.
-- G9 **Budget ledger.** Lock-protected, owned by the parent run; pre-reserves
-  a partition of remaining cost/tokens/steps/time per child before launch
-  (equal split), returns unused headroom on completion. Children get an
-  isolated adapter (`copy.copy`) — `_active_model` is mutable.
+- G9 **Budget ledger.** Lock-protected, owned by the parent run. Cost,
+  tokens and steps are additive: pre-reserved per child before launch (equal
+  split), unused headroom returned on completion. **Wall-clock time is not
+  split:** every child receives the parent's absolute deadline, and the batch
+  wait is bounded by that same deadline, so parallel children overlap rather
+  than each consuming a slice. Children get an isolated adapter
+  (`copy.copy`) — `_active_model` is mutable.
+- G9a **Subcalls are controller-dispatched.** The `subcall` action no longer
+  compiles to `subcall(...)` Python sent through the sandbox; the controller
+  runs the child `RunRLMUseCase` itself. This also fixes an existing defect:
+  the subprocess sandbox's JSON namespace transfer drops the non-serialisable
+  `subcall` closure and the child worker re-injects only the content tools,
+  so v2 subcalls cannot work in that sandbox today.
 - G10 **Concurrency cap** from profile config: default 2 for local providers
   (Ollama, LM Studio, vLLM), 4 for cloud; the model's request never raises it.
-- G11 Both loop copies (`execute`, `execute_async`) behave identically; all
-  three sandboxes (restricted, subprocess, docker) pass the same tests.
+- G11 Both loop copies (`execute`, `execute_async`) behave identically
+  (compared on a normalised semantic trace, timing and stream fields
+  excluded); deterministic actions no longer depend on the sandbox, so
+  sandbox parametrisation applies only to the v1 free-form path.
 
 **Non-goals** (see #77 table): persistent child sessions, agent messaging,
 harness CRUD for memories/skills/subagents, daemon sessions, autonomous
 mode, unsandboxed execution, summary-based compaction, refinement (#78),
-binding `r<K>` into the *subprocess* sandbox namespace (see plan §1
-deviation D1).
+binding `r<K>` into any sandbox namespace (plan D1); raising the sandbox
+stdout cap (the rejected plan-r1 D2 — the in-process sandboxes buffer the
+whole stdout before truncating, so a larger cap bounds nothing, and a
+sandbox-side truncation leaves the controller nothing to spill).
 
 ## 3. Invariants
 - I1 `last` changes only when a primary result is registered.
 - I2 In-memory registry bytes ≤ `max_registry_bytes` at every step; a result
-  above `max_result_bytes` is spilled, not held.
+  above `spill_result_above_bytes` is spilled, not held; the registry stores
+  the complete returned value before any preview is derived.
+- I2a `read_result(name, start, end)` on a spilled result equals the same
+  slice of the in-memory canonical text, for any Unicode content.
 - I3 After compaction, `read_result(r<K>)` for every stubbed id returns the
   original payload byte-for-byte.
-- I4 Sum of children's reserved budgets never exceeds the parent's remaining
-  budget at reservation time; the parent's totals fold in every child's
-  actual spend.
+- I4 Sum of children's reserved cost/tokens/steps never exceeds the parent's
+  remaining budget at reservation time; the parent's totals fold in every
+  child's actual spend; no child outlives the parent's deadline.
+- I4a A v2 `subcall` (single or batched) never executes Python in the sandbox.
 - I5 The base v2 prompt gains one tool and one example; the "exactly one JSON
   object" rule is not weakened.
 - I6 Existing single-call `subcall` payloads and all current tests keep
@@ -119,22 +162,36 @@ Hard (deterministic fakes, run in CI):
   `read_result` calls on `last`; the id does not change between reads.
 - AC-2 Ids are contiguous across a run containing a soft nudge, a repeated-
   output retry and a folded-in subcall; `last` equals the highest id.
-- AC-3 A result above `max_result_bytes` is spilled and readable; a run whose
-  results exceed `max_registry_bytes` never holds more in memory (asserted
-  via the registry's accounting hook).
-- AC-4 Fake adapter with a fixed `context_window` and a chars/4
-  `count_tokens`: compaction fires exactly when the pending prompt crosses
-  the threshold and never when headroom suffices.
+- AC-3 A result above `spill_result_above_bytes` is spilled and readable; a
+  run whose results exceed `max_registry_bytes` never holds more in memory
+  (asserted via the registry's accounting hook); a `chunk()` result and a
+  batched-subcall list are stored as canonical JSON and sliced by character.
+- AC-3a Character-offset reads on a spilled result containing CJK and emoji
+  match the in-memory slice exactly.
+- AC-4 Fake adapter with a fixed `context_window` and a chars/4 message
+  counter: compaction fires exactly when the candidate `call_messages`
+  (including the last-step `force_final_nudge`) crosses the threshold and
+  never when headroom suffices; a fake without the message-counter
+  capability takes the fallback path and still compacts.
+- AC-4a A `compaction` raw row canonicalises to `action_type: compaction`
+  in the server helper, telemetry and the replay builder, is never mapped
+  to `inspect`, and is not promoted to `final` when it is the terminal row
+  of a successful run.
 - AC-5 Fake adapter raising overflow once on step N → compaction + successful
   retry of N; raising twice on N → existing fallback with `overflow_at_step`
   recorded.
 - AC-6 Four concurrent children never exceed the parent's `max_cost` /
-  `max_tokens` / `max_steps`; a local-provider profile is capped at 2
-  regardless of the requested `max_concurrency`.
+  `max_tokens` / `max_steps`; two children each running for most of the
+  parent's remaining time complete within the parent's deadline (time is
+  shared, not split); a local-provider profile is capped at 2 regardless of
+  the requested `max_concurrency`.
+- AC-6a A single and a batched v2 `subcall` complete correctly with the
+  subprocess sandbox configured (the sandbox is never invoked for them).
 - AC-7 Telemetry attributes each child's spend to the parent run; the batched
   result is readable by `read_result` and stubbed by compaction.
-- AC-8 AC-1..7 pass on `execute` and `execute_async`, and AC-1/3 on all three
-  sandboxes.
+- AC-8 AC-1..7 pass on `execute` and `execute_async` (normalised semantic
+  trace equality); the v1 free-form path keeps its existing sandbox tests
+  on restricted and subprocess (docker as `integration`).
 
 Regression (benchmark, owner-run, not a merge gate):
 - AC-9 `longdoc-v1` with an 8K-window local model: overflow-induced limit
@@ -145,7 +202,8 @@ Regression (benchmark, owner-run, not a merge gate):
 ## 5. Open questions (defaults apply if unanswered)
 - OQ-1 Bind `r<K>` into the sandbox namespace for the in-process sandboxes
   (restricted/local) only? Default: **no** in this feature; `read_result` is
-  the only access path (plan D1).
+  the only access path (plan D1). Deterministic actions never touch the
+  sandbox (G0), so the question only concerns the v1 code path.
 - OQ-2 Should `read_result` count toward `max_steps`? Default: **yes**
   (it is an LLM turn; budgets stay honest).
 - OQ-3 Bump the v2 prompt version to 2.2? Default: **yes**; the loop's
