@@ -52,6 +52,7 @@ AGENTS.md
 !/specs/rebrand-rlm-studio/
 !/specs/interop-official-rlm/
 !/specs/benchmarks-v1/
+!/specs/rlm-working-state/
 # Public texts fetched by `rlm-studio bench --fetch` (pinned by sha256 in the dataset)
 /benchmarks/corpus/
 /.git-rewrite
