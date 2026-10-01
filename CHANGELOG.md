@@ -163,6 +163,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   on a chunked Deflate response with trailing bytes) and CVE-2026-97689
   (unbounded buffering of a chunk-size line that never ends; transitive via
   requests).
+- `next` 16.3.5 → 16.3.8 (frontend) — GHSA-vcvr-r3jv-pc5j, remote code
+  execution in `next/og`'s `ImageResponse`, critical, affecting
+  `>=16.2.0 <16.3.6`. Nothing in `frontend/src` imports `next/og` or
+  `ImageResponse`, so there is no reachable path, but the vulnerable code
+  shipped in the bundle. The pin is exact, which is why Dependabot could not
+  propose the fix itself; `npm audit --omit=dev` is clean after the bump.
 - `virtualenv>=21.7.13` — PYSEC-2026-4011 (a downloaded seed wheel was never
   verified), PYSEC-2026-4012 (`pyvenv.cfg` injection via `--prompt`),
   PYSEC-2026-4013 (double-quoting in `activate` / `activate.fish` runs shell
