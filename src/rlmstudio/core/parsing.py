@@ -5,6 +5,7 @@
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -16,6 +17,11 @@ class ParsedResponse:
     final_var: str | None = None
     raw_text: str = ""
     is_inspect: bool = False  # True when code was generated from a v2.0 inspect action
+    inspect_action: Any = None
+    """The parsed v2.0 :class:`~rlmstudio.core.actions.InspectAction`, when the
+    response was a JSON inspect action.  The controller executes it directly
+    (``application/services/inspect_dispatcher.py``); ``code`` then holds the
+    display form recorded in the trace, not code sent to the sandbox."""
 
     @property
     def has_code(self) -> bool:

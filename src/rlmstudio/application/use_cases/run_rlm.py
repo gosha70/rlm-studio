@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from rlmstudio.application.dto import (
+    ExecutionResultDTO,
     LLMResponseDTO,
     RunConfigDTO,
     RunResultDTO,
@@ -31,10 +32,16 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_INPUT_TOKENS,
     TRACE_KEY_MODEL,
     TRACE_KEY_OUTPUT_TOKENS,
+    TRACE_KEY_READBACK_OF,
+    TRACE_KEY_RESULT_CHARS,
+    TRACE_KEY_RESULT_ID,
     TRACE_KEY_ROLE,
     TRACE_KEY_SEQ,
     TRACE_KEY_STEP,
 )
+from rlmstudio.application.services.execution_preview import format_preview, truncation_marker
+from rlmstudio.application.services.inspect_dispatcher import dispatch_inspect, display_code
+from rlmstudio.application.services.result_registry import ReadSlice, ResultRef, ResultRegistry
 from rlmstudio.domain.entities import BudgetConfig, BudgetState
 from rlmstudio.domain.exceptions import BudgetExceededError
 from rlmstudio.prompts import get_rlm_message
@@ -85,6 +92,20 @@ class RunRLMUseCase:
             RunResultDTO with the final answer and execution metrics.
         """
         config = config or RunConfigDTO(mode="rlm")
+        registry = self._new_registry(config)
+        try:
+            return self._execute_sync(content, query, config, registry)
+        finally:
+            registry.close()
+
+    def _execute_sync(
+        self,
+        content: str,
+        query: str,
+        config: RunConfigDTO,
+        registry: ResultRegistry,
+    ) -> RunResultDTO:
+        """The synchronous loop body; ``execute`` owns the registry lifecycle."""
         start = time.time()
 
         budget_config = BudgetConfig(
@@ -309,6 +330,7 @@ class RunRLMUseCase:
                             self._auto_inspect_missing_file(
                                 content=content,
                                 config=config,
+                                registry=registry,
                                 messages=messages,
                                 trace=trace,
                                 trace_seq=trace_seq,
@@ -362,7 +384,21 @@ class RunRLMUseCase:
                     parent_budget_snapshot["cost"] = cumulative_cost
                     parent_budget_snapshot["tokens"] = float(cumulative_input + cumulative_output)
                     parent_budget_snapshot["steps"] = float(budget_state.steps)
-                    exec_result = self._sandbox.execute(parsed.code)
+                    result_ref: ResultRef | None = None
+                    readback: ReadSlice | None = None
+                    if parsed.inspect_action is not None:
+                        # v2 inspect actions are deterministic controller
+                        # operations: run against the content, register the
+                        # complete value, preview it (specs/rlm-working-state).
+                        exec_result, result_ref, readback = self._run_inspect_action(
+                            content=content,
+                            parsed=parsed,
+                            registry=registry,
+                            config=config,
+                            step=budget_state.steps,
+                        )
+                    else:
+                        exec_result = self._sandbox.execute(parsed.code)
                     last_execution_failed = exec_result.exception is not None or exec_result.timeout
                     # Fold subcall token/cost/step usage back into parent accumulators
                     for _u in subcall_usage:
@@ -386,15 +422,19 @@ class RunRLMUseCase:
                         )
 
                     trace_seq += 1
-                    trace.append(
-                        {
-                            TRACE_KEY_STEP: budget_state.steps,
-                            TRACE_KEY_SEQ: trace_seq,
-                            TRACE_KEY_ROLE: "execution",
-                            TRACE_KEY_CONTENT: formatted,
-                            TRACE_KEY_CODE: parsed.code,
-                        }
-                    )
+                    exec_entry: dict[str, Any] = {
+                        TRACE_KEY_STEP: budget_state.steps,
+                        TRACE_KEY_SEQ: trace_seq,
+                        TRACE_KEY_ROLE: "execution",
+                        TRACE_KEY_CONTENT: formatted,
+                        TRACE_KEY_CODE: parsed.code,
+                    }
+                    if result_ref is not None:
+                        exec_entry[TRACE_KEY_RESULT_ID] = result_ref.id
+                        exec_entry[TRACE_KEY_RESULT_CHARS] = result_ref.length
+                    if readback is not None:
+                        exec_entry[TRACE_KEY_READBACK_OF] = readback.ref.id
+                    trace.append(exec_entry)
 
                     # Repeat detection — only for inspect actions.
                     # Non-inspect code (subcalls, arbitrary computation) can legitimately
@@ -435,12 +475,13 @@ class RunRLMUseCase:
                         model_context_limit=getattr(self._llm, "context_length_chars", None),
                         override=config.extra.get("exec_result_limit"),
                     )
-                    exec_content = formatted
-                    if len(exec_content) > exec_result_limit:
-                        exec_content = (
-                            exec_content[:exec_result_limit]
-                            + f"\n… [truncated, {len(formatted) - exec_result_limit} chars omitted]"
-                        )
+                    exec_content = self._bound_exec_content(
+                        formatted,
+                        exec_result_limit,
+                        result_ref,
+                        config.result_preview_chars,
+                        readback=readback,
+                    )
                     messages.append(
                         {
                             "role": "user",
@@ -462,6 +503,7 @@ class RunRLMUseCase:
                             self._auto_inspect_missing_file(
                                 content=content,
                                 config=config,
+                                registry=registry,
                                 messages=messages,
                                 trace=trace,
                                 trace_seq=trace_seq,
@@ -881,6 +923,21 @@ class RunRLMUseCase:
         the sync ``complete`` path when the LLM adapter lacks async methods.
         """
         config = config or RunConfigDTO(mode="rlm")
+        registry = self._new_registry(config)
+        try:
+            return await self._execute_async_impl(content, query, config, registry, event_emitter)
+        finally:
+            registry.close()
+
+    async def _execute_async_impl(
+        self,
+        content: str,
+        query: str,
+        config: RunConfigDTO,
+        registry: ResultRegistry,
+        event_emitter: ExecutionEventEmitter | None,
+    ) -> RunResultDTO:
+        """The async loop body; ``execute_async`` owns the registry lifecycle."""
         start = time.time()
 
         budget_config = BudgetConfig(
@@ -1147,6 +1204,7 @@ class RunRLMUseCase:
                             self._auto_inspect_missing_file(
                                 content=content,
                                 config=config,
+                                registry=registry,
                                 messages=messages,
                                 trace=trace,
                                 trace_seq=trace_seq,
@@ -1200,7 +1258,19 @@ class RunRLMUseCase:
                     parent_budget_snapshot["cost"] = cumulative_cost
                     parent_budget_snapshot["tokens"] = float(cumulative_input + cumulative_output)
                     parent_budget_snapshot["steps"] = float(budget_state.steps)
-                    exec_result = await asyncio.to_thread(self._sandbox.execute, parsed.code)
+                    result_ref: ResultRef | None = None
+                    readback: ReadSlice | None = None
+                    if parsed.inspect_action is not None:
+                        exec_result, result_ref, readback = await asyncio.to_thread(
+                            self._run_inspect_action,
+                            content=content,
+                            parsed=parsed,
+                            registry=registry,
+                            config=config,
+                            step=budget_state.steps,
+                        )
+                    else:
+                        exec_result = await asyncio.to_thread(self._sandbox.execute, parsed.code)
                     last_execution_failed = exec_result.exception is not None or exec_result.timeout
                     # Fold subcall token/cost/step usage back into parent accumulators
                     for _u in subcall_usage:
@@ -1222,15 +1292,19 @@ class RunRLMUseCase:
                         )
 
                     trace_seq += 1
-                    trace.append(
-                        {
-                            TRACE_KEY_STEP: budget_state.steps,
-                            TRACE_KEY_SEQ: trace_seq,
-                            TRACE_KEY_ROLE: "execution",
-                            TRACE_KEY_CONTENT: formatted,
-                            TRACE_KEY_CODE: parsed.code,
-                        }
-                    )
+                    exec_entry: dict[str, Any] = {
+                        TRACE_KEY_STEP: budget_state.steps,
+                        TRACE_KEY_SEQ: trace_seq,
+                        TRACE_KEY_ROLE: "execution",
+                        TRACE_KEY_CONTENT: formatted,
+                        TRACE_KEY_CODE: parsed.code,
+                    }
+                    if result_ref is not None:
+                        exec_entry[TRACE_KEY_RESULT_ID] = result_ref.id
+                        exec_entry[TRACE_KEY_RESULT_CHARS] = result_ref.length
+                    if readback is not None:
+                        exec_entry[TRACE_KEY_READBACK_OF] = readback.ref.id
+                    trace.append(exec_entry)
 
                     # Repeat detection — only for inspect actions.
                     repeat_nudge: str | None = None
@@ -1268,12 +1342,13 @@ class RunRLMUseCase:
                         model_context_limit=getattr(self._llm, "context_length_chars", None),
                         override=config.extra.get("exec_result_limit"),
                     )
-                    exec_content = formatted
-                    if len(exec_content) > exec_result_limit:
-                        exec_content = (
-                            exec_content[:exec_result_limit]
-                            + f"\n… [truncated, {len(formatted) - exec_result_limit} chars omitted]"
-                        )
+                    exec_content = self._bound_exec_content(
+                        formatted,
+                        exec_result_limit,
+                        result_ref,
+                        config.result_preview_chars,
+                        readback=readback,
+                    )
                     messages.append(
                         {
                             "role": "user",
@@ -1295,6 +1370,7 @@ class RunRLMUseCase:
                             self._auto_inspect_missing_file(
                                 content=content,
                                 config=config,
+                                registry=registry,
                                 messages=messages,
                                 trace=trace,
                                 trace_seq=trace_seq,
@@ -1750,6 +1826,7 @@ class RunRLMUseCase:
                 ],
                 "context_window": context_window,
                 "configured_max_tokens": configured_max_tokens,
+                "prompt_version": self._prompt_version(),
             },
         }
         trace.insert(0, fingerprint)
@@ -2012,6 +2089,7 @@ class RunRLMUseCase:
         *,
         content: str,
         config: RunConfigDTO,
+        registry: ResultRegistry,
         messages: list[dict[str, str]],
         trace: list[dict[str, Any]],
         trace_seq: int,
@@ -2040,8 +2118,21 @@ class RunRLMUseCase:
             }
         )
 
-        code = f"print(outline_file(file_no={target.file_no}, max_lines=25, max_chars=8000))"
-        exec_result = self._sandbox.execute(code)
+        from rlmstudio.core.actions import InspectAction
+        from rlmstudio.core.parsing import ParsedResponse
+
+        action = InspectAction(
+            tool="outline_file",
+            args={"file_no": target.file_no, "max_lines": 25, "max_chars": 8000},
+        )
+        code = display_code(action)
+        exec_result, result_ref, _readback = self._run_inspect_action(
+            content=content,
+            parsed=ParsedResponse(code=code, raw_text="", is_inspect=True, inspect_action=action),
+            registry=registry,
+            config=config,
+            step=budget_state.steps,
+        )
         formatted = self._format_execution(exec_result)
         inspect_snapshots = self._append_inspect_snapshot(
             inspect_snapshots,
@@ -2051,16 +2142,18 @@ class RunRLMUseCase:
         )
 
         trace_seq += 1
-        trace.append(
-            {
-                TRACE_KEY_STEP: budget_state.steps,
-                TRACE_KEY_SEQ: trace_seq,
-                TRACE_KEY_ROLE: "execution",
-                TRACE_KEY_CONTENT: formatted,
-                TRACE_KEY_CODE: code,
-                "note": f"auto coverage inspect for file {target.file_no}",
-            }
-        )
+        auto_entry: dict[str, Any] = {
+            TRACE_KEY_STEP: budget_state.steps,
+            TRACE_KEY_SEQ: trace_seq,
+            TRACE_KEY_ROLE: "execution",
+            TRACE_KEY_CONTENT: formatted,
+            TRACE_KEY_CODE: code,
+            "note": f"auto coverage inspect for file {target.file_no}",
+        }
+        if result_ref is not None:
+            auto_entry[TRACE_KEY_RESULT_ID] = result_ref.id
+            auto_entry[TRACE_KEY_RESULT_CHARS] = result_ref.length
+        trace.append(auto_entry)
 
         messages.append({"role": "assistant", "content": assistant_text})
         current_msg_chars = sum(len(m.get("content", "")) for m in messages) + 120
@@ -2071,12 +2164,9 @@ class RunRLMUseCase:
             model_context_limit=getattr(self._llm, "context_length_chars", None),
             override=config.extra.get("exec_result_limit"),
         )
-        exec_content = formatted
-        if len(exec_content) > exec_result_limit:
-            exec_content = (
-                exec_content[:exec_result_limit]
-                + f"\n… [truncated, {len(formatted) - exec_result_limit} chars omitted]"
-            )
+        exec_content = self._bound_exec_content(
+            formatted, exec_result_limit, result_ref, config.result_preview_chars
+        )
         messages.append({"role": "user", "content": f"Execution result:\n{exec_content}"})
         messages.append(
             {
@@ -2101,7 +2191,9 @@ class RunRLMUseCase:
             elif action_type == "inspect":
                 code = self._inspect_to_code(action_obj)
                 if code:
-                    return ParsedResponse(code=code, raw_text=text, is_inspect=True)
+                    return ParsedResponse(
+                        code=code, raw_text=text, is_inspect=True, inspect_action=action_obj
+                    )
                 return ParsedResponse(raw_text=text)
             elif action_type == "subcall":
                 # Translate to executable Python; subcall() is bound in sandbox globals
@@ -2128,7 +2220,9 @@ class RunRLMUseCase:
                     elif action_type == "inspect":
                         code = self._inspect_to_code(action_obj)
                         if code:
-                            return ParsedResponse(code=code, raw_text=text, is_inspect=True)
+                            return ParsedResponse(
+                                code=code, raw_text=text, is_inspect=True, inspect_action=action_obj
+                            )
                     elif action_type == "subcall":
                         code = (
                             f"_sub_result = subcall("
@@ -2165,61 +2259,14 @@ class RunRLMUseCase:
 
     @staticmethod
     def _inspect_to_code(action_obj: Any) -> str | None:
-        """Convert a JSON inspect action to executable Python code."""
-        tool: str = action_obj.tool
-        args: dict[str, Any] = action_obj.args
-        if tool == "grep":
-            return (
-                f"print(grep("
-                f"pattern={repr(args.get('pattern'))}, "
-                f"context_lines={args.get('context_lines', 2)}, "
-                f"max_matches={args.get('max_matches', 100)}, "
-                f"ignore_case={args.get('ignore_case', False)}, "
-                f"use_regex={args.get('use_regex', False)}))"
-            )
-        elif tool == "peek":
-            return (
-                f"print(peek("
-                f"start={args.get('start', 0)}, "
-                f"end={args.get('end')}, "
-                f"max_chars={args.get('max_chars', 10000)}))"
-            )
-        elif tool == "peek_file":
-            return (
-                f"print(peek_file("
-                f"file_no={args.get('file_no')}, "
-                f"start={args.get('start', 0)}, "
-                f"end={args.get('end')}, "
-                f"max_chars={args.get('max_chars', 10000)}))"
-            )
-        elif tool == "grep_file":
-            return (
-                f"print(grep_file("
-                f"file_no={args.get('file_no')}, "
-                f"pattern={repr(args.get('pattern'))}, "
-                f"context_lines={args.get('context_lines', 2)}, "
-                f"max_matches={args.get('max_matches', 100)}, "
-                f"ignore_case={args.get('ignore_case', False)}, "
-                f"use_regex={args.get('use_regex', False)}))"
-            )
-        elif tool == "outline_file":
-            return (
-                f"print(outline_file("
-                f"file_no={args.get('file_no')}, "
-                f"max_lines={args.get('max_lines', 40)}, "
-                f"max_chars={args.get('max_chars', 8000)}))"
-            )
-        elif tool == "select":
-            return f"print(select(ranges={args.get('ranges')}))"
-        elif tool == "chunk":
-            return (
-                f"print(chunk("
-                f"size={args.get('size', 1000)}, "
-                f"overlap={args.get('overlap', 0)}, "
-                f"by={repr(args.get('by', 'chars'))}, "
-                f"max_chunks={args.get('max_chunks', 100)}))"
-            )
-        return None
+        """The trace/replay display form of a JSON inspect action.
+
+        Inspect actions are executed by the controller
+        (``application/services/inspect_dispatcher.py``); this string is
+        what the trace shows and what the file-coverage heuristics parse.
+        """
+        code: str = display_code(action_obj)
+        return code
 
     def _extract_final_answer(self, parsed: ParsedResponse) -> str:
         """Extract final answer, resolving FINAL_VAR: references via the sandbox."""
@@ -2411,6 +2458,89 @@ class RunRLMUseCase:
         return "\n\n".join(parts)
 
     @staticmethod
+    def _new_registry(config: RunConfigDTO) -> ResultRegistry:
+        """The per-run result registry (closed by ``execute`` / ``execute_async``)."""
+        return ResultRegistry(
+            spill_result_above_bytes=config.spill_result_above_bytes,
+            max_registry_bytes=config.max_registry_bytes,
+            max_spill_bytes=config.max_spill_bytes,
+        )
+
+    @staticmethod
+    def _run_inspect_action(
+        *,
+        content: str,
+        parsed: ParsedResponse,
+        registry: ResultRegistry,
+        config: RunConfigDTO,
+        step: int,
+    ) -> tuple[ExecutionResultDTO, ResultRef | None, ReadSlice | None]:
+        """Execute a v2 inspect action on the controller side.
+
+        The complete return value is registered first and the model receives
+        a preview of at most ``config.result_preview_chars`` characters ending
+        in a marker that names the result id.  A ``read_result`` readback is
+        answered from the registry and never registered, so ``last`` is
+        stable across reads.  Errors become an ``exception`` on the DTO, the
+        same shape a failing sandbox execution has.
+        """
+        outcome = dispatch_inspect(
+            content,
+            parsed.inspect_action,
+            registry,
+            preview_chars=config.result_preview_chars,
+            pattern_timeout=config.pattern_timeout_seconds,
+        )
+        if outcome.error is not None:
+            return ExecutionResultDTO(exception=outcome.error), None, None
+        if outcome.is_readback:
+            return ExecutionResultDTO(stdout=str(outcome.value)), None, outcome.readback
+        ref = registry.register(outcome.value, kind="inspect", step=step)
+        preview = format_preview(registry, ref, cap=config.result_preview_chars)
+        return (
+            ExecutionResultDTO(stdout=preview, truncated=ref.length > config.result_preview_chars),
+            ref,
+            None,
+        )
+
+    @staticmethod
+    def _bound_exec_content(
+        formatted: str,
+        limit: int,
+        ref: ResultRef | None,
+        preview_chars: int,
+        *,
+        readback: ReadSlice | None = None,
+    ) -> str:
+        """Cut a formatted execution result to ``limit`` chars for the messages.
+
+        For a registered result, or a ``read_result`` slice of one, the cut
+        ends in a registry marker naming the id and the exact offset to
+        continue from instead of the generic "chars omitted" note, so nothing
+        the model saw is unreachable.
+        """
+        if len(formatted) <= limit:
+            return formatted
+        prefix = "Output:\n"
+        prefix_len = len(prefix) if formatted.startswith(prefix) else 0
+        if readback is not None:
+            body_end = prefix_len + (readback.hi - readback.lo)
+            if limit >= body_end:
+                return formatted  # only the footer would be clipped; keep it
+            shown = max(0, limit - prefix_len)
+            footer: str = readback.footer(hi=readback.lo + shown)
+            return formatted[:limit] + footer
+        if ref is None:
+            return formatted[:limit] + f"\n… [truncated, {len(formatted) - limit} chars omitted]"
+        body_end = prefix_len + min(ref.length, preview_chars)
+        if limit >= body_end:
+            # Only the preview's own marker would be cut; keep it intact.
+            return formatted
+        shown = max(0, limit - prefix_len)
+        marker: str = truncation_marker(ref, shown)
+        return formatted[:limit] + marker
+
+    @staticmethod
     def _looks_like_action(text: str) -> bool:
         """Return True if *text* looks like a JSON action, not a real answer.
 
@@ -2421,6 +2551,16 @@ class RunRLMUseCase:
         """
         stripped = text.strip()
         return stripped.startswith("{") and '"type"' in stripped
+
+    @staticmethod
+    def _prompt_version() -> str | None:
+        """The protocol revision of the system prompt file the loop uses."""
+        from rlmstudio.prompts import get_system_prompt_version
+
+        try:
+            return str(get_system_prompt_version())
+        except Exception:
+            return None
 
     @staticmethod
     def _build_system_prompt(content_length: int) -> str:

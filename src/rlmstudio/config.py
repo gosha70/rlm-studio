@@ -10,6 +10,12 @@ from typing import Any
 
 import yaml
 
+from rlmstudio.application.sandbox_vars import (
+    RLM_DEFAULT_MAX_REGISTRY_BYTES,
+    RLM_DEFAULT_MAX_SPILL_BYTES,
+    RLM_DEFAULT_RESULT_PREVIEW_CHARS,
+    RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES,
+)
 from rlmstudio.branding import (
     CONFIG_FILE_STEM,
     DIST_NAME,
@@ -253,6 +259,13 @@ class ExecutionConfig:
     track_comparison_metrics: bool = True  # Track metrics for mode comparison
     use_json_protocol: bool = True  # Use JSON action protocol (v2.0) instead of markdown parsing
     max_parse_retries: int = 2  # Maximum retries for JSON parse errors
+    # Result registry (specs/rlm-working-state): every v2 inspect result is
+    # kept in full on the controller side; the model sees a bounded preview
+    # and reads the rest through ``read_result``.
+    result_preview_chars: int = RLM_DEFAULT_RESULT_PREVIEW_CHARS
+    spill_result_above_bytes: int = RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES
+    max_registry_bytes: int = RLM_DEFAULT_MAX_REGISTRY_BYTES
+    max_spill_bytes: int = RLM_DEFAULT_MAX_SPILL_BYTES
 
     def to_dict(self) -> dict[str, Any]:
         """Convert config to dictionary."""
@@ -263,6 +276,10 @@ class ExecutionConfig:
             "max_steps": self.max_steps,
             "enable_rlm": self.enable_rlm,
             "track_comparison_metrics": self.track_comparison_metrics,
+            "result_preview_chars": self.result_preview_chars,
+            "spill_result_above_bytes": self.spill_result_above_bytes,
+            "max_registry_bytes": self.max_registry_bytes,
+            "max_spill_bytes": self.max_spill_bytes,
         }
 
     @classmethod
@@ -275,7 +292,24 @@ class ExecutionConfig:
             max_steps=data.get("max_steps", 16),
             enable_rlm=data.get("enable_rlm", True),
             track_comparison_metrics=data.get("track_comparison_metrics", True),
+            result_preview_chars=int(
+                data.get("result_preview_chars", RLM_DEFAULT_RESULT_PREVIEW_CHARS)
+            ),
+            spill_result_above_bytes=int(
+                data.get("spill_result_above_bytes", RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES)
+            ),
+            max_registry_bytes=int(data.get("max_registry_bytes", RLM_DEFAULT_MAX_REGISTRY_BYTES)),
+            max_spill_bytes=int(data.get("max_spill_bytes", RLM_DEFAULT_MAX_SPILL_BYTES)),
         )
+
+    def registry_kwargs(self) -> dict[str, int]:
+        """The result-registry fields, keyed as ``RunConfigDTO`` names them."""
+        return {
+            "result_preview_chars": self.result_preview_chars,
+            "spill_result_above_bytes": self.spill_result_above_bytes,
+            "max_registry_bytes": self.max_registry_bytes,
+            "max_spill_bytes": self.max_spill_bytes,
+        }
 
 
 @dataclass

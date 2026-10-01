@@ -1,8 +1,12 @@
 """Tests for content navigation tools."""
 
 import re
+import time
+
+import pytest
 
 from rlmstudio.envs import PyReplEnv
+from rlmstudio.tools import PatternTimeoutError, grep, grep_file
 
 # Sample content for testing
 SAMPLE_TEXT = """Line 1: Introduction to the document
@@ -447,3 +451,54 @@ print('grep works')
 """)
         assert result["exception"] is None
         assert "grep works" in result["stdout"]
+
+
+class TestPatternTimeout:
+    """``timeout`` bounds the regex engine for a model-written pattern.
+
+    The controller runs these tools in its own process now, where nothing
+    else stops a nested quantifier from backtracking for hours; `re` holds
+    the GIL while it does, so the bound has to come from the engine.
+    """
+
+    CATASTROPHIC = r"(a|aa)+$"
+    BUDGET = 0.5
+
+    def test_grep_raises_once_the_budget_is_gone(self):
+        text = "fine line\n" + "a" * 60 + "b\n"
+
+        start = time.monotonic()
+        with pytest.raises(PatternTimeoutError) as excinfo:
+            grep(text, self.CATASTROPHIC, use_regex=True, timeout=self.BUDGET)
+
+        assert excinfo.value.budget == self.BUDGET
+        assert time.monotonic() - start < self.BUDGET * 10
+
+    def test_grep_file_forwards_the_budget(self):
+        # Length-preserving: the document index carries byte offsets, so a
+        # replacement of a different length would truncate the file's slice —
+        # and a run of "a" with its trailing "b" cut off matches instantly.
+        victim = "2 Semantic search with knowledge graphs"
+        run = "a" * (len(victim) - 1) + "b"
+        content = _build_multi_file_text().replace(victim, run)
+
+        with pytest.raises(PatternTimeoutError):
+            grep_file(content, 2, self.CATASTROPHIC, use_regex=True, timeout=self.BUDGET)
+
+    def test_without_a_budget_the_stdlib_engine_is_used(self):
+        """The sandbox path keeps `re`, which its own timeout already bounds."""
+        result = grep(SAMPLE_TEXT, r"ERROR", use_regex=True)
+
+        assert "ERROR" in result
+
+    def test_a_bounded_search_finds_the_same_matches(self):
+        bounded = grep(SAMPLE_TEXT, r"ERROR:\s+\w+", use_regex=True, timeout=5.0)
+        unbounded = grep(SAMPLE_TEXT, r"ERROR:\s+\w+", use_regex=True)
+
+        assert bounded == unbounded
+
+    def test_a_bounded_literal_search_finds_the_same_matches(self):
+        bounded = grep(SAMPLE_TEXT, "ERROR", timeout=5.0)
+        unbounded = grep(SAMPLE_TEXT, "ERROR")
+
+        assert bounded == unbounded

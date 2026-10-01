@@ -203,6 +203,18 @@ execution:
   # Default safe mode setting
   default_safe_mode: true
 
+  # Result registry (RLM mode). Every v2 inspect result is kept in full on
+  # the controller side; the model sees a preview of result_preview_chars
+  # characters and reads the rest with the read_result tool. A result larger
+  # than spill_result_above_bytes is spilled to a per-run scratch directory
+  # (kept, not dropped); the in-memory total is bounded by
+  # max_registry_bytes and the on-disk total by max_spill_bytes, beyond which
+  # the oldest spilled results are evicted (never the most recent one).
+  result_preview_chars: 10000
+  spill_result_above_bytes: 16777216   # 16 MiB
+  max_registry_bytes: 67108864         # 64 MiB
+  max_spill_bytes: 268435456           # 256 MiB
+
 # Monitoring Configuration
 monitoring:
   # Enable telemetry collection

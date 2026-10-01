@@ -12,6 +12,7 @@ The main rule is simple: prompt changes must respect the actual tool contract. I
 - Prefer direct jumps via `content_start` offsets from the index.
 - Use `grep(..., context_lines=...)` when you need local context around a marker or keyword.
 - If coverage is incomplete, instruct the model to say so explicitly.
+- When a preview is truncated, continue it with `read_result` at the offset the marker gives; never re-run the same inspection to "see more".
 
 ## Safe Multi-Document Pattern
 
@@ -23,6 +24,22 @@ Use this mental model:
 4. If `grep()` is used, rely on the returned `char_offset` for follow-up `peek()` calls.
 5. Finalize once the answer is supported, and state any coverage gaps.
 
+## Long Results and `read_result`
+
+Every v2 inspect result is kept in full on the controller side as `r1, r2, …` (the newest is also `last`). The model sees at most `result_preview_chars` characters of it, and a truncated preview ends with:
+
+```text
+... (preview truncated: 31,842 chars total; read_result('r4', start=10000) for more)
+```
+
+The marker names the result id and the exact offset to continue from. A supplement that deals with long outputs should say so in those terms:
+
+- "If a result was truncated, call `read_result` with the id and `start` from the marker."
+- "Do not repeat a grep or peek to see more of the same output."
+- "Reads never change `last`; use the id from the marker when you have inspected something else since."
+
+Do not tell the model that output is "cut off" or "lost": it is not, and that wording sends it back into re-running tools.
+
 ## Anti-Patterns
 
 Do not put these into custom prompts:
@@ -30,6 +47,7 @@ Do not put these into custom prompts:
 - "Use grep, then peek from the returned position" unless grep actually returns a character offset.
 - "You must inspect every file before finalizing" without a budget escape hatch.
 - "Use your full step budget" or other instructions that fight convergence controls.
+- "Re-run the search with a smaller range to see the rest" — the rest is one `read_result` away.
 - Prompt text that restates the full JSON protocol differently from the base prompt.
 - Model-specific heuristics presented as universal rules.
 

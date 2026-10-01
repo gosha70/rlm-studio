@@ -5,6 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### RLM working state — result registry and `read_result` (PR 1 of #77)
+
+- **Added:** every v2 `inspect` result is now kept in full on the controller
+  side as `r1, r2, …` (the newest is also `last`) and the model receives a
+  bounded preview (`result_preview_chars`, 10,000) that ends in a marker
+  naming the id and the exact offset to continue from. A new inspect tool,
+  `read_result(name, start, end, max_chars)`, returns any character range of
+  a stored result; a readback is a step, never registers anything, and
+  never changes `last`. Results above `spill_result_above_bytes` (16 MiB)
+  are spilled to a per-run scratch directory (kept, not dropped) with
+  character→byte checkpoints so offsets stay exact for non-ASCII content;
+  the in-memory total is bounded by `max_registry_bytes` (64 MiB) and
+  spilled results are evicted, oldest first and never `last`, only past
+  `max_spill_bytes` (256 MiB). The scratch directory is removed when the
+  run ends, including on failure. Settings live in the library config's
+  `execution:` section (`rlm_studio_config.default.yaml`).
+- **Changed:** v2 inspect actions (and the coverage guard's automatic
+  `outline_file`) are executed by the controller against the content
+  (`application/services/inspect_dispatcher.py`) instead of being compiled
+  to Python for the sandbox; the trace still records the same display code.
+  Only the v1 free-form code path runs in the sandbox, with its 10,000-char
+  stdout cap unchanged. `chunk()` results are stored and previewed as JSON
+  rather than a Python list repr. Execution trace rows carry `result_id` /
+  `result_chars`, and `readback_of` on a `read_result` row; the runtime
+  fingerprint records `prompt_version`.
+- **Bounded by the controller, not the sandbox:** moving the pattern tools
+  out of the sandbox also moved them out of its timeout, so a model-written
+  pattern with a quantifier inside a quantified group could backtrack for
+  hours (`re` holds the GIL while it does, so neither a signal nor a
+  watchdog thread can stop it). `grep` / `grep_file` now take a `timeout`
+  that bounds the regex engine across the whole call —
+  `pattern_timeout_seconds`, default 5 s, the sandbox's old default — and a
+  breach is reported as a step error telling the model to simplify the
+  pattern. `read_result` clamps `max_chars` to `result_preview_chars`:
+  without it, one call could write a whole stored result, up to 256 MiB,
+  into the trace row that is saved with the execution and streamed to the
+  UI. Adds `regex` as a direct dependency (already present via tiktoken);
+  it is the only engine here that checks a deadline while matching.
+- **Prompt:** `system_prompt_v2_0.yaml` is protocol revision 2.2: the
+  `read_result` tool, one example, and a rule to continue a truncated
+  preview rather than repeat the inspection.
+- **Spec:** `specs/rlm-working-state/` (plan D1/D2); design document §4.5;
+  limitation §9.9 retired.
+
 ### Official-engine interop (`rlm_official`)
 
 - **Added:** a fourth execution mode, `rlm_official`, that runs the paper

@@ -181,6 +181,17 @@ Extracts multiple non-contiguous character ranges from P in a single call. Combi
 
 *Reference: tools/content.py:186–226*
 
+## **4.5 read\_result(name, start, end, max\_chars) — and where results live**
+
+Since `specs/rlm-working-state` (PR 1), every v2 inspect action is executed by the controller against the content, not compiled to Python for the sandbox (*application/services/inspect\_dispatcher.py*). The complete return value is registered as `r1, r2, …` in a per-run result registry (*application/services/result\_registry.py*); the newest is also `last`. The model sees a preview of `result_preview_chars` (10,000) characters ending in a marker that names the id and the next offset, and reads any range back with `read_result`. A readback is a step, is answered from the registry without touching the sandbox, and never changes `last`. Results above `spill_result_above_bytes` (16 MiB) are spilled to a scratch directory (kept, not dropped) with character→byte checkpoints so character offsets stay exact; the in-memory total is bounded by `max_registry_bytes` (64 MiB) and spilled results are evicted, oldest first and never `last`, only past `max_spill_bytes` (256 MiB). The scratch directory is removed when the run ends. Only the v1 free-form code path still runs in the sandbox.
+
+| Parameter | Type | Default | Description |
+| :---- | :---- | :---- | :---- |
+| name | str | "last" | `"last"` or a result id such as `"r3"` |
+| start | int | 0 | Start character offset (Python slice semantics) |
+| end | int \| None | None | End offset (exclusive); None = end of result |
+| max\_chars | int | 10000 | Cap on the returned slice |
+
 # **5\. Circuit Breakers and Safety Valves**
 
 The RLM loop has multiple mechanisms to prevent runaway execution. These are the primary safety guarantees of the system.
@@ -385,9 +396,9 @@ If LiteLLM’s model-aware tokenizer is unavailable, the system falls back to a 
 
 The tools have no concept of "file" — they operate on the flat concatenated string. A model asking "peek file 2" must first grep for the file marker, find its character position, and then peek at that position. There is no peek\_file(n) shortcut.
 
-## **9.9 Sandbox Stdout Truncation**
+## **9.9 Sandbox Stdout Truncation (retired)**
 
-Sandbox output is capped at 10,000 characters. If a grep returns many matches, the LLM only sees the first portion. The model is not informed about how much was lost, just a truncation marker.
+Formerly: sandbox output was capped at 10,000 characters and a grep with many matches lost the rest with no way back. Since `specs/rlm-working-state` PR 1 the complete result is registered on the controller side and the preview's marker names the id and offset to continue from with `read_result` (§4.5). The 10,000-character cap still applies to the v1 free-form Python path, which runs in the sandbox.
 
 ## **9.10 No Streaming for Inspect Steps**
 

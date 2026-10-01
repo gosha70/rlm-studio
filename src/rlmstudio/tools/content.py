@@ -3,8 +3,90 @@
 
 """Content navigation tools for exploring large text."""
 
+from __future__ import annotations
+
 import re
+import time
 from dataclasses import dataclass
+from typing import Any, Protocol
+
+import regex as regex_module
+
+
+class PatternTimeoutError(Exception):
+    """A model-written pattern used up the time allowed for one search.
+
+    The pattern, not the document, is what makes this possible: a nested
+    quantifier such as ``(a+)+$`` backtracks exponentially in the length of a
+    single line, so 40 characters is enough to run for hours.  The stdlib
+    engine holds the GIL throughout and cannot be interrupted by a signal or
+    another thread, which is why the bound has to come from the engine itself.
+    """
+
+    def __init__(self, budget: float) -> None:
+        self.budget = budget
+        super().__init__(f"Pattern search timed out after {budget:.1f}s")
+
+
+class _Matcher(Protocol):
+    """The one method :func:`grep` needs from a compiled pattern."""
+
+    def search(self, line: str) -> Any: ...
+
+
+class _UnboundedMatcher:
+    """The stdlib engine, for callers that are bounded by something else."""
+
+    def __init__(self, compiled: re.Pattern[str]) -> None:
+        self._compiled = compiled
+
+    def search(self, line: str) -> Any:
+        return self._compiled.search(line)
+
+
+class _BoundedMatcher:
+    """Spends at most ``budget`` seconds in the engine across every line.
+
+    The budget covers the whole ``grep`` call rather than each line, which is
+    what the sandbox's own timeout used to mean; a per-line limit would
+    multiply by the line count.  ``regex`` is used instead of ``re`` because
+    it checks a deadline inside its matching loop — and, as a bonus, it
+    optimises away most classic blow-up patterns outright.
+    """
+
+    def __init__(self, compiled: Any, budget: float) -> None:
+        self._compiled = compiled
+        self._budget = budget
+        self._spent = 0.0
+
+    def search(self, line: str) -> Any:
+        remaining = self._budget - self._spent
+        if remaining <= 0:
+            raise PatternTimeoutError(self._budget)
+        started = time.perf_counter()
+        try:
+            return self._compiled.search(line, timeout=remaining)
+        except TimeoutError as exc:
+            raise PatternTimeoutError(self._budget) from exc
+        finally:
+            self._spent += time.perf_counter() - started
+
+
+def _compile_matcher(pattern: str, *, ignore_case: bool, timeout: float | None) -> _Matcher:
+    """Compile *pattern*, bounding its total match time when asked.
+
+    Raises ``re.error`` for an invalid pattern either way, so the caller's
+    existing "Invalid regex pattern" path is unchanged.
+    """
+    if timeout is None:
+        flags = re.IGNORECASE if ignore_case else 0
+        return _UnboundedMatcher(re.compile(pattern, flags))
+    rx_flags = regex_module.IGNORECASE if ignore_case else 0
+    try:
+        compiled = regex_module.compile(pattern, rx_flags)
+    except regex_module.error as exc:  # same shape as the stdlib error
+        raise re.error(str(exc)) from exc
+    return _BoundedMatcher(compiled, timeout)
 
 
 def peek(content: str, start: int = 0, end: int | None = None, max_chars: int = 10000) -> str:
@@ -268,6 +350,7 @@ def grep(
     max_matches: int = 100,
     ignore_case: bool = False,
     use_regex: bool = False,
+    timeout: float | None = None,
 ) -> str:
     """
     Search content for pattern and return matches with context.
@@ -279,9 +362,16 @@ def grep(
         max_matches: Maximum number of matches to return
         ignore_case: Case-insensitive search
         use_regex: Treat pattern as regex (default: literal string)
+        timeout: Total seconds the regex engine may spend across all lines.
+            Required when the caller runs in the controller process, where
+            nothing else bounds a model-written pattern; ``None`` keeps the
+            stdlib engine and relies on the caller's own limit (the sandbox).
 
     Returns:
         Formatted string with matches and line numbers
+
+    Raises:
+        PatternTimeoutError: The pattern exhausted ``timeout``.
 
     Examples:
         >>> grep(P, "error")  # Find "error" with 2 lines context
@@ -294,9 +384,8 @@ def grep(
     if not use_regex:
         pattern = re.escape(pattern)  # Escape special chars for literal match
 
-    flags = re.IGNORECASE if ignore_case else 0
     try:
-        regex = re.compile(pattern, flags)
+        matcher = _compile_matcher(pattern, ignore_case=ignore_case, timeout=timeout)
     except re.error as e:
         return f"Error: Invalid regex pattern: {e}"
 
@@ -304,7 +393,7 @@ def grep(
     matches: list[tuple[int, str, int]] = []
     char_offset = 0
     for line_no, line in enumerate(lines, start=1):
-        if regex.search(line):
+        if matcher.search(line):
             matches.append((line_no, line, char_offset))
             if len(matches) >= max_matches:
                 break
@@ -375,12 +464,15 @@ def grep_file(
     max_matches: int = 100,
     ignore_case: bool = False,
     use_regex: bool = False,
+    timeout: float | None = None,
 ) -> str:
     """
     Search within a specific file.
 
     Returned line numbers and ``char_offset`` values are relative to that file's
     content, making them safe follow-up inputs for ``peek_file()``.
+
+    ``timeout`` bounds the regex engine exactly as it does for :func:`grep`.
     """
     section, file_content = _get_file_content(content, file_no)
     result = grep(
@@ -390,6 +482,7 @@ def grep_file(
         max_matches=max_matches,
         ignore_case=ignore_case,
         use_regex=use_regex,
+        timeout=timeout,
     )
     header = (
         f'File {section.file_no}: "{section.name}" '
