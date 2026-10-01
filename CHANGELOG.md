@@ -108,9 +108,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `anyio>=4.14.2` — CVE-2026-63374 (TLSStream IDNA-2003 host-name encoding
   enables certificate spoofing; critical) and CVE-2026-64847 (transitive via
   httpx / anthropic / google-genai).
-- `litellm>=1.89.7` — CVE-2026-84377. Deliberately pinned to 1.89.7 rather
-  than the latest: 1.98.0 and later import `typing.NotRequired` at import
-  time, and 1.103.x pulls in `boto3`.
+- `litellm>=1.89.7` — CVE-2026-84377. The floor is a minimum, as everywhere
+  else in this file; it is `uv.lock` that holds litellm at 1.89.7 rather than
+  following the latest release, because 1.98.0 and later import
+  `typing.NotRequired` at import time and 1.103.x pulls in `boto3`. A plain
+  `pip install rlm-studio` therefore still resolves the newest litellm.
 - `urllib3>=2.8.0` — CVE-2026-97687 (proxy and target TLS settings were not
   kept separate, so `proxy_ssl_context` could be ignored and the proxy's
   certificate-verification policy overridden), CVE-2026-97688 (infinite loop
