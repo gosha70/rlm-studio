@@ -47,7 +47,7 @@
     "node": ">=22"
   },
   "overrides": {
-    "undici": "^7.29.0",
+    "undici": "^7.30.0",
     "js-yaml": "^4.3.2",
     "@babel/core": "^7.29.6",
     "esbuild": "^0.28.1",
