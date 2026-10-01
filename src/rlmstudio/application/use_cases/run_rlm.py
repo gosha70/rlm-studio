@@ -2489,6 +2489,7 @@ class RunRLMUseCase:
             parsed.inspect_action,
             registry,
             preview_chars=config.result_preview_chars,
+            pattern_timeout=config.pattern_timeout_seconds,
         )
         if outcome.error is not None:
             return ExecutionResultDTO(exception=outcome.error), None, None

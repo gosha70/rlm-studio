@@ -106,6 +106,10 @@ RLM_DEFAULT_MAX_RECURSION_DEPTH = 5
 RLM_DEFAULT_RESULT_PREVIEW_CHARS = 10000
 """Characters of a registered result shown to the model per step; the rest
 stays addressable through the ``read_result`` inspect tool."""
+RLM_DEFAULT_PATTERN_TIMEOUT_SECONDS = 5.0
+"""Seconds the regex engine may spend on one controller-side pattern tool
+call, across every line it searches.  Matches the sandbox's own default
+timeout, which is what used to bound these calls."""
 RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES = 16 * 1024 * 1024
 """In-memory per-result threshold: a larger result is spilled to the run's
 scratch directory (it is kept, not dropped)."""

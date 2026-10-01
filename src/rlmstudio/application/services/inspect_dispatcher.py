@@ -14,9 +14,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from rlmstudio.application.sandbox_vars import RLM_DEFAULT_PATTERN_TIMEOUT_SECONDS
 from rlmstudio.application.services.result_registry import ReadSlice, ResultRegistry
 from rlmstudio.core.actions import InspectAction
-from rlmstudio.tools import chunk, grep, grep_file, outline_file, peek, peek_file, select
+from rlmstudio.tools import (
+    PatternTimeoutError,
+    chunk,
+    grep,
+    grep_file,
+    outline_file,
+    peek,
+    peek_file,
+    select,
+)
 
 READ_RESULT_TOOL = "read_result"
 
@@ -117,20 +127,37 @@ def dispatch_inspect(
     registry: ResultRegistry | None = None,
     *,
     preview_chars: int = 10000,
+    pattern_timeout: float = RLM_DEFAULT_PATTERN_TIMEOUT_SECONDS,
 ) -> InspectOutcome:
     """Run ``action`` against ``content`` and return its complete result.
 
     Errors (bad args, a tool raising) come back as ``error`` text rather
     than exceptions so the loop can show them as an ordinary execution
     failure and let the model recover.
+
+    ``pattern_timeout`` bounds the regex engine for the pattern tools.  These
+    tools used to run inside the sandbox, which cut any call off after its own
+    timeout; running them here removed that limit, and a nested quantifier in
+    a model-written pattern can otherwise backtrack for hours while holding
+    the GIL.
     """
     code = display_code(action)
     try:
         if action.tool == READ_RESULT_TOOL:
             return _read_back(code, action, registry, preview_chars)
-        value = _run(content, action, registry, preview_chars)
+        value = _run(content, action, registry, preview_chars, pattern_timeout)
     except InspectArgError as exc:
         return InspectOutcome(display_code=code, error=f"Error: {exc}")
+    except PatternTimeoutError as exc:
+        return InspectOutcome(
+            display_code=code,
+            error=(
+                f"Error: {action.tool}() timed out after {exc.budget:.1f}s. "
+                "The pattern backtracks too much on this content — simplify it "
+                "(avoid a quantifier inside a quantified group) or search a "
+                "narrower range."
+            ),
+        )
     except _TOOL_ERRORS as exc:
         return InspectOutcome(display_code=code, error=f"Error: {action.tool}() failed: {exc}")
     return InspectOutcome(display_code=code, value=value)
@@ -146,11 +173,16 @@ def _read_back(
     if registry is None:
         raise InspectArgError("read_result is not available in this run")
     args = action.args
+    # Clamped, not just validated: a result can be hundreds of megabytes, and
+    # whatever comes back is written verbatim into the trace row that is stored
+    # with the execution and streamed to the UI.  The per-step limit is the
+    # same preview cap a fresh inspect result gets.
+    requested = _int(args, "max_chars", preview_chars)
     piece = registry.read_slice(
         _str(args, "name", "last"),
         start=_int(args, "start", 0),
         end=_opt_int(args, "end"),
-        max_chars=_int(args, "max_chars", preview_chars),
+        max_chars=min(requested, preview_chars),
     )
     if isinstance(piece, str):
         # Unknown or evicted id: shown as an ordinary (non-fatal) result.
@@ -165,6 +197,7 @@ def _run(
     action: InspectAction,
     registry: ResultRegistry | None,
     preview_chars: int,
+    pattern_timeout: float,
 ) -> str | list[str]:
     tool, args = action.tool, action.args
     text: str
@@ -184,6 +217,7 @@ def _run(
             max_matches=_int(args, "max_matches", 100),
             ignore_case=_bool(args, "ignore_case", False),
             use_regex=_bool(args, "use_regex", False),
+            timeout=pattern_timeout,
         )
         return text
     if tool == "peek_file":
@@ -204,6 +238,7 @@ def _run(
             max_matches=_int(args, "max_matches", 100),
             ignore_case=_bool(args, "ignore_case", False),
             use_regex=_bool(args, "use_regex", False),
+            timeout=pattern_timeout,
         )
         return text
     if tool == "outline_file":

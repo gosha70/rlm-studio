@@ -30,6 +30,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   rather than a Python list repr. Execution trace rows carry `result_id` /
   `result_chars`, and `readback_of` on a `read_result` row; the runtime
   fingerprint records `prompt_version`.
+- **Bounded by the controller, not the sandbox:** moving the pattern tools
+  out of the sandbox also moved them out of its timeout, so a model-written
+  pattern with a quantifier inside a quantified group could backtrack for
+  hours (`re` holds the GIL while it does, so neither a signal nor a
+  watchdog thread can stop it). `grep` / `grep_file` now take a `timeout`
+  that bounds the regex engine across the whole call —
+  `pattern_timeout_seconds`, default 5 s, the sandbox's old default — and a
+  breach is reported as a step error telling the model to simplify the
+  pattern. `read_result` clamps `max_chars` to `result_preview_chars`:
+  without it, one call could write a whole stored result, up to 256 MiB,
+  into the trace row that is saved with the execution and streamed to the
+  UI. Adds `regex` as a direct dependency (already present via tiktoken);
+  it is the only engine here that checks a deadline while matching.
 - **Prompt:** `system_prompt_v2_0.yaml` is protocol revision 2.2: the
   `read_result` tool, one example, and a rule to continue a truncated
   preview rather than repeat the inspection.
