@@ -163,6 +163,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   on a chunked Deflate response with trailing bytes) and CVE-2026-97689
   (unbounded buffering of a chunk-size line that never ends; transitive via
   requests).
+- **CI:** the `Security Scan` job now runs `npm audit --omit=dev` alongside
+  `pip-audit`, so an advisory in a package that ships in the frontend blocks a
+  merge the way a Python one already does. Scoped to production dependencies:
+  the dev toolchain's advisories are real but unreachable by a user, and
+  gating on them would block unrelated work. Verified both ways — the step
+  exits 1 on the lockfile that carried the `next/og` advisory below, and 0 on
+  the fixed one. It reads the lockfile and installs nothing, and each scan in
+  the job now runs even when an earlier one failed, so one run reports every
+  advisory a branch has instead of revealing them one push at a time.
 - `next` 16.3.5 → 16.3.8 (frontend) — GHSA-vcvr-r3jv-pc5j, remote code
   execution in `next/og`'s `ImageResponse`, critical, affecting
   `>=16.2.0 <16.3.6`. Nothing in `frontend/src` imports `next/og` or

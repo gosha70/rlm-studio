@@ -111,8 +111,31 @@ jobs:
       - run: uv sync --extra dev --extra all
       - name: Bandit security scan
         run: uv run bandit -r src/rlmstudio/server/ src/rlmstudio/application/ src/rlmstudio/domain/ src/rlmstudio/infrastructure/ -c pyproject.toml
+      # Every scan below runs even when an earlier one failed, so one CI run
+      # reports every problem a branch has. Without this, a Python advisory
+      # would hide an npm one until the next push. The job still fails if any
+      # single scan fails.
       - name: pip-audit vulnerability scan
+        if: ${{ !cancelled() }}
         run: uv run pip-audit --skip-editable
+      - uses: actions/setup-node@v4
+        if: ${{ !cancelled() }}
+        with:
+          # Keep in step with the Frontend and wheel-smoke jobs.
+          node-version: "22"
+      # No install step: `npm audit` reads package-lock.json on its own. An
+      # `npm ci` here would also run every package's install scripts inside
+      # the job whose purpose is to vet those packages.
+      #
+      # `--omit=dev` audits what ships in the app, which is the surface an
+      # advisory can actually reach a user through. The dev toolchain is
+      # deliberately excluded: its advisories are real but not user-facing, and
+      # gating merges on them would block unrelated work on a build-time
+      # dependency nobody can reach. A critical RCE in `next/og` sat on master
+      # unnoticed because nothing in CI looked here at all (fixed in #83).
+      - name: npm audit (production dependencies)
+        if: ${{ !cancelled() }}
+        run: npm audit --omit=dev --prefix frontend
 
   docker-sandbox:
     name: Docker Sandbox
