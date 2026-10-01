@@ -139,6 +139,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `anyio>=4.14.2` — CVE-2026-63374 (TLSStream IDNA-2003 host-name encoding
   enables certificate spoofing; critical) and CVE-2026-64847 (transitive via
   httpx / anthropic / google-genai).
+- `litellm>=1.89.7` — CVE-2026-84377. Deliberately pinned to 1.89.7 rather
+  than the latest: 1.98.0 and later import `typing.NotRequired` at import
+  time, and 1.103.x pulls in `boto3`.
+- `urllib3>=2.8.0` — CVE-2026-97687 (proxy and target TLS settings were not
+  kept separate, so `proxy_ssl_context` could be ignored and the proxy's
+  certificate-verification policy overridden), CVE-2026-97688 (infinite loop
+  on a chunked Deflate response with trailing bytes) and CVE-2026-97689
+  (unbounded buffering of a chunk-size line that never ends; transitive via
+  requests).
+- `virtualenv>=21.7.13` — PYSEC-2026-4011 (a downloaded seed wheel was never
+  verified), PYSEC-2026-4012 (`pyvenv.cfg` injection via `--prompt`),
+  PYSEC-2026-4013 (double-quoting in `activate` / `activate.fish` runs shell
+  code from the virtual environment's own path) and PYSEC-2026-4014
+  (`activate.bat` command injection via `--prompt`); transitive via
+  pre-commit in the `dev` extra.
 
 ### Rebrand: RLMKit → RLM Studio
 
