@@ -1,5 +1,5 @@
-# Copyright (c) EGOGE - All Rights Reserved.
-# This software may be used and distributed according to the terms of the MIT license.
+# Copyright (c) 2026 EGOGE
+# SPDX-License-Identifier: Apache-2.0
 
 """Benchmark harness: the matrix runner behind ``rlm-studio bench`` / BENCHMARKS.md,
 plus the legacy strategy-based runner kept for its public API."""

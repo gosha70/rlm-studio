@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+# setuptools >= 77 is what understands the PEP 639 `license` SPDX expression
+# and `license-files`; on anything older the metadata below is an error.
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +10,11 @@ version = "1.0.0rc1"
 description = "RLM Studio — a workbench to measure whether Recursive Language Models beat Direct/RAG on your data, with any provider"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "Apache-2.0"
+# Apache-2.0 section 4(d) binds redistributors to carry the notices from a
+# NOTICE file when the work has one. It does not require having one; this
+# project chooses to, so it ships in the sdist and wheel beside the licence.
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     {name = "RLM Studio Contributors"}
 ]
@@ -16,7 +22,6 @@ keywords = ["llm", "rlm", "rlm-studio", "recursive", "context", "large-context",
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
