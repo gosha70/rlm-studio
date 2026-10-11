@@ -149,6 +149,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- `sharp` 0.35.4 → 0.35.5 and `source-map-js` 1.2.1 → 1.2.2 (frontend) —
+  CVE-2026-96889 in sharp's librsvg dependency, and an event-loop denial of
+  service through indexed source-map section offsets (GHSA-68fv-2mgg-jv7q).
+  Both transitive, both fixed inside their declared ranges.
+- `postcss-selector-parser` is pinned to `^7.1.6` through `overrides`
+  (frontend) — GHSA-rj75-hqrm-r3gf, quadratic complexity in flat selector
+  parsing. `@tailwindcss/typography` still depends on 6.0.10 in its latest
+  release, so npm's only offered fix was downgrading the plugin three years;
+  the override takes the patched parser instead. Verified by build: the
+  plugin still emits its `prose` rules.
 - `multidict>=6.9.1` — CVE-2026-104874, a reference leak in the items-view
   union and subtraction operators that lets a remote client grow
   unreclaimable memory. Transitive via aiohttp and yarl.
