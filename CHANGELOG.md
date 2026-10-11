@@ -149,6 +149,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- `multidict>=6.9.1` — CVE-2026-104874, a reference leak in the items-view
+  union and subtraction operators that lets a remote client grow
+  unreclaimable memory. Transitive via aiohttp and yarl.
+- `fsspec>=2026.6.0` — CVE-2026-104851, `ReferenceFileSystem` rendering
+  attacker-controlled Kerchunk JSON through un-sandboxed jinja2 templates.
+  Transitive via huggingface-hub; RLM Studio never uses the `reference`
+  filesystem, so the vulnerable path is unreachable from this project.
 - `anyio>=4.14.2` — CVE-2026-63374 (TLSStream IDNA-2003 host-name encoding
   enables certificate spoofing; critical) and CVE-2026-64847 (transitive via
   httpx / anthropic / google-genai).
