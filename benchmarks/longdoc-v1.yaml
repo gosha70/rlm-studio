@@ -26,12 +26,12 @@ sources:
   - id: synthetic
     title: "Deterministic synthetic technical documents (generated at run time)"
     url: "src/rlmstudio/benchmark/corpus.py"
-    license: "MIT (this repository)"
+    license: "Apache-2.0 (this repository)"
     notes: "Facts are invented and planted per run; a model cannot know them without reading."
   - id: repo-docs
     title: "RLM Studio documentation (docs/)"
     url: "https://github.com/gosha70/rlm-studio/tree/master/docs"
-    license: "MIT"
+    license: "Apache-2.0"
   - id: rfc9112
     title: "RFC 9112 — HTTP/1.1 (Fielding, Nottingham, Reschke; June 2022)"
     url: "https://www.rfc-editor.org/rfc/rfc9112.txt"

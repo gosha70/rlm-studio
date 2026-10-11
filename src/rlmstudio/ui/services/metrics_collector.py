@@ -1,6 +1,6 @@
 # mypy: disable-error-code="no-untyped-def,index,no-any-return,assignment"
-# Copyright (c) EGOGE - All Rights Reserved.
-# This software may be used and distributed according to the terms of the MIT license.
+# Copyright (c) 2026 EGOGE
+# SPDX-License-Identifier: Apache-2.0
 """
 MetricsCollector - Collect and aggregate execution metrics.
 """

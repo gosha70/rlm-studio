@@ -132,4 +132,25 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE).
+
+### Headers in new files
+
+Start a new first-party source file with the two-line header Apache
+[documents](https://www.apache.org/foundation/license-faq.html#apply), using the comment
+syntax of the language:
+
+```python
+# Copyright (c) 2026 EGOGE
+# SPDX-License-Identifier: Apache-2.0
+```
+
+Two rules matter more than the header itself:
+
+- **Never replace someone else's notice.** Code brought in from another project keeps its
+  own copyright line and license identifier, and its license text belongs in the
+  repository alongside ours. Overwriting that notice is how a license violation happens,
+  and it is not reversible by a later commit.
+- **Leave existing files alone.** Most files here carry no header, which is fine: the
+  `LICENSE` file governs the repository either way. Adding one to a file you are already
+  editing is welcome; a sweep across files you are not touching only obscures history.
