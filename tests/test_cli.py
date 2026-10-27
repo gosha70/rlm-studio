@@ -234,9 +234,7 @@ def test_studio_refuses_to_print_a_url_it_does_not_own(
     """On a port clash `studio` must exit non-zero, never start uvicorn,
     and never advertise the URL — printing one sends the user to the
     process that already holds the port."""
-    monkeypatch.setattr(
-        "rlmstudio.cli.main.get_ui_directory", lambda: "/tmp/not-a-real-ui"
-    )
+    monkeypatch.setattr("rlmstudio.cli.main.get_ui_directory", lambda: "/tmp/not-a-real-ui")
     monkeypatch.setattr(
         "rlmstudio.cli.main._bind_error",
         lambda _host, _port: "port 8000 already in use",
@@ -253,3 +251,52 @@ def test_studio_refuses_to_print_a_url_it_does_not_own(
     assert rc != 0
     assert "already in use" in captured.err
     assert "/studio" not in captured.out
+
+
+def test_bind_error_handles_ipv6_hosts() -> None:
+    """`::` is in _WILDCARD_BIND_HOSTS, so `--host ::` is a supported
+    invocation and the probe must not assume IPv4.
+
+    A hardcoded AF_INET socket raises gaierror on an IPv6 literal, which
+    no handler catches — turning a pre-flight meant to replace
+    tracebacks into one that produces them.
+    """
+    from rlmstudio.cli.main import _bind_error
+
+    assert _bind_error("::", 0) is None
+    assert _bind_error("::1", 0) is None
+
+
+def test_bind_error_detects_a_held_ipv6_port() -> None:
+    """Resolving the family must not cost the clash detection the probe
+    exists for."""
+    import socket
+
+    from rlmstudio.cli.main import _bind_error
+
+    holder = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    try:
+        holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        holder.bind(("::1", 0))
+        holder.listen(1)
+        held_port = holder.getsockname()[1]
+
+        message = _bind_error("::1", held_port)
+    finally:
+        holder.close()
+
+    assert message is not None
+    assert "already in use" in message
+    assert str(held_port) in message
+
+
+def test_bind_error_explains_an_unresolvable_host() -> None:
+    """An unresolvable host must produce guidance, not a gaierror
+    traceback — the whole point of the pre-flight."""
+    from rlmstudio.cli.main import _bind_error
+
+    message = _bind_error("no-such-host.invalid", 8799)
+
+    assert message is not None
+    assert "resolve" in message
+    assert "--host" in message

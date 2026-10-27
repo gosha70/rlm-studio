@@ -194,12 +194,31 @@ def _bind_error(host: str, port: int) -> str | None:
     uvicorn's traceback, which is the pre-existing behaviour, not a
     regression.
     """
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Resolve rather than assuming IPv4: ``::`` is in _WILDCARD_BIND_HOSTS
+    # and ``--host ::`` is a supported invocation, so a hardcoded AF_INET
+    # probe would reject an address uvicorn binds happily. getaddrinfo
+    # returns the family, and the sockaddr carries the flowinfo/scope-id
+    # that an IPv6 bind needs.
+    try:
+        candidates = socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+        )
+    except socket.gaierror:
+        return (
+            f"{PRODUCT_NAME} could not start: {host!r} is not a host name "
+            "this machine can resolve.\n"
+            "\n"
+            "  Check the spelling, or bind an address directly:\n"
+            f"       {CLI_NAME} studio --host {DEFAULT_HOST} --port {port}"
+        )
+
+    family, socktype, proto, _canonname, sockaddr = candidates[0]
+    probe = socket.socket(family, socktype, proto)
     try:
         # Mirror uvicorn's own socket options so the probe accepts and
         # rejects exactly what the real bind will.
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        probe.bind((host, port))
+        probe.bind(sockaddr)
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             return (
