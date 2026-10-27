@@ -8,7 +8,9 @@ flat.
 from __future__ import annotations
 
 import argparse
+import errno
 import logging
+import socket
 import sys
 import threading
 import time
@@ -178,6 +180,68 @@ def _browse_host(host: str) -> str:
     return "127.0.0.1" if host in _WILDCARD_BIND_HOSTS else host
 
 
+def _bind_error(host: str, port: int) -> str | None:
+    """Return a user-facing message if ``host:port`` cannot be bound.
+
+    uvicorn reports a bind failure only *after* the startup banner has
+    been printed, so without this pre-flight the user is shown a URL
+    that is served by whatever already owns the port — most often
+    another RLM Studio. Returning the message here lets the caller fail
+    before advertising an address it does not own.
+
+    This is advisory: the port can still be taken between the probe and
+    uvicorn's own bind. That race turns a friendly message back into
+    uvicorn's traceback, which is the pre-existing behaviour, not a
+    regression.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # Mirror uvicorn's own socket options so the probe accepts and
+        # rejects exactly what the real bind will.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind((host, port))
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            return (
+                f"{PRODUCT_NAME} could not start: port {port} on {host} is "
+                "already in use.\n"
+                "\n"
+                "Something else is listening there — often another copy of "
+                f"{PRODUCT_NAME} from an earlier terminal.\n"
+                "\n"
+                "  Use a different port:\n"
+                f"       {CLI_NAME} studio --port {port + 1}\n"
+                "\n"
+                "  Or find what is holding it:\n"
+                f"       lsof -nP -iTCP:{port} -sTCP:LISTEN        # macOS / Linux\n"
+                f"       netstat -ano | findstr :{port}            # Windows\n"
+                "\n"
+                f"  The port can also be set with {env_name('PORT')}."
+            )
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return (
+                f"{PRODUCT_NAME} could not start: no permission to bind port "
+                f"{port} on {host}.\n"
+                "\n"
+                "Ports below 1024 are reserved for privileged processes.\n"
+                "\n"
+                "  Use a port above 1024:\n"
+                f"       {CLI_NAME} studio --port {DEFAULT_PORT}"
+            )
+        if exc.errno in (errno.EADDRNOTAVAIL, errno.EINVAL):
+            return (
+                f"{PRODUCT_NAME} could not start: {host} is not an address "
+                "this machine can bind.\n"
+                "\n"
+                "  Bind all interfaces instead:\n"
+                f"       {CLI_NAME} studio --host 0.0.0.0 --port {port}"
+            )
+        raise
+    finally:
+        probe.close()
+    return None
+
+
 def _cmd_studio(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -205,6 +269,13 @@ def _cmd_studio(args: argparse.Namespace) -> int:
             "       cd frontend && npm run dev         # terminal 2\n",
             file=sys.stderr,
         )
+        return 2
+
+    # Check the bind *before* printing any URL: advertising an address we
+    # do not own sends the user to someone else's process.
+    bind_error = _bind_error(args.host, args.port)
+    if bind_error is not None:
+        print(bind_error, file=sys.stderr)
         return 2
 
     browse_host = _browse_host(args.host)

@@ -185,3 +185,71 @@ def test_explicit_flags_still_beat_the_env(monkeypatch: pytest.MonkeyPatch) -> N
 
     args = _build_parser().parse_args(["studio", "--port", "7777"])
     assert args.port == 7777
+
+
+def test_bind_error_is_none_for_a_free_port() -> None:
+    """A port nothing is listening on must probe clean.
+
+    Port 0 asks the kernel for an ephemeral port, which is always
+    available — this pins the happy path so the pre-flight check cannot
+    start rejecting ordinary startups.
+    """
+    from rlmstudio.cli.main import _bind_error
+
+    assert _bind_error("127.0.0.1", 0) is None
+
+
+def test_bind_error_reports_a_port_already_in_use() -> None:
+    """A held port must produce actionable text, not a bare errno.
+
+    uvicorn reports the bind failure only after the startup banner has
+    printed, which sends the user to a URL served by whatever already
+    owns the port. The message must name the port and offer a way out.
+    """
+    import socket
+
+    from rlmstudio.cli.main import _bind_error
+
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        held_port = holder.getsockname()[1]
+
+        message = _bind_error("127.0.0.1", held_port)
+    finally:
+        holder.close()
+
+    assert message is not None
+    assert str(held_port) in message
+    assert "already in use" in message
+    assert "--port" in message
+
+
+def test_studio_refuses_to_print_a_url_it_does_not_own(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """On a port clash `studio` must exit non-zero, never start uvicorn,
+    and never advertise the URL — printing one sends the user to the
+    process that already holds the port."""
+    monkeypatch.setattr(
+        "rlmstudio.cli.main.get_ui_directory", lambda: "/tmp/not-a-real-ui"
+    )
+    monkeypatch.setattr(
+        "rlmstudio.cli.main._bind_error",
+        lambda _host, _port: "port 8000 already in use",
+    )
+
+    def _fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("uvicorn.run must not be called on a bind failure")
+
+    monkeypatch.setattr("uvicorn.run", _fail)
+
+    rc = main(["studio", "--no-browser"])
+    captured = capsys.readouterr()
+
+    assert rc != 0
+    assert "already in use" in captured.err
+    assert "/studio" not in captured.out
