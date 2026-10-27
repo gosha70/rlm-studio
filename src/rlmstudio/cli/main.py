@@ -194,14 +194,27 @@ def _bind_error(host: str, port: int) -> str | None:
     uvicorn's traceback, which is the pre-existing behaviour, not a
     regression.
     """
-    # Resolve rather than assuming IPv4: ``::`` is in _WILDCARD_BIND_HOSTS
-    # and ``--host ::`` is a supported invocation, so a hardcoded AF_INET
-    # probe would reject an address uvicorn binds happily. getaddrinfo
-    # returns the family, and the sockaddr carries the flowinfo/scope-id
-    # that an IPv6 bind needs.
+    # Pick the family exactly the way uvicorn does, then resolve *within*
+    # it. Both halves matter:
+    #
+    #   * Choosing by hand is what uvicorn does (``AF_INET`` unless the
+    #     host contains a colon, see uvicorn/config.py), and letting
+    #     getaddrinfo order the families instead silently disagrees with
+    #     it: on macOS ``localhost`` resolves to ``::1`` first and ``''``
+    #     to ``::`` first, while uvicorn binds ``127.0.0.1`` and
+    #     ``0.0.0.0``. A probe that tested the wrong family would refuse
+    #     a start that works — something only listening on ``[::1]``,
+    #     which Node and Vite dev servers commonly do, would look like a
+    #     clash on ``localhost``. Refusing a good start is worse than the
+    #     race this pre-flight already accepts.
+    #
+    #   * Resolving is still required, because a name has to become an
+    #     address and an IPv6 sockaddr carries flowinfo and scope-id that
+    #     a hand-built 2-tuple does not.
+    family = socket.AF_INET6 if (host and ":" in host) else socket.AF_INET
     try:
         candidates = socket.getaddrinfo(
-            host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+            host, port, family=family, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
         )
     except socket.gaierror:
         return (
@@ -212,8 +225,8 @@ def _bind_error(host: str, port: int) -> str | None:
             f"       {CLI_NAME} studio --host {DEFAULT_HOST} --port {port}"
         )
 
-    family, socktype, proto, _canonname, sockaddr = candidates[0]
-    probe = socket.socket(family, socktype, proto)
+    resolved_family, socktype, proto, _canonname, sockaddr = candidates[0]
+    probe = socket.socket(resolved_family, socktype, proto)
     try:
         # Mirror uvicorn's own socket options so the probe accepts and
         # rejects exactly what the real bind will.
