@@ -361,3 +361,27 @@ def test_bind_error_accepts_the_empty_host() -> None:
     from rlmstudio.cli.main import _bind_error
 
     assert _bind_error("", 0) is None
+
+
+def test_bind_error_names_an_address_for_the_wildcard_host() -> None:
+    """`--host ''` is a supported wildcard. Echoing the raw host leaves a
+    blank where the address belongs ("port 8000 on  is already in use"),
+    so the message must name the resolved address instead."""
+    import socket
+
+    from rlmstudio.cli.main import _bind_error
+
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        holder.bind(("0.0.0.0", 0))
+        holder.listen(1)
+        held_port = holder.getsockname()[1]
+
+        message = _bind_error("", held_port)
+    finally:
+        holder.close()
+
+    assert message is not None
+    assert "0.0.0.0" in message
+    assert "on  is" not in message

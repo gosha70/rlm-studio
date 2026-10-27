@@ -226,6 +226,11 @@ def _bind_error(host: str, port: int) -> str | None:
         )
 
     resolved_family, socktype, proto, _canonname, sockaddr = candidates[0]
+    # Name the address actually being bound. ``--host ''`` is a supported
+    # wildcard, and echoing the raw host there leaves a blank where the
+    # address should be ("port 8000 on  is already in use"); the resolved
+    # form also tells a `localhost` user which family the clash is on.
+    shown_host = str(sockaddr[0]) or host
     probe = socket.socket(resolved_family, socktype, proto)
     try:
         # Mirror uvicorn's own socket options so the probe accepts and
@@ -235,7 +240,7 @@ def _bind_error(host: str, port: int) -> str | None:
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             return (
-                f"{PRODUCT_NAME} could not start: port {port} on {host} is "
+                f"{PRODUCT_NAME} could not start: port {port} on {shown_host} is "
                 "already in use.\n"
                 "\n"
                 "Something else is listening there — often another copy of "
@@ -253,7 +258,7 @@ def _bind_error(host: str, port: int) -> str | None:
         if exc.errno in (errno.EACCES, errno.EPERM):
             return (
                 f"{PRODUCT_NAME} could not start: no permission to bind port "
-                f"{port} on {host}.\n"
+                f"{port} on {shown_host}.\n"
                 "\n"
                 "Ports below 1024 are reserved for privileged processes.\n"
                 "\n"
@@ -262,7 +267,7 @@ def _bind_error(host: str, port: int) -> str | None:
             )
         if exc.errno in (errno.EADDRNOTAVAIL, errno.EINVAL):
             return (
-                f"{PRODUCT_NAME} could not start: {host} is not an address "
+                f"{PRODUCT_NAME} could not start: {shown_host} is not an address "
                 "this machine can bind.\n"
                 "\n"
                 "  Bind all interfaces instead:\n"
