@@ -154,9 +154,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   (GHSA-2464-fhr4-w9xw) and `use cache` functions returning typed arrays
   (GHSA-673q-mjm6-r5xr), plus a Server Actions denial of service in the App
   Router (GHSA-p3m5-59mp-jv5r). The fix is outside the previously declared
-  range, so `npm audit fix` could not take it and the `Security Scan` job had
-  been failing on master since 2026-10-23. `npm audit --omit=dev` now reports
-  zero. Verified past the audit: all 348 vitest cases pass, `build:bundle`
+  range, so `npm audit fix` could not take it. This clears the **npm half** of
+  the `Security Scan` failure on master: that job has been red since
+  2026-10-23 on both of its audits, `pip-audit` reporting 14 known
+  vulnerabilities across 3 Python packages alongside this critical npm
+  advisory, so the job stays red until a separate Python dependency change
+  lands. `npm audit --omit=dev` now reports zero.
+  Verified past the audit: all 348 vitest cases pass, `build:bundle`
   emits the same 14 routes, and the bundled UI serves every route and its
   hashed chunks under `/studio`. 16.4 enables strict route matching and
   Turbopack export-name mangling by default; neither changed the route table
