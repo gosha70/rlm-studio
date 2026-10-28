@@ -149,6 +149,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- `next` 16.3.8 → 16.4.3 (frontend) — three advisories against the 16.0.0–16.4.0
+  range, two of them unauthenticated RCE: image optimization with SVG input
+  (GHSA-2464-fhr4-w9xw) and `use cache` functions returning typed arrays
+  (GHSA-673q-mjm6-r5xr), plus a Server Actions denial of service in the App
+  Router (GHSA-p3m5-59mp-jv5r). The fix is outside the previously declared
+  range, so `npm audit fix` could not take it. This clears the **npm half** of
+  the `Security Scan` failure on master: that job has been red since
+  2026-10-23 on both of its audits, `pip-audit` failing alongside this
+  critical npm advisory — 14 advisories across 3 packages in that run, and
+  29 across 6 (certifi, filelock, litellm, msgpack, pypdf, virtualenv) when
+  measured on 2026-10-27 — so the job stays red until a separate Python
+  dependency change lands. `npm audit --omit=dev` now reports zero.
+  Verified past the audit: all 348 vitest cases pass, `build:bundle`
+  emits the same 14 routes, and the bundled UI serves every route and its
+  hashed chunks under `/studio`. 16.4 enables strict route matching and
+  Turbopack export-name mangling by default; neither changed the route table
+  or broke the export, and the repository uses no `unstable_` Next APIs.
 - `sharp` 0.35.4 → 0.35.5 and `source-map-js` 1.2.1 → 1.2.2 (frontend) —
   CVE-2026-96889 in sharp's librsvg dependency, and an event-loop denial of
   service through indexed source-map section offsets (GHSA-68fv-2mgg-jv7q).
