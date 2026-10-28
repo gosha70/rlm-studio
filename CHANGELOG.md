@@ -156,10 +156,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Router (GHSA-p3m5-59mp-jv5r). The fix is outside the previously declared
   range, so `npm audit fix` could not take it. This clears the **npm half** of
   the `Security Scan` failure on master: that job has been red since
-  2026-10-23 on both of its audits, `pip-audit` reporting 14 known
-  vulnerabilities across 3 Python packages alongside this critical npm
-  advisory, so the job stays red until a separate Python dependency change
-  lands. `npm audit --omit=dev` now reports zero.
+  2026-10-23 on both of its audits, `pip-audit` failing alongside this
+  critical npm advisory — 14 advisories across 3 packages in that run, and
+  29 across 6 (certifi, filelock, litellm, msgpack, pypdf, virtualenv) when
+  measured on 2026-10-27 — so the job stays red until a separate Python
+  dependency change lands. `npm audit --omit=dev` now reports zero.
   Verified past the audit: all 348 vitest cases pass, `build:bundle`
   emits the same 14 routes, and the bundled UI serves every route and its
   hashed chunks under `/studio`. 16.4 enables strict route matching and
