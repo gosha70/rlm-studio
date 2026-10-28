@@ -385,3 +385,38 @@ def test_bind_error_names_an_address_for_the_wildcard_host() -> None:
     assert message is not None
     assert "0.0.0.0" in message
     assert "on  is" not in message
+
+
+def test_bind_error_passes_none_not_empty_string_to_getaddrinfo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`''` must reach getaddrinfo as None.
+
+    `''` is one of _WILDCARD_BIND_HOSTS and uvicorn passes it to
+    `socket.bind`, which reads it as the any-address. getaddrinfo does
+    not agree across platforms: macOS resolves `''` to the wildcard,
+    glibc raises gaierror. So `--host ''` worked on macOS and refused to
+    start on Linux, and the tests written on macOS passed while CI
+    failed.
+
+    Asserting on the argument rather than the result makes this
+    platform-independent: it fails on macOS too if the normalisation is
+    dropped.
+    """
+    import socket as socket_module
+
+    from rlmstudio.cli import main as cli_main
+
+    seen: list[object] = []
+    real = socket_module.getaddrinfo
+
+    def _spy(host, port, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(host)
+        return real(host, port, **kwargs)
+
+    monkeypatch.setattr(cli_main.socket, "getaddrinfo", _spy)
+
+    cli_main._bind_error("", 0)
+
+    assert seen, "getaddrinfo was not called"
+    assert seen[0] is None, f"empty host reached getaddrinfo as {seen[0]!r}, not None"

@@ -212,9 +212,21 @@ def _bind_error(host: str, port: int) -> str | None:
     #     address and an IPv6 sockaddr carries flowinfo and scope-id that
     #     a hand-built 2-tuple does not.
     family = socket.AF_INET6 if (host and ":" in host) else socket.AF_INET
+    # ``host or None`` is load-bearing and platform-specific. ``''`` is one of
+    # _WILDCARD_BIND_HOSTS, and uvicorn hands it to ``socket.bind`` which
+    # reads it as the any-address. getaddrinfo does not agree across
+    # platforms: macOS resolves ``''`` to the wildcard, glibc raises
+    # gaierror for it. Passing None — which both read as AI_PASSIVE
+    # wildcard — makes the probe match uvicorn everywhere. Without it,
+    # ``--host ''`` is reported as an unresolvable host on Linux and the
+    # server refuses to start.
     try:
         candidates = socket.getaddrinfo(
-            host, port, family=family, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+            host or None,
+            port,
+            family=family,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_PASSIVE,
         )
     except socket.gaierror:
         return (
