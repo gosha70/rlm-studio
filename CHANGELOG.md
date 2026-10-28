@@ -149,6 +149,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- Python half of the `Security Scan` failure: `pip-audit` reported 29
+  advisories across 6 packages on 2026-10-27, and 0 after this change.
+  Measured with the same `uv run pip-audit --skip-editable` the job runs.
+  All six are transitive or dev-only; every floor below is a minimum, as
+  elsewhere in this file, and `uv.lock` carries the versions named.
+- `litellm>=1.103.1` (lock 1.103.10) — GHSA-g5ff-637f-6q2m, an authenticated
+  proxy user reading any file the process can through an unblocked
+  `vertex_ai_credentials` alias (1.95.0), and CVE-2026-114612, an
+  `internal_user` forging a `proxy_admin` session token because one key
+  sealed both secrets and sessions (1.103.1). Both are proxy-only; RLM
+  Studio uses litellm as a library. The earlier note that the lock held
+  litellm back from the 1.98+ line to keep `boto3` out no longer stands:
+  every release without the Bedrock transport is vulnerable, so the lock
+  now carries `boto3`, `botocore` and `pydantic-settings` as litellm
+  dependencies. 1.103 is the newest line compatible with `filelock` 4.
+  Verified: `litellm.cost_per_token` still returns the per-direction pair
+  the adapter sums, and the server imports. A live Direct and RLM turn
+  against a real provider was not possible from this environment (no
+  provider key); it is the one check left before merge.
+- `filelock>=4.2.1` (lock 4.2.4) — CVE-2026-112940, the SQLite-backed
+  `ReadWriteLock` reopening its database through a `/proc/self/fd` path
+  that SQLite resolves by name and follows symlinks, and CVE-2026-112913 /
+  CVE-2026-112907, Windows journal side files and oplocks letting another
+  local account hijack a lock. Transitive via huggingface-hub (tokenizers)
+  and virtualenv.
+- `certifi>=2026.10.19` (lock 2026.10.23) — PYSEC-2026-4320 /
+  GHSA-6q48-6c7w-9gw2: the bundle still trusted `emSign ECC Root CA - G3`,
+  eight of whose intermediates had compromised, revoked keys. This is the
+  CA store every provider call verifies against, through requests and
+  httpx.
+- `msgpack>=1.2.3` (lock 1.2.4) — CVE-2026-114613, the C extension leaking
+  the decoded map value each time `strict_map_key` rejects a key, so
+  repeated malformed input grows the process without bound. Transitive via
+  litellm.
+- `pypdf>=6.21.2` (lock 6.21.3) — twelve advisories, all crafted-PDF
+  denial of service: infinite loops on a file truncated inside the xref
+  table and on outline-tree walks (CVE-2026-113794, -113792, -113793),
+  memory blow-up through filter chains, large containers, long content
+  streams and form fields (CVE-2026-113795, -113790, -113791, -113789),
+  long runtimes on repeated missing objects, bad xref limits and malformed
+  xref streams (CVE-2026-115572, -115580, -115585), and CVE-2026-113786,
+  a `/DCTDecode` claim routing bytes to arbitrary Pillow image parsers.
+  `[docs]` extra; PDF text extraction is the only use.
+- `virtualenv>=21.14.9` (lock 21.15.1) — eleven advisories: an environment
+  path or prompt that runs as shell code on activation under bash, zsh,
+  fish and xonsh (CVE-2026-113776, -113732, -113726, -113725, -113723,
+  -113718), the interpreter path reaching generated console launchers
+  unquoted (CVE-2026-113722), seed wheels reused after a failed digest
+  check or taken from the index unverified (CVE-2026-113714, -113717),
+  `pyvenv.cfg` key injection through line breaks in the destination
+  (CVE-2026-113715) and app-data copies that ignore the umask
+  (CVE-2026-113720). `[dev]` extra, transitive via pre-commit; nothing
+  user-facing.
 - `next` 16.3.8 → 16.4.3 (frontend) — three advisories against the 16.0.0–16.4.0
   range, two of them unauthenticated RCE: image optimization with SVG input
   (GHSA-2464-fhr4-w9xw) and `use cache` functions returning typed arrays
@@ -159,8 +212,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   2026-10-23 on both of its audits, `pip-audit` failing alongside this
   critical npm advisory — 14 advisories across 3 packages in that run, and
   29 across 6 (certifi, filelock, litellm, msgpack, pypdf, virtualenv) when
-  measured on 2026-10-27 — so the job stays red until a separate Python
-  dependency change lands. `npm audit --omit=dev` now reports zero.
+  measured on 2026-10-27 — the Python half is cleared by the entry above.
+  `npm audit --omit=dev` now reports zero.
   Verified past the audit: all 348 vitest cases pass, `build:bundle`
   emits the same 14 routes, and the bundled UI serves every route and its
   hashed chunks under `/studio`. 16.4 enables strict route matching and
@@ -187,10 +240,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   enables certificate spoofing; critical) and CVE-2026-64847 (transitive via
   httpx / anthropic / google-genai).
 - `litellm>=1.89.7` — CVE-2026-84377. The floor is a minimum, as everywhere
-  else in this file; it is `uv.lock` that holds litellm at 1.89.7 rather than
+  else in this file; at the time `uv.lock` held litellm at 1.89.7 rather than
   following the latest release, because 1.98.0 and later import
-  `typing.NotRequired` at import time and 1.103.x pulls in `boto3`. A plain
-  `pip install rlm-studio` therefore still resolves the newest litellm.
+  `typing.NotRequired` at import time and pull in `boto3` (superseded by the
+  1.103.1 floor above). A plain `pip install rlm-studio` resolves the newest
+  litellm either way.
 - `urllib3>=2.8.0` — CVE-2026-97687 (proxy and target TLS settings were not
   kept separate, so `proxy_ssl_context` could be ignored and the proxy's
   certificate-verification policy overridden), CVE-2026-97688 (infinite loop
