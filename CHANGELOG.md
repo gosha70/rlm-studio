@@ -149,6 +149,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- `tornado` 6.5.10 → 6.6 — CVE-2026-116577, CVE-2026-115927 and
+  CVE-2026-116578, published after the 2026-10-27 sweep below and newly
+  failing `pip-audit` on every branch. Transitive via litellm; nothing
+  constrains it upward, and 6.6 requires Python ≥3.11, which this project
+  already does. `pip-audit` reports no known vulnerabilities again.
 - Python half of the `Security Scan` failure: `pip-audit` reported 29
   advisories across 6 packages on 2026-10-27, and 0 after this change.
   Measured with the same `uv run pip-audit --skip-editable` the job runs.
