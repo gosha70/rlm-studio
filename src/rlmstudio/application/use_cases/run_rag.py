@@ -23,6 +23,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_STEP,
 )
+from rlmstudio.application.services.provider_failure import failure_kind_value
 from rlmstudio.prompts import get_mode_system_prompt
 
 
@@ -243,6 +244,7 @@ class RunRAGUseCase:
                 mode_used=MODE_RAG,
                 success=False,
                 error=error_msg,
+                failure_kind=failure_kind_value(exc),
                 elapsed_time=elapsed,
             )
 

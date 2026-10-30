@@ -276,3 +276,129 @@ def test_trace_result_carries_failure_kind() -> None:
 
     plain = TraceResult(answer="hi", success=True)
     assert plain.model_dump()["failure_kind"] is None
+
+
+# ---------------------------------------------------------------------------
+# End to end: a provider failure must carry its kind all the way to the trace
+# ---------------------------------------------------------------------------
+
+
+def test_failure_kind_reaches_the_trace_through_a_use_case() -> None:
+    """The gap the unit tests missed.
+
+    The use cases catch provider exceptions themselves and return a result
+    DTO, so the route's `except` block never sees them. Classifying only in
+    that handler left `failure_kind` null for exactly the cases #95 is about
+    — a stale key and an unavailable model. This drives the real endpoint and
+    reads the real trace.
+    """
+    litellm = pytest.importorskip("litellm")
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+
+    from rlmstudio.server.app import app
+    from rlmstudio.server.dependencies import reset_state
+
+    def _auth_error(*_args: object, **_kwargs: object) -> None:
+        raise litellm.AuthenticationError(
+            "AnthropicException - invalid x-api-key",
+            llm_provider="anthropic",
+            model="claude-sonnet-4-5",
+        )
+
+    reset_state()
+    client = TestClient(app)
+
+    with patch("litellm.completion", side_effect=_auth_error):
+        submitted = client.post(
+            "/api/chat",
+            json={
+                "query": "What does this say?",
+                "content": "A short document.",
+                "mode": "direct",
+            },
+        )
+        assert submitted.status_code == 202, submitted.text
+        execution_id = submitted.json()["execution_id"]
+
+        trace = client.get(f"/api/traces/{execution_id}")
+
+    assert trace.status_code == 200, trace.text
+    result = trace.json()["result"]
+
+    assert result["success"] is False
+    # The wording reaches the user ...
+    assert "API key" in (result["error"] or "")
+    # ... and so does the classification the UI keys its remedy link off.
+    assert result["failure_kind"] == "auth", (
+        f"failure_kind was {result['failure_kind']!r}; the classification did "
+        f"not survive the use case"
+    )
+
+
+def test_successful_run_has_no_failure_kind() -> None:
+    """A success must leave the field null rather than reporting 'unknown'."""
+    from rlmstudio.application.dto import RunResultDTO
+
+    assert RunResultDTO(answer="hi", mode_used="direct", success=True).failure_kind is None
+
+
+# ---------------------------------------------------------------------------
+# Misclassification: bare status numbers matched ordinary figures
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # "140123" contains "401" — this classified as AUTH and told a user
+        # with an oversized document to rotate a working API key.
+        "This model's maximum context length is 200000 tokens, however you requested 140123 tokens",
+        "max_tokens is too large: 4290",  # contains "429"
+        "litellm.BadRequestError: max_tokens must be <= 8192, got 42900",
+        "Request contains 401234 characters, which exceeds the limit",
+    ],
+)
+def test_ordinary_numbers_are_not_mistaken_for_status_codes(message: str) -> None:
+    """A figure that happens to contain 401 or 429 must not be classified.
+
+    UNKNOWN is the right answer here: the message keeps its own detail, which
+    for a context overflow is the thing that actually helps. A confidently
+    wrong remedy is worse than the raw text this feature replaced.
+    """
+    assert classify_provider_failure(Exception(message)) is ProviderFailureKind.UNKNOWN
+
+
+def test_real_auth_and_rate_limit_still_classify_by_class_name() -> None:
+    """Dropping the bare numbers must not cost the real cases, which arrive
+    as typed exceptions rather than as free text."""
+    litellm = pytest.importorskip("litellm")
+
+    auth = litellm.AuthenticationError("nope", llm_provider="openai", model="gpt-4o")
+    rate = litellm.RateLimitError("slow down", llm_provider="openai", model="gpt-4o")
+
+    assert classify_provider_failure(auth) is ProviderFailureKind.AUTH
+    assert classify_provider_failure(rate) is ProviderFailureKind.RATE_LIMIT
+
+
+def test_context_overflow_keeps_its_own_detail_through_the_adapter() -> None:
+    """The user-visible outcome for an overflow: the real reason, not a
+    remedy for a problem they do not have."""
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+    adapter = LiteLLMAdapter(model="gpt-4o-mini")
+    err = adapter._translate_exception(
+        litellm.ContextWindowExceededError(
+            "This model's maximum context length is 128000 tokens, "
+            "however you requested 140123 tokens",
+            model="gpt-4o-mini",
+            llm_provider="openai",
+        ),
+        "LiteLLM completion failed",
+    )
+
+    text = str(err)
+    assert "140123 tokens" in text, "the actionable detail was dropped"
+    assert "API key" not in text, "an overflow was reported as an auth failure"

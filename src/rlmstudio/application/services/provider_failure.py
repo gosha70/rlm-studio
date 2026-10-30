@@ -31,6 +31,7 @@ __all__ = [
     "classify_provider_failure",
     "describe_provider_failure",
     "failure_kind_of",
+    "failure_kind_value",
     "redact_secrets",
     "SECRET_PLACEHOLDER",
 ]
@@ -100,16 +101,35 @@ _CLASS_NAME_KINDS: dict[str, ProviderFailureKind] = {
 # Fallbacks for providers or httpx layers that surface a generic exception
 # class with a descriptive message. Ordered: the first kind whose keywords
 # match wins, so the more specific phrases come first.
+#
+# Bare status numbers ("401", "429") are deliberately NOT here. They match as
+# substrings of ordinary figures in unrelated messages — "140123 tokens"
+# contains "401", "max_tokens ... 4290" contains "429" — which classified a
+# context-window overflow as an auth failure and told a user with an oversized
+# document to rotate a working API key. A confidently wrong remedy is worse
+# than the raw detail this replaced. Real auth and rate-limit failures are
+# caught by class name above; a provider that reports only a bare status code
+# in free text falls through to UNKNOWN and keeps its detail, which is the
+# honest outcome.
 _KEYWORD_KINDS: tuple[tuple[ProviderFailureKind, tuple[str, ...]], ...] = (
     (
         ProviderFailureKind.AUTH,
-        ("invalid x-api-key", "invalid api key", "authentication_error", "unauthorized", "401"),
+        (
+            "invalid x-api-key",
+            "invalid api key",
+            "authentication_error",
+            "unauthorized",
+            "invalid authentication",
+        ),
     ),
     (
         ProviderFailureKind.MODEL_UNAVAILABLE,
         ("not_found_error", "model not found", "does not exist", "unknown model"),
     ),
-    (ProviderFailureKind.RATE_LIMIT, ("rate limit", "rate_limit", "429", "quota")),
+    (
+        ProviderFailureKind.RATE_LIMIT,
+        ("rate limit", "rate_limit", "too many requests", "quota"),
+    ),
 )
 
 
@@ -255,3 +275,15 @@ def failure_kind_of(exc: BaseException) -> ProviderFailureKind | None:
     """
     kind = getattr(exc, "kind", None)
     return kind if isinstance(kind, ProviderFailureKind) else None
+
+
+def failure_kind_value(exc: BaseException) -> str | None:
+    """Return the carried failure kind as its string value, or ``None``.
+
+    Convenience for the use cases, which catch provider exceptions
+    themselves and build a result DTO rather than letting the route's
+    handler see them. Returning the plain string keeps the DTO and the API
+    payload free of an enum import.
+    """
+    kind = failure_kind_of(exc)
+    return kind.value if kind is not None else None
