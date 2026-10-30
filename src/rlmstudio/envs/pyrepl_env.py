@@ -6,11 +6,11 @@
 import io
 import logging
 import traceback
-from contextlib import redirect_stderr, redirect_stdout
 from functools import partial
 from typing import Any
 
 from rlmstudio.envs.sandbox import create_safe_globals
+from rlmstudio.envs.stream_capture import capture_streams
 from rlmstudio.envs.timeout import TimeoutError as ExecTimeoutError
 from rlmstudio.envs.timeout import create_timeout
 from rlmstudio.tools import chunk, grep, grep_file, outline_file, peek, peek_file, select
@@ -151,8 +151,11 @@ class PyReplEnv:
             # Check if we're in the main thread
             is_main_thread = threading.current_thread() == threading.main_thread()
 
-            # Redirect stdout and stderr
-            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            # Capture per-thread, not process-wide: two concurrent cells
+            # using redirect_stdout would interleave into each other's
+            # buffers and could leave sys.stdout pointing at a finished
+            # one. See envs/stream_capture.py and issue #90.
+            with capture_streams(stdout_buffer, stderr_buffer):
                 # CRITICAL: In non-main threads (like Streamlit), we CANNOT use:
                 # - Signal-based timeout (raises ValueError)
                 # - Process-based timeout (loses variable state)
