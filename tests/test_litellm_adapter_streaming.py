@@ -456,7 +456,14 @@ class TestTransportFallbackOnStreamFailure:
 
     def test_complete_sync_non_transport_error_still_raises(self):
         """Auth/4xx errors on the sync streaming path still raise —
-        no second attempt, no hiding real errors."""
+        no second attempt, no hiding real errors.
+
+        The match was ``"LiteLLM completion failed"`` until #95 gave auth
+        failures an actionable message instead of the generic prefix. The
+        assertion is on the new wording because it is strictly more
+        specific: it proves both that the error raised rather than being
+        retried, and that it raised *as a classified auth failure*.
+        """
 
         import litellm as _litellm
 
@@ -469,7 +476,7 @@ class TestTransportFallbackOnStreamFailure:
 
         adapter = LiteLLMAdapter(model="gpt-4o")
         with patch("litellm.completion", side_effect=_auth_error):
-            with pytest.raises(RuntimeError, match="LiteLLM completion failed"):
+            with pytest.raises(RuntimeError, match="API key was rejected"):
                 adapter.complete([{"role": "user", "content": "?"}])
 
     @pytest.mark.asyncio
@@ -517,7 +524,11 @@ class TestTransportFallbackOnStreamFailure:
     @pytest.mark.asyncio
     async def test_complete_async_non_transport_error_still_raises(self):
         """Auth/4xx errors are NOT retried via non-streaming — those
-        would just fail the same way and hide the real cause."""
+        would just fail the same way and hide the real cause.
+
+        Matched on the classified wording since #95; see the sync variant
+        above for why.
+        """
 
         import litellm as _litellm
 
@@ -530,7 +541,7 @@ class TestTransportFallbackOnStreamFailure:
 
         adapter = LiteLLMAdapter(model="gpt-4o")
         with patch("litellm.acompletion", side_effect=_auth_error):
-            with pytest.raises(RuntimeError, match="LiteLLM async completion failed"):
+            with pytest.raises(RuntimeError, match="API key was rejected"):
                 await adapter.complete_async([{"role": "user", "content": "?"}])
 
     @pytest.mark.asyncio

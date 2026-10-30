@@ -17,6 +17,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from rlmstudio.application.dto import LLMResponseDTO, StreamChunk
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailureError,
+    ProviderFailureKind,
+    classify_provider_failure,
+    describe_provider_failure,
+    redact_secrets,
+)
 from rlmstudio.branding import env, env_name
 
 logger = logging.getLogger(__name__)
@@ -879,12 +886,40 @@ class LiteLLMAdapter:
     # -- Private helpers --
 
     def _translate_exception(self, exc: BaseException, default_prefix: str) -> RuntimeError:
-        """Map a raw litellm exception to a RuntimeError with adapter context."""
+        """Map a raw litellm exception to a RuntimeError with adapter context.
+
+        Timeout and connection keep their existing message shapes: three use
+        cases (``run_direct``, ``run_rag``, ``run_rlm``) detect timeouts by
+        ``str(exc).startswith(TIMEOUT_ERROR_PREFIX)``, so changing that
+        prefix would silently break their classification.
+
+        Everything else is classified through the shared classifier so the
+        run path and the connection probe say the same thing (#95). The
+        upstream detail is redacted before it is shown, because auth errors
+        can echo the rejected key.
+        """
         if _is_timeout_error(exc):
             return RuntimeError(_timeout_error_message(self._timeout, exc))
         if _is_connection_error(exc):
             return RuntimeError(_connection_error_message(self._api_base, exc))
-        return RuntimeError(f"{default_prefix}: {exc}")
+
+        kind = classify_provider_failure(exc)
+        if kind is not ProviderFailureKind.UNKNOWN:
+            failure = describe_provider_failure(kind, model=self._model, api_base=self._api_base)
+            detail = redact_secrets(str(exc))
+            # ProviderFailureError subclasses RuntimeError, so every existing
+            # `except RuntimeError` keeps working; the carried kind is what
+            # lets the server attach a stable classification to the run
+            # payload instead of making the UI match on wording.
+            # Annotated because the package ships no `py.typed`, so mypy sees
+            # cross-module `rlmstudio.*` symbols as Any and `warn_return_any`
+            # would flag the return.
+            classified: RuntimeError = ProviderFailureError(
+                f"{failure.cause} {failure.fix} (Detail: {detail})", failure
+            )
+            return classified
+
+        return RuntimeError(f"{default_prefix}: {redact_secrets(str(exc))}")
 
     @staticmethod
     def _reasoning_field_names() -> list[str]:

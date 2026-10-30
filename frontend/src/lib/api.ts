@@ -239,7 +239,23 @@ export interface TraceResponse {
   status: string;
   started_at?: string | null;
   completed_at?: string | null;
-  result: { answer: string; success: boolean; input_tokens?: number; output_tokens?: number; total_cost?: number };
+  result: {
+    answer: string;
+    success: boolean;
+    error?: string | null;
+    // Stable classification of a provider failure (#95). Key the remedy
+    // link off this, never off the wording of `error`.
+    failure_kind?:
+      | "auth"
+      | "model_unavailable"
+      | "connection"
+      | "timeout"
+      | "rate_limit"
+      | null;
+    input_tokens?: number;
+    output_tokens?: number;
+    total_cost?: number;
+  };
   budget: {
     steps_used: number;
     steps_limit: number;
