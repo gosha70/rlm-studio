@@ -45,7 +45,11 @@ export function StepDetail({ step }: StepDetailProps) {
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Cost</p>
-            <p className="font-medium">${step.cost_usd.toFixed(4)}</p>
+            {step.cost_usd == null ? (
+              <p className="font-medium text-muted-foreground">Unavailable</p>
+            ) : (
+              <p className="font-medium">${step.cost_usd.toFixed(4)}</p>
+            )}
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Duration</p>

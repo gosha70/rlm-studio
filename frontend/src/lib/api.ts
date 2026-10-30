@@ -214,7 +214,9 @@ export interface TraceStep {
   output?: string | null;
   input_tokens: number;
   output_tokens: number;
-  cost_usd: number;
+  // null = not recorded. The backend does not populate per-step cost yet
+  // (issue #94); rendering a 0 as "$0.0000" reads as "this step was free".
+  cost_usd: number | null;
   duration_seconds: number;
   recursion_depth: number;
   model?: string | null;

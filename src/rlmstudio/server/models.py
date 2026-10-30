@@ -407,7 +407,13 @@ class TraceStep(BaseModel):
     output: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    cost_usd: float = 0.0
+    # None means "not recorded", which is what every step reports today: no
+    # construction site in routes/traces.py sets this, so a 0.0 default was
+    # rendered as a real "$0.0000" and read as "this step was free". Null is
+    # distinguishable, so the UI can say unavailable. When per-step pricing
+    # lands it sets a number — including a genuine 0.0 for subcall and
+    # fingerprint rows — and the UI condition is already right. See issue #94.
+    cost_usd: float | None = None
     duration_seconds: float = 0.0
     recursion_depth: int = 0
     model: str | None = None
