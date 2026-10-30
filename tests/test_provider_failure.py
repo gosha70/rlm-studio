@@ -283,57 +283,46 @@ def test_trace_result_carries_failure_kind() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_failure_kind_reaches_the_trace_through_a_use_case() -> None:
-    """The gap the unit tests missed.
+def test_use_case_carries_failure_kind_on_its_error_result() -> None:
+    """The gap the unit tests missed, tested where it actually lives.
 
     The use cases catch provider exceptions themselves and return a result
     DTO, so the route's `except` block never sees them. Classifying only in
     that handler left `failure_kind` null for exactly the cases #95 is about
-    — a stale key and an unavailable model. This drives the real endpoint and
-    reads the real trace.
+    — a stale key and an unavailable model.
+
+    Driven at the use case rather than through POST /api/chat: that endpoint
+    returns 202 and runs the work in an asyncio task, which does not progress
+    reliably under TestClient. An endpoint-level version of this test passed
+    alone and failed intermittently in the full suite. The record-shape test
+    below covers the route's half.
     """
     litellm = pytest.importorskip("litellm")
-    from unittest.mock import patch
 
-    from fastapi.testclient import TestClient
+    from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
 
-    from rlmstudio.server.app import app
-    from rlmstudio.server.dependencies import reset_state
+    class _RejectingAdapter(LiteLLMAdapter):
+        def complete(self, *_args: object, **_kwargs: object) -> object:
+            raise self._translate_exception(
+                litellm.AuthenticationError(
+                    "AnthropicException - invalid x-api-key",
+                    llm_provider="anthropic",
+                    model="claude-sonnet-4-5",
+                ),
+                "LiteLLM completion failed",
+            )
 
-    def _auth_error(*_args: object, **_kwargs: object) -> None:
-        raise litellm.AuthenticationError(
-            "AnthropicException - invalid x-api-key",
-            llm_provider="anthropic",
-            model="claude-sonnet-4-5",
-        )
+    result = RunDirectUseCase(_RejectingAdapter(model="claude-sonnet-4-5")).execute(
+        content="A short document.", query="What does this say?"
+    )
 
-    reset_state()
-    client = TestClient(app)
-
-    with patch("litellm.completion", side_effect=_auth_error):
-        submitted = client.post(
-            "/api/chat",
-            json={
-                "query": "What does this say?",
-                "content": "A short document.",
-                "mode": "direct",
-            },
-        )
-        assert submitted.status_code == 202, submitted.text
-        execution_id = submitted.json()["execution_id"]
-
-        trace = client.get(f"/api/traces/{execution_id}")
-
-    assert trace.status_code == 200, trace.text
-    result = trace.json()["result"]
-
-    assert result["success"] is False
+    assert result.success is False
     # The wording reaches the user ...
-    assert "API key" in (result["error"] or "")
+    assert "API key" in (result.error or "")
     # ... and so does the classification the UI keys its remedy link off.
-    assert result["failure_kind"] == "auth", (
-        f"failure_kind was {result['failure_kind']!r}; the classification did "
-        f"not survive the use case"
+    assert result.failure_kind == "auth", (
+        f"failure_kind was {result.failure_kind!r}; the classification did not survive the use case"
     )
 
 
@@ -402,3 +391,47 @@ def test_context_overflow_keeps_its_own_detail_through_the_adapter() -> None:
     text = str(err)
     assert "140123 tokens" in text, "the actionable detail was dropped"
     assert "API key" not in text, "an overflow was reported as an auth failure"
+
+
+def test_compare_and_chat_build_the_same_execution_record_keys() -> None:
+    """Compare's record claims to mirror chat's; pin that it actually does.
+
+    `_update_execution_record` documents itself as mirroring
+    `_run_execution` in chat.py "so downstream features see a consistent
+    record". It drifted: chat carried `failure_kind` and Compare did not, so
+    the same revoked key produced a classified failure from Chat and an
+    unclassified one from Compare. Comparing the literal key sets catches
+    drift in either direction, which a Compare end-to-end test would not.
+    """
+    import ast
+    import pathlib
+
+    def _result_dict_keys(path: str, func: str) -> set[str]:
+        tree = ast.parse(pathlib.Path(path).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == func:
+                for sub in ast.walk(node):
+                    # The `… .result = {...}` assignment, identified by having
+                    # the answer/success/error trio rather than by position.
+                    if isinstance(sub, ast.Dict):
+                        keys = {
+                            k.value
+                            for k in sub.keys
+                            if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                        }
+                        if {"answer", "success", "error"} <= keys:
+                            return keys
+        raise AssertionError(f"no result dict found in {func} ({path})")
+
+    compare_keys = _result_dict_keys(
+        "src/rlmstudio/server/routes/compare_matrix.py",
+        "_update_execution_record",
+    )
+    chat_keys = _result_dict_keys("src/rlmstudio/server/routes/chat.py", "_run_execution")
+
+    assert "failure_kind" in compare_keys, "Compare dropped the classification"
+    assert "failure_kind" in chat_keys, "chat dropped the classification"
+    assert compare_keys == chat_keys, (
+        f"record shapes drifted — only in chat: {chat_keys - compare_keys}, "
+        f"only in Compare: {compare_keys - chat_keys}"
+    )
