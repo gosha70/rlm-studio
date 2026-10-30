@@ -393,45 +393,67 @@ def test_context_overflow_keeps_its_own_detail_through_the_adapter() -> None:
     assert "API key" not in text, "an overflow was reported as an auth failure"
 
 
-def test_compare_and_chat_build_the_same_execution_record_keys() -> None:
-    """Compare's record claims to mirror chat's; pin that it actually does.
+def test_all_three_execution_records_carry_the_same_keys() -> None:
+    """Chat REST, Chat WebSocket and Compare must build identical records.
 
-    `_update_execution_record` documents itself as mirroring
-    `_run_execution` in chat.py "so downstream features see a consistent
-    record". It drifted: chat carried `failure_kind` and Compare did not, so
-    the same revoked key produced a classified failure from Chat and an
-    unclassified one from Compare. Comparing the literal key sets catches
-    drift in either direction, which a Compare end-to-end test would not.
+    `_update_execution_record` documents itself as mirroring `_run_execution`
+    in chat.py "so downstream features see a consistent record". It drifted:
+    chat carried `failure_kind` and Compare did not, so the same revoked key
+    produced a classified failure from Chat and an unclassified one from
+    Compare. Comparing the literal key sets catches drift in either
+    direction, which an end-to-end test per surface would not.
+
+    Module files are resolved from the imported modules rather than by
+    relative path: the earlier version opened "src/rlmstudio/..." and so only
+    passed when pytest ran from the repo root.
     """
     import ast
-    import pathlib
+    import pathlib as _pathlib
 
-    def _result_dict_keys(path: str, func: str) -> set[str]:
-        tree = ast.parse(pathlib.Path(path).read_text())
+    from rlmstudio.server.routes import chat as chat_module
+    from rlmstudio.server.routes import compare_matrix as compare_module
+
+    def _result_dict_keys(module: object, func: str) -> list[set[str]]:
+        """Every `… .result = {...}` literal inside *func* that looks like an
+        execution record. Returns a list so a function with more than one
+        (the WebSocket handler has a result path and an error path) is
+        visible rather than silently reduced to the first."""
+        source = _pathlib.Path(module.__file__).read_text()  # type: ignore[attr-defined]
+        tree = ast.parse(source)
+        found: list[set[str]] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == func:
                 for sub in ast.walk(node):
-                    # The `… .result = {...}` assignment, identified by having
-                    # the answer/success/error trio rather than by position.
                     if isinstance(sub, ast.Dict):
                         keys = {
                             k.value
                             for k in sub.keys
                             if isinstance(k, ast.Constant) and isinstance(k.value, str)
                         }
-                        if {"answer", "success", "error"} <= keys:
-                            return keys
-        raise AssertionError(f"no result dict found in {func} ({path})")
+                        # The full record, not the short error-path dict.
+                        if {"answer", "success", "error", "input_tokens"} <= keys:
+                            found.append(keys)
+        if not found:
+            raise AssertionError(f"no execution record found in {func}")
+        return found
 
-    compare_keys = _result_dict_keys(
-        "src/rlmstudio/server/routes/compare_matrix.py",
-        "_update_execution_record",
+    rest = _result_dict_keys(chat_module, "_run_execution")
+    websocket = _result_dict_keys(chat_module, "websocket_chat")
+    compare = _result_dict_keys(compare_module, "_update_execution_record")
+
+    for label, records in (
+        ("chat REST", rest),
+        ("chat WebSocket", websocket),
+        ("Compare", compare),
+    ):
+        assert len(records) == 1, f"{label} has {len(records)} record shapes; expected 1"
+        assert "failure_kind" in records[0], f"{label} dropped the classification"
+
+    assert rest[0] == websocket[0], (
+        f"chat REST and WebSocket records drifted — "
+        f"only REST: {rest[0] - websocket[0]}, only WS: {websocket[0] - rest[0]}"
     )
-    chat_keys = _result_dict_keys("src/rlmstudio/server/routes/chat.py", "_run_execution")
-
-    assert "failure_kind" in compare_keys, "Compare dropped the classification"
-    assert "failure_kind" in chat_keys, "chat dropped the classification"
-    assert compare_keys == chat_keys, (
-        f"record shapes drifted — only in chat: {chat_keys - compare_keys}, "
-        f"only in Compare: {compare_keys - chat_keys}"
+    assert rest[0] == compare[0], (
+        f"chat and Compare records drifted — "
+        f"only chat: {rest[0] - compare[0]}, only Compare: {compare[0] - rest[0]}"
     )
