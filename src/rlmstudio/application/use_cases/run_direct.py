@@ -24,6 +24,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_STEP,
 )
+from rlmstudio.application.services.provider_failure import failure_kind_value
 from rlmstudio.infrastructure.llm.litellm_adapter import TIMEOUT_ERROR_PREFIX
 from rlmstudio.prompts import get_mode_system_prompt
 
@@ -168,6 +169,7 @@ class RunDirectUseCase:
                 mode_used=MODE_DIRECT,
                 success=False,
                 error=error_str,
+                failure_kind=failure_kind_value(exc),
                 elapsed_time=elapsed,
             )
 
@@ -304,5 +306,6 @@ class RunDirectUseCase:
                 mode_used=MODE_DIRECT,
                 success=False,
                 error=error_str,
+                failure_kind=failure_kind_value(exc),
                 elapsed_time=elapsed,
             )

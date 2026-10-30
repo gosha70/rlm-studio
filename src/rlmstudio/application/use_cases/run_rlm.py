@@ -41,6 +41,7 @@ from rlmstudio.application.sandbox_vars import (
 )
 from rlmstudio.application.services.execution_preview import format_preview, truncation_marker
 from rlmstudio.application.services.inspect_dispatcher import dispatch_inspect, display_code
+from rlmstudio.application.services.provider_failure import failure_kind_value
 from rlmstudio.application.services.result_registry import ReadSlice, ResultRef, ResultRegistry
 from rlmstudio.domain.entities import BudgetConfig, BudgetState
 from rlmstudio.domain.exceptions import BudgetExceededError
@@ -889,6 +890,7 @@ class RunRLMUseCase:
                     mode_used=MODE_RLM,
                     success=False,
                     error=error_str,
+                    failure_kind=failure_kind_value(exc),
                     steps=budget_state.steps,
                     input_tokens=cumulative_input,
                     output_tokens=cumulative_output,
@@ -901,6 +903,7 @@ class RunRLMUseCase:
                 mode_used=MODE_RLM,
                 success=False,
                 error=error_str,
+                failure_kind=failure_kind_value(exc),
                 steps=budget_state.steps,
                 input_tokens=cumulative_input,
                 output_tokens=cumulative_output,
@@ -1762,6 +1765,7 @@ class RunRLMUseCase:
                     mode_used=MODE_RLM,
                     success=False,
                     error=error_str,
+                    failure_kind=failure_kind_value(exc),
                     steps=budget_state.steps,
                     input_tokens=cumulative_input,
                     output_tokens=cumulative_output,
@@ -1774,6 +1778,7 @@ class RunRLMUseCase:
                 mode_used=MODE_RLM,
                 success=False,
                 error=error_str,
+                failure_kind=failure_kind_value(exc),
                 steps=budget_state.steps,
                 input_tokens=cumulative_input,
                 output_tokens=cumulative_output,

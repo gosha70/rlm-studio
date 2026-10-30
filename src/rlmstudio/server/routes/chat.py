@@ -44,6 +44,7 @@ from rlmstudio.application.services.history_context import (
     extract_final_qa_pairs,
 )
 from rlmstudio.application.services.outcome_classifier import classify_execution_outcome
+from rlmstudio.application.services.provider_failure import failure_kind_of
 from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
 from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
 from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
@@ -793,6 +794,7 @@ async def _run_execution(
             "answer": result.answer,
             "success": result.success,
             "error": result.error,
+            "failure_kind": result.failure_kind,
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
             "total_tokens": result.total_tokens,
@@ -869,7 +871,14 @@ async def _run_execution(
         now = datetime.now(timezone.utc)
         execution.status = "error"
         execution.completed_at = now
-        execution.result = {"answer": "", "success": False, "error": str(exc)}
+        execution.result = {
+            "answer": "",
+            "success": False,
+            "error": str(exc),
+            # Carried from the adapter when the failure was classified (#95),
+            # so the UI can link to the remedy without parsing the message.
+            "failure_kind": kind.value if (kind := failure_kind_of(exc)) else None,
+        }
 
         # Add error message to session so the user can see what went wrong
         session = state.sessions.get(execution.session_id)
@@ -1234,6 +1243,7 @@ async def websocket_chat(
                             "answer": result.answer,
                             "success": result.success,
                             "error": result.error,
+                            "failure_kind": result.failure_kind,
                             "input_tokens": result.input_tokens,
                             "output_tokens": result.output_tokens,
                             "total_tokens": result.total_tokens,
@@ -1335,7 +1345,14 @@ async def websocket_chat(
                         finish = datetime.now(timezone.utc)
                         exec_rec.status = "error"
                         exec_rec.completed_at = finish
-                        exec_rec.result = {"answer": "", "success": False, "error": str(exc)}
+                        exec_rec.result = {
+                            "answer": "",
+                            "success": False,
+                            "error": str(exc),
+                            "failure_kind": (
+                                kind.value if (kind := failure_kind_of(exc)) else None
+                            ),
+                        }
                         # Persist error message to session (mirrors REST path)
                         if sess:
                             ws_elapsed = (

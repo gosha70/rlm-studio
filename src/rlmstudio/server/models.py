@@ -443,6 +443,12 @@ class TraceResult(BaseModel):
     answer: str = ""
     success: bool = True
     error: str | None = None
+    # Stable classification of a provider failure (#95): "auth",
+    # "model_unavailable", "connection", "timeout", "rate_limit".  None for
+    # a success and for any failure that is not a classified provider error.
+    # The UI keys its remedy link off this rather than matching on the
+    # wording of `error`, which is what the enum exists to avoid.
+    failure_kind: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     total_cost: float = 0.0

@@ -46,6 +46,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailureKind,
+    classify_provider_failure,
+    describe_provider_failure,
+    redact_secrets,
+)
 from rlmstudio.server.models import LLMProviderConfig
 from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY
 from rlmstudio.ui.services.secret_store import FileSecretStore, KeyringSecretStore
@@ -104,12 +110,23 @@ class ProviderTestResult:
     error_message:
         Sanitized upstream error text, truncated to ~200 chars.  Never
         contains API keys, bearer tokens, or raw response bodies.
+    failure_kind:
+        Classification of the failure (#95), from the same classifier the
+        run path uses, so both surfaces name the same cause.  ``None`` on
+        success.  ``status`` stays coarse for existing consumers; this is
+        the field that says *why*.
+    failure_cause / failure_fix:
+        User-facing text for ``failure_kind`` — what went wrong and what to
+        do.  ``None`` on success.
     """
 
     status: ProviderStatus
     tested_at: datetime
     latency_ms: int | None
     error_message: str | None
+    failure_kind: ProviderFailureKind | None = None
+    failure_cause: str | None = None
+    failure_fix: str | None = None
 
 
 def _get_api_key(llm_provider_id: str, backend: str) -> str | None:
@@ -144,10 +161,14 @@ def _sanitize_error_message(exc: BaseException) -> str:
     msg = str(exc)
     if " - " in msg:
         msg = msg.split(" - ", 1)[1]
-    for pat in _API_KEY_PATTERNS:
-        msg = pat.sub("<redacted>", msg)
+    # Redaction lives in provider_failure so the run path, which also shows
+    # upstream text now, shares exactly these patterns (#95). The annotation
+    # is load-bearing for mypy: the package ships no `py.typed`, so every
+    # cross-module `rlmstudio.*` import resolves to Any and `warn_return_any`
+    # would otherwise flag the return below.
+    redacted: str = redact_secrets(msg)
     # Hard cap — upstream may echo request bodies into error strings.
-    return msg[:_ERROR_MESSAGE_MAX_LEN]
+    return redacted[:_ERROR_MESSAGE_MAX_LEN]
 
 
 def _build_probe_params(
@@ -264,11 +285,24 @@ def test_provider(
                     timeout_s,
                     elapsed - timeout_s,
                 )
+            # Classify through the shared classifier (#95) so the probe names
+            # the same cause the run path does. `status` stays coarse for
+            # existing consumers; `failure_kind` is what says why.
+            kind = classify_provider_failure(exc)
+            failure = describe_provider_failure(
+                kind,
+                provider_name=provider.name,
+                model=provider.model,
+                api_base=provider.endpoint,
+            )
             return ProviderTestResult(
                 status="offline",
                 tested_at=tested_at,
                 latency_ms=None,
                 error_message=msg,
+                failure_kind=kind,
+                failure_cause=failure.cause,
+                failure_fix=failure.fix,
             )
 
         # Success path

@@ -171,6 +171,13 @@ class RunResultDTO:
         mode_used: Execution mode that was used.
         success: Whether execution succeeded.
         error: Error description if it failed.
+        failure_kind: Stable classification of a provider failure (#95) —
+            "auth", "model_unavailable", "connection", "timeout",
+            "rate_limit". None when the run succeeded or the failure was
+            not a classified provider error. Set here rather than only in
+            the route's except block, because the use cases catch provider
+            exceptions themselves and return a result — the route's handler
+            never sees them.
         steps: Number of execution steps.
         input_tokens: Total input tokens consumed.
         output_tokens: Total output tokens consumed.
@@ -184,6 +191,7 @@ class RunResultDTO:
     mode_used: str = ""
     success: bool = True
     error: str | None = None
+    failure_kind: str | None = None
     steps: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
