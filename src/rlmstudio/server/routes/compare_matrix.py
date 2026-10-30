@@ -986,6 +986,7 @@ def _update_execution_record(
         "answer": result.answer,
         "success": result.success,
         "error": result.error,
+        "failure_kind": result.failure_kind,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
         "total_tokens": result.total_tokens,
