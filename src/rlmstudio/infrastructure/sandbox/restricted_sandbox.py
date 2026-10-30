@@ -11,7 +11,6 @@ blocks dangerous patterns at compile time:
 from __future__ import annotations
 
 import io
-from contextlib import redirect_stderr, redirect_stdout
 from functools import partial
 from typing import Any
 
@@ -25,6 +24,7 @@ from RestrictedPython.PrintCollector import PrintCollector
 
 from rlmstudio.application.dto import ExecutionResultDTO
 from rlmstudio.domain.exceptions import SecurityViolationError
+from rlmstudio.envs.stream_capture import capture_streams
 from rlmstudio.tools import chunk, grep, grep_file, outline_file, peek, peek_file, select
 
 # Modules considered safe for LLM-generated code (subset of rlmstudio defaults)
@@ -126,7 +126,13 @@ class RestrictedSandboxAdapter:
         truncated = False
 
         try:
-            with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+            # Capture per-thread rather than process-wide (#90). Note that
+            # RestrictedPython routes `print` through PrintCollector in the
+            # per-instance namespace, which was never shared across cells;
+            # what this fixes here is direct stream writes (sys.stdout.write
+            # and anything an allowed callable emits), which did go through
+            # the global and did interleave.
+            with capture_streams(stdout_buf, stderr_buf):
                 exec(byte_code, self._globals, self._namespace)  # noqa: S102
         except SecurityViolationError as exc:
             exception_msg = f"SecurityViolationError: {exc}"
