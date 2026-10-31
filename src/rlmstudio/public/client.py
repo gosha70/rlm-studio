@@ -17,6 +17,7 @@ from rlmstudio.application.use_cases.run_comparison import (
 from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
 from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
 from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
+from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_MODEL
 from rlmstudio.infrastructure.embedding import LiteLLMEmbeddingAdapter, MockEmbeddingAdapter
 from rlmstudio.infrastructure.llm.mock_adapter import MockLLMAdapter
 from rlmstudio.infrastructure.sandbox.sandbox_factory import create_sandbox
@@ -256,7 +257,9 @@ class RLMKitClient:
                 from rlmstudio.infrastructure.llm.anthropic_adapter import AnthropicAdapter
                 from rlmstudio.llm.anthropic_client import ClaudeClient
 
-                anthropic_client = ClaudeClient(model=model or "claude-sonnet-4-6", api_key=api_key)
+                anthropic_client = ClaudeClient(
+                    model=model or DEFAULT_ANTHROPIC_MODEL, api_key=api_key
+                )
                 return AnthropicAdapter(anthropic_client)
             except ImportError as exc:
                 raise ConfigError(f"Anthropic not available: {exc}") from exc

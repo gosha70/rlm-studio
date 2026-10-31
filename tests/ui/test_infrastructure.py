@@ -175,12 +175,19 @@ class TestMetricsCollector:
     def test_calculate_cost_anthropic_haiku(self) -> None:
         """Test cost calculation for Anthropic Claude Haiku."""
         collector = MetricsCollector()
-        # Claude Haiku 4.5: input $0.008/1k, output $0.024/1k
-        # 1000 input tokens = $0.008
-        # 1000 output tokens = $0.024
-        # Total = $0.032
+        # Derived from the catalog rather than restated here. This assertion
+        # previously pinned $0.008/$0.024 per 1k — the figure Anthropic's
+        # published table contradicts ($1/$5 per MTok, i.e. 0.001/0.005) — so
+        # it enforced the wrong price instead of catching it. The published
+        # rate itself is pinned in tests/test_model_defaults_are_current.py.
+        from rlmstudio.domain.model_catalog import price_per_1k
+
+        rates = price_per_1k("claude-haiku-4-5-20251001")
+        assert rates is not None
+        expected = 1000 / 1000 * rates[0] + 1000 / 1000 * rates[1]
+
         cost = collector._calculate_cost(1000, 1000, "anthropic", "claude-haiku-4-5-20251001")
-        assert abs(cost - 0.032) < 0.001
+        assert abs(cost - expected) < 0.001
 
     def test_calculate_cost_unknown_provider(self) -> None:
         """Test cost calculation with unknown provider."""

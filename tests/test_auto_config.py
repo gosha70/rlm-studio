@@ -185,7 +185,10 @@ class TestGetDefaultClientConfig:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         provider, model = get_default_client_config()
         assert provider == "anthropic"
-        assert model == "claude-3-5-sonnet-20241022"
+        # Catalog-derived, not a literal: the pinned value was retired.
+        from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_MODEL
+
+        assert model == DEFAULT_ANTHROPIC_MODEL
 
         # Test Ollama
         monkeypatch.delenv("ANTHROPIC_API_KEY")
