@@ -2724,7 +2724,6 @@ dependencies = [
     { name = "msgpack" },
     { name = "multidict" },
     { name = "psutil" },
-    { name = "pyasn1" },
     { name = "pygments" },
     { name = "pyyaml" },
     { name = "regex" },
@@ -2741,6 +2740,7 @@ all = [
     { name = "fastapi" },
     { name = "lxml" },
     { name = "openai" },
+    { name = "pyasn1" },
     { name = "pypdf" },
     { name = "python-docx" },
     { name = "python-multipart" },
@@ -2768,6 +2768,7 @@ eval = [
     { name = "openai" },
 ]
 interop = [
+    { name = "pyasn1" },
     { name = "rlms" },
 ]
 providers = [
@@ -2818,7 +2819,7 @@ requires-dist = [
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7.0" },
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pyarrow", marker = "extra == 'dev'", specifier = ">=23.0.1" },
-    { name = "pyasn1", specifier = ">=0.6.5" },
+    { name = "pyasn1", marker = "extra == 'interop'", specifier = ">=0.6.5" },
     { name = "pygments", specifier = ">=2.20.0" },
     { name = "pypdf", marker = "extra == 'studio'", specifier = ">=6.21.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
