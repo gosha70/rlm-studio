@@ -88,7 +88,7 @@ studio = [
     "starlette>=1.3.1",  # form() limits ignored DoS (HIGH, 1.3.1); StaticFiles SSRF via UNC paths on Windows (HIGH, 1.1.0); arbitrary HTTP method dispatch via getattr (MEDIUM, 1.1.0); URL hostname poisoning (LOW, 1.3.0)
     "uvicorn>=0.27.0",
     "python-multipart>=0.0.31",  # CVE-2026-40347 / CVE-2026-42561 (0.0.27); CVE-2026-53538/53539/53540 fixed in 0.0.30/0.0.31 — runtime-reachable via /api/files/upload
-    "pypdf>=6.21.2",  # PDF text extraction; PYSEC-2026-3655/3656 (6.15.0); memory exhaustion via XMP metadata (6.12.1); FlateDecode inefficiency / form XObject memory (6.12.2); infinite loop in fonts and outline retrieval (6.13.0); missing stream length limits (6.13.3); CVE-2026-113794 / CVE-2026-113795 xref-truncation infinite loop and filter-chain memory (6.20.0); CVE-2026-113792 / CVE-2026-113793 outline-tree infinite loops (6.20.1); CVE-2026-113789 / CVE-2026-113790 / CVE-2026-113791 memory blow-up on form fields, large containers and content streams (6.21.0); CVE-2026-113786 arbitrary image parser via a /DCTDecode claim (6.21.1); CVE-2026-115572 / CVE-2026-115580 / CVE-2026-115585 long runtimes on repeated missing objects, bad xref limits and malformed xref streams (6.21.2)
+    "pypdf>=6.21.4",  # PDF text extraction; PYSEC-2026-3655/3656 (6.15.0); memory exhaustion via XMP metadata (6.12.1); FlateDecode inefficiency / form XObject memory (6.12.2); infinite loop in fonts and outline retrieval (6.13.0); missing stream length limits (6.13.3); CVE-2026-113794 / CVE-2026-113795 xref-truncation infinite loop and filter-chain memory (6.20.0); CVE-2026-113792 / CVE-2026-113793 outline-tree infinite loops (6.20.1); CVE-2026-113789 / CVE-2026-113790 / CVE-2026-113791 memory blow-up on form fields, large containers and content streams (6.21.0); CVE-2026-113786 arbitrary image parser via a /DCTDecode claim (6.21.1); CVE-2026-115572 / CVE-2026-115580 / CVE-2026-115585 long runtimes on repeated missing objects, bad xref limits and malformed xref streams (6.21.2)
     "python-docx>=1.1.0",  # DOCX text extraction in /api/files/upload
     "lxml>=6.1.0",  # CVE-2026-41066 fix (transitive via python-docx)
 ]
@@ -113,6 +113,14 @@ providers = [
 # pytest as *runtime* dependencies of its own.
 interop = [
     "rlms>=0.1.3,<0.2",
+    # CVE-2026-119194/119195/119196/119197. Only this extra pulls pyasn1 in:
+    # rlms -> google-genai -> google-auth -> pyasn1-modules -> pyasn1 (confirmed
+    # with `uv tree --invert --package pyasn1`). Declaring it in the core
+    # dependencies would install it for every `pip install rlm-studio`, where
+    # nothing uses it. `all` includes `interop`, so the floor still applies
+    # everywhere pyasn1 is actually present. pyasn1-modules allows <0.7.0, so
+    # the minimum is all that was missing.
+    "pyasn1>=0.6.5",
 ]
 
 eval = [

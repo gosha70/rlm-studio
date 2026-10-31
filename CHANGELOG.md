@@ -149,6 +149,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- `pyasn1` 0.6.4 → 0.6.5 and `pypdf` 6.21.3 → 6.21.4 — seven advisories
+  published after the 2026-10-30 sweep: CVE-2026-119194/119195/119196/119197
+  in `pyasn1`, and CVE-2026-119203 plus two others in `pypdf`. `pyasn1` is
+  transitive via `pyasn1-modules` ← `google-auth`, and `pyasn1-modules`
+  already allows `<0.7.0`, so a declared floor is all that was needed.
+  `pypdf` sits on the document-parsing path, so it was exercised by hand as
+  well as by the suite: a text-bearing PDF uploaded through
+  `/api/files/upload` round-trips its content byte-exact. Third fresh batch
+  in four days — `pip-audit` must be re-run on the day of the cut, not
+  earlier in the week.
 - `tornado` 6.5.10 → 6.6 — CVE-2026-116577, CVE-2026-115927 and
   CVE-2026-116578, published after the 2026-10-27 sweep below and newly
   failing `pip-audit` on every branch. Transitive via litellm; nothing
