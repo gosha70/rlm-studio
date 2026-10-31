@@ -193,3 +193,60 @@ def test_ui_catalog_offers_exactly_the_domain_catalog() -> None:
         for d, u in zip(domain, ui, strict=True):
             assert d.input_cost_per_1k == u.input_cost_per_1k, f"{label} {d.name} input price"
             assert d.output_cost_per_1k == u.output_cost_per_1k, f"{label} {d.name} output price"
+
+
+# ---------------------------------------------------------------------------
+# Prices, pinned against the published table rather than against themselves
+# ---------------------------------------------------------------------------
+
+# Taken from https://platform.claude.com/docs/en/about-claude/pricing on
+# 2026-10-31, converted from per-million to per-thousand tokens.
+#
+# These literals are the point. Every other test compares the pricing path
+# against the catalog, so a wrong figure in the catalog agreed with itself and
+# passed: Opus was recorded at Sonnet's rate and Haiku at $8/$24 — dearer than
+# Sonnet, despite being the cheap tier. Pinning the published numbers here is
+# what makes the catalog answerable to something outside itself.
+PUBLISHED_ANTHROPIC_PRICES_PER_1K = {
+    "claude-opus-4-6": (0.005, 0.025),
+    "claude-sonnet-4-6": (0.003, 0.015),
+    "claude-haiku-4-5-20251001": (0.001, 0.005),
+}
+
+
+@pytest.mark.parametrize(("model", "expected"), sorted(PUBLISHED_ANTHROPIC_PRICES_PER_1K.items()))
+def test_catalog_price_matches_the_published_rate(
+    model: str, expected: tuple[float, float]
+) -> None:
+    from rlmstudio.domain.model_catalog import price_per_1k
+
+    assert price_per_1k(model) == expected, (
+        f"{model} is priced {price_per_1k(model)} but the published rate is "
+        f"{expected}. If Anthropic changed it, update both this literal and "
+        f"the catalog, and note the date."
+    )
+
+
+def test_cheaper_tiers_actually_cost_less() -> None:
+    """A sanity check the recorded figures failed.
+
+    Haiku was priced above Sonnet, which is the kind of thing that should be
+    obvious on sight and was not. Ordering by tier catches a transposed or
+    misplaced figure without needing to know the right number.
+    """
+    from rlmstudio.domain.model_catalog import ModelTier, price_per_1k
+
+    by_tier = {m.tier: m.name for m in ANTHROPIC_MODELS}
+
+    def total(name: str) -> float:
+        rates = price_per_1k(name)
+        assert rates is not None
+        return sum(rates)
+
+    cheap = total(by_tier[ModelTier.CHEAP])
+    balanced = total(by_tier[ModelTier.BALANCED])
+    high = total(by_tier[ModelTier.HIGH_QUALITY])
+
+    assert cheap < balanced < high, (
+        f"tier pricing is out of order: cheap={cheap}, balanced={balanced}, high_quality={high}"
+    )

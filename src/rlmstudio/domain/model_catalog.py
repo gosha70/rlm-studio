@@ -66,10 +66,20 @@ class CatalogModel:
     tier: ModelTier
 
 
+# Prices verified against https://platform.claude.com/docs/en/about-claude/pricing
+# on 2026-10-31. Figures there are per million tokens; these are per thousand,
+# so divide by 1000: $5/MTok -> 0.005.
+#
+# Two of these were wrong before that check. Opus was recorded at Sonnet's
+# rate, understating it; Haiku was recorded at $8/$24 — dearer than Sonnet,
+# which should have been the tell, since it is the cheap tier. Nothing caught
+# it because the only test compared the pricing path against this same table,
+# so wrong source data agreed with itself. tests/test_model_defaults_are_current.py
+# now pins these three rates as literals taken from the page above.
 ANTHROPIC_MODELS: tuple[CatalogModel, ...] = (
-    CatalogModel("claude-opus-4-6", 0.003, 0.015, ModelTier.HIGH_QUALITY),
+    CatalogModel("claude-opus-4-6", 0.005, 0.025, ModelTier.HIGH_QUALITY),
     CatalogModel("claude-sonnet-4-6", 0.003, 0.015, ModelTier.BALANCED),
-    CatalogModel("claude-haiku-4-5-20251001", 0.008, 0.024, ModelTier.CHEAP),
+    CatalogModel("claude-haiku-4-5-20251001", 0.001, 0.005, ModelTier.CHEAP),
 )
 
 OPENAI_MODELS: tuple[CatalogModel, ...] = (
