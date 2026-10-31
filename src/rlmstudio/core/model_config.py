@@ -10,6 +10,12 @@ allowing significant cost optimization without sacrificing quality.
 
 from dataclasses import dataclass
 
+from rlmstudio.domain.model_catalog import (
+    DEFAULT_ANTHROPIC_CHEAP_MODEL,
+    DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL,
+    DEFAULT_ANTHROPIC_MODEL,
+)
+
 from ..llm import get_llm_client
 from ..llm.base import BaseLLMProvider
 
@@ -148,10 +154,10 @@ class ModelConfig:
             >>> # OpenAI: GPT-4o for root, GPT-4o-mini for subs
             >>> config = ModelConfig.cost_optimized("openai")
 
-            >>> # Anthropic: Opus for root, Haiku for subs
+            >>> # Anthropic: Sonnet for root, Haiku for subs
             >>> config = ModelConfig.cost_optimized("anthropic")
 
-            >>> # Mixed: Claude Opus for root, local Llama for subs (max savings)
+            >>> # Mixed: high-quality Claude for root, local Llama for subs
             >>> config = ModelConfig.cost_optimized("mixed")
         """
         if provider == "openai":
@@ -163,15 +169,19 @@ class ModelConfig:
             )
         elif provider == "anthropic":
             return cls(
-                root_model="claude-3-5-sonnet-20241022",
-                sub_model="claude-3-5-haiku-20241022",
+                root_model=DEFAULT_ANTHROPIC_MODEL,
+                sub_model=DEFAULT_ANTHROPIC_CHEAP_MODEL,
                 root_provider="anthropic",
                 sub_provider="anthropic",
             )
         elif provider == "mixed":
-            # Use Claude Opus for quality, local Llama for cost
+            # High-quality Claude for the root, local Llama for the subs.
+            # This preset used Opus before the retirement fix and still
+            # documents Opus; it keeps the high-quality tier rather than
+            # dropping to the balanced default the plain `anthropic` preset
+            # uses.
             return cls(
-                root_model="claude-3-opus-20240229",
+                root_model=DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL,
                 sub_model="llama3",
                 root_provider="anthropic",
                 sub_provider="ollama",

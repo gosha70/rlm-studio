@@ -172,6 +172,12 @@ addopts = [
     # ~45 s on a 14-core machine.  Override with ``-n 0`` for serial
     # debug runs or ``-n 4`` for a specific worker count.
     "-n=auto",
+    # Live tests hit real provider APIs and are opt-in: without this they run
+    # on any machine that happens to have a provider key exported, so a normal
+    # `pytest tests/` fails for an unrelated reason (a model the developer's
+    # account cannot use). Run them deliberately with `pytest tests/live -m live`.
+    "-m",
+    "not live",
 ]
 filterwarnings = [
     # aiohttp: fixed in Python 3.13.2 but aiohttp hasn't caught up yet

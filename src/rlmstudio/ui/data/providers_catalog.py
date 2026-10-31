@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from rlmstudio.domain.model_catalog import ANTHROPIC_MODELS as _ANTHROPIC_CATALOG
+from rlmstudio.domain.model_catalog import OPENAI_MODELS as _OPENAI_CATALOG
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -68,20 +71,14 @@ class ProviderEntry:
 # ---------------------------------------------------------------------------
 
 OPENAI_MODELS: list[ModelInfo] = [
-    ModelInfo("gpt-4o", 0.005, 0.015),
-    ModelInfo("gpt-4o-mini", 0.00015, 0.0006),
-    ModelInfo("gpt-4-turbo", 0.01, 0.03),
-    ModelInfo("gpt-4", 0.03, 0.06),
-    ModelInfo("gpt-3.5-turbo", 0.0005, 0.0015),
-    ModelInfo("o1", 0.015, 0.06),
-    ModelInfo("o1-mini", 0.003, 0.012),
+    ModelInfo(m.name, m.input_cost_per_1k, m.output_cost_per_1k) for m in _OPENAI_CATALOG
 ]
 
+
 ANTHROPIC_MODELS: list[ModelInfo] = [
-    ModelInfo("claude-opus-4-6", 0.003, 0.015),
-    ModelInfo("claude-sonnet-4-6", 0.003, 0.015),
-    ModelInfo("claude-haiku-4-5-20251001", 0.008, 0.024),
+    ModelInfo(m.name, m.input_cost_per_1k, m.output_cost_per_1k) for m in _ANTHROPIC_CATALOG
 ]
+
 
 OPENAI_EMBEDDING_MODELS: list[ModelInfo] = [
     ModelInfo("text-embedding-3-small", 0.00002, 0.0),

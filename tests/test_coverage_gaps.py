@@ -392,21 +392,42 @@ class TestAnthropicAdapter:
         assert adapter.count_tokens("hello world") >= 1
 
     def test_get_pricing_known(self) -> None:
+        """Priced from the catalog. This previously asserted
+        claude-3-opus-20240229 at $15/MTok — a retired model, so it pinned a
+        price for something nobody can call."""
+        from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_MODEL, price_per_1k
         from rlmstudio.infrastructure.llm.anthropic_adapter import AnthropicAdapter
 
         class _ClaudeClient:
-            model = "claude-3-opus-20240229"
+            model = DEFAULT_ANTHROPIC_MODEL
 
         adapter = AnthropicAdapter(_ClaudeClient())
         pricing = adapter.get_pricing()
-        assert pricing["input_cost_per_1m"] == 15.0
 
-    def test_get_pricing_unknown_falls_back(self) -> None:
+        rates = price_per_1k(DEFAULT_ANTHROPIC_MODEL)
+        assert rates is not None
+        assert pricing["input_cost_per_1m"] == rates[0] * 1000
+        assert pricing["output_cost_per_1m"] == rates[1] * 1000
+
+    def test_get_pricing_unknown_reports_zero_not_another_model_rate(self) -> None:
+        """An unknown model must not be priced from a substitute.
+
+        This asserted only that a key was present, which the old Opus-3
+        fallback satisfied while overcharging the current default fivefold.
+        Zero means "not priced"; a plausible wrong number means nothing is
+        ever noticed."""
         from rlmstudio.infrastructure.llm.anthropic_adapter import AnthropicAdapter
 
-        adapter = AnthropicAdapter(_FakePlainClient())
+        class _UnknownModelClient:
+            # Deliberately not _FakePlainClient: its model is "gpt-4", which
+            # the catalog knows, so it never exercised the unknown branch.
+            model = "claude-something-nobody-has-shipped"
+
+        adapter = AnthropicAdapter(_UnknownModelClient())
         pricing = adapter.get_pricing()
-        assert "input_cost_per_1m" in pricing
+
+        assert pricing["input_cost_per_1m"] == 0.0
+        assert pricing["output_cost_per_1m"] == 0.0
 
 
 class TestOllamaAdapter:
