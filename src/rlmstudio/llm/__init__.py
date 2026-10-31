@@ -5,7 +5,7 @@
 
 from typing import Any
 
-from rlmstudio.ui.data.providers_catalog import DEFAULT_ANTHROPIC_MODEL
+from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_MODEL
 
 from .auto import (
     ConfigurationError,

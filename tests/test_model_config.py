@@ -63,7 +63,7 @@ class TestModelConfig:
         # Against the catalog rather than a literal: this test previously
         # pinned claude-3-5-sonnet-20241022, which Anthropic has since
         # retired, so it enforced the bug instead of catching it.
-        from rlmstudio.ui.data.providers_catalog import (
+        from rlmstudio.domain.model_catalog import (
             DEFAULT_ANTHROPIC_CHEAP_MODEL,
             DEFAULT_ANTHROPIC_MODEL,
         )
@@ -81,6 +81,12 @@ class TestModelConfig:
         assert config.sub_provider == "ollama"
         assert "claude" in config.root_model.lower()
         assert "llama" in config.sub_model.lower()
+        # The mixed preset documents a high-quality root. Pinned because the
+        # retirement fix briefly dropped it to the balanced default, changing
+        # the preset's meaning without saying so.
+        from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL
+
+        assert config.root_model == DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL
 
     def test_cost_optimized_invalid_provider(self):
         """Test that invalid provider raises error."""

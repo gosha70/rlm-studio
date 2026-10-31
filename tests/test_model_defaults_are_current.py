@@ -8,9 +8,11 @@ compiled into the package: the legacy ``llm/`` clients and the
 all retired, so ``provider="anthropic"`` on the public client failed with
 ``not_found_error`` out of the box.
 
-The fix was to derive those defaults from ``providers_catalog``, which is the
-list the UI already offers. These tests pin that relationship: a default that
-is not in the catalog fails here rather than at a user's first run.
+The fix moved the model list into ``domain/model_catalog.py`` — the innermost
+layer, so ``llm/`` and ``core/`` no longer reach into UI-owned data for it —
+and declared each default there. These tests pin that relationship: a default
+that falls out of the catalog, or a price the catalog does not know, fails
+here rather than at a user's first run.
 """
 
 from __future__ import annotations
@@ -19,9 +21,10 @@ import inspect
 
 import pytest
 
-from rlmstudio.ui.data.providers_catalog import (
+from rlmstudio.domain.model_catalog import (
     ANTHROPIC_MODELS,
     DEFAULT_ANTHROPIC_CHEAP_MODEL,
+    DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL,
     DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_OPENAI_MODEL,
     OPENAI_MODELS,
@@ -54,6 +57,11 @@ def test_catalog_offers_no_retired_model() -> None:
     [
         ("DEFAULT_ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL, ANTHROPIC_MODELS),
         ("DEFAULT_ANTHROPIC_CHEAP_MODEL", DEFAULT_ANTHROPIC_CHEAP_MODEL, ANTHROPIC_MODELS),
+        (
+            "DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL",
+            DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL,
+            ANTHROPIC_MODELS,
+        ),
         ("DEFAULT_OPENAI_MODEL", DEFAULT_OPENAI_MODEL, OPENAI_MODELS),
     ],
 )
@@ -64,15 +72,20 @@ def test_each_default_is_a_model_the_catalog_offers(
     assert default in names, f"{label} ({default!r}) is not offered by the catalog"
 
 
-def test_anthropic_default_keeps_its_tier() -> None:
-    """The defaults these replaced were Sonnet- and Haiku-tier.
+def test_each_default_has_the_tier_it_is_named_for() -> None:
+    """Tier is explicit metadata, so assert on it rather than on the name.
 
     Pinning the tier matters because the catalog's first entry is Opus:
-    deriving the default positionally would silently move existing callers
-    onto Opus pricing, which is a surprise cost rather than a retirement fix.
+    deriving the balanced default positionally would silently move existing
+    callers onto Opus pricing — a surprise cost rather than a retirement fix.
     """
-    assert "sonnet" in DEFAULT_ANTHROPIC_MODEL
-    assert "haiku" in DEFAULT_ANTHROPIC_CHEAP_MODEL
+    from rlmstudio.domain.model_catalog import ModelTier
+
+    by_name = {m.name: m for m in ANTHROPIC_MODELS}
+
+    assert by_name[DEFAULT_ANTHROPIC_MODEL].tier is ModelTier.BALANCED
+    assert by_name[DEFAULT_ANTHROPIC_CHEAP_MODEL].tier is ModelTier.CHEAP
+    assert by_name[DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL].tier is ModelTier.HIGH_QUALITY
 
 
 def test_legacy_anthropic_client_default_is_current() -> None:
@@ -107,3 +120,76 @@ def test_cost_optimized_presets_name_no_retired_model(provider: str) -> None:
         assert field not in RETIRED_ANTHROPIC_MODELS, (
             f"{provider} preset names retired model {field}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Pricing: the bug the retirement fix activated
+# ---------------------------------------------------------------------------
+
+
+def test_every_default_has_a_known_price() -> None:
+    """A default the pricing path cannot price is how the overcharge happened.
+
+    The legacy client's own table knew only Claude 2 and 3 and fell back to
+    Opus 3 for anything else, so the new Sonnet 4.6 default was billed at
+    Opus 3 rates — $90 for 1M in + 1M out against a real $18.
+    """
+    from rlmstudio.domain.model_catalog import price_per_1k
+
+    for default in (
+        DEFAULT_ANTHROPIC_MODEL,
+        DEFAULT_ANTHROPIC_CHEAP_MODEL,
+        DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL,
+        DEFAULT_OPENAI_MODEL,
+    ):
+        assert price_per_1k(default) is not None, f"no price known for {default}"
+
+
+def test_legacy_client_prices_the_default_from_the_catalog() -> None:
+    """The exact overcharge, pinned."""
+    from rlmstudio.domain.model_catalog import price_per_1k
+    from rlmstudio.llm.anthropic_client import ClaudeClient
+
+    client = ClaudeClient.__new__(ClaudeClient)
+    client.model = DEFAULT_ANTHROPIC_MODEL
+
+    input_per_1k, output_per_1k = price_per_1k(DEFAULT_ANTHROPIC_MODEL)  # type: ignore[misc]
+    expected = 1000 * input_per_1k + 1000 * output_per_1k
+
+    assert ClaudeClient.calculate_cost(client, 1_000_000, 1_000_000) == pytest.approx(expected)
+
+
+def test_unknown_model_reports_no_cost_rather_than_a_guess() -> None:
+    """Substituting another model's rate is what produced the overcharge.
+
+    0.0 means "not priced" to callers; a confidently wrong figure does not.
+    """
+    from rlmstudio.llm.anthropic_client import ClaudeClient
+
+    client = ClaudeClient.__new__(ClaudeClient)
+    client.model = "some-model-the-catalog-has-never-heard-of"
+
+    assert ClaudeClient.calculate_cost(client, 1_000_000, 1_000_000) == 0.0
+
+
+def test_ui_catalog_offers_exactly_the_domain_catalog() -> None:
+    """The UI list derives from the domain one; pin that nothing is lost.
+
+    Moving the lists into the domain layer, I truncated OpenAI from seven
+    entries to three. Nothing failed at the boundary — the metrics collector
+    simply priced `gpt-4` at zero, three layers away. Comparing the two lists
+    catches a dropped or mispriced entry at the source.
+    """
+    from rlmstudio.domain.model_catalog import ANTHROPIC_MODELS as DOMAIN_ANTHROPIC
+    from rlmstudio.domain.model_catalog import OPENAI_MODELS as DOMAIN_OPENAI
+    from rlmstudio.ui.data.providers_catalog import ANTHROPIC_MODELS as UI_ANTHROPIC
+    from rlmstudio.ui.data.providers_catalog import OPENAI_MODELS as UI_OPENAI
+
+    for label, domain, ui in (
+        ("anthropic", DOMAIN_ANTHROPIC, UI_ANTHROPIC),
+        ("openai", DOMAIN_OPENAI, UI_OPENAI),
+    ):
+        assert [m.name for m in domain] == [m.name for m in ui], f"{label} names differ"
+        for d, u in zip(domain, ui, strict=True):
+            assert d.input_cost_per_1k == u.input_cost_per_1k, f"{label} {d.name} input price"
+            assert d.output_cost_per_1k == u.output_cost_per_1k, f"{label} {d.name} output price"

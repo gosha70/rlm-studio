@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from rlmstudio.domain.model_catalog import ANTHROPIC_MODELS as _ANTHROPIC_CATALOG
+from rlmstudio.domain.model_catalog import OPENAI_MODELS as _OPENAI_CATALOG
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -68,34 +71,13 @@ class ProviderEntry:
 # ---------------------------------------------------------------------------
 
 OPENAI_MODELS: list[ModelInfo] = [
-    ModelInfo("gpt-4o", 0.005, 0.015),
-    ModelInfo("gpt-4o-mini", 0.00015, 0.0006),
-    ModelInfo("gpt-4-turbo", 0.01, 0.03),
-    ModelInfo("gpt-4", 0.03, 0.06),
-    ModelInfo("gpt-3.5-turbo", 0.0005, 0.0015),
-    ModelInfo("o1", 0.015, 0.06),
-    ModelInfo("o1-mini", 0.003, 0.012),
+    ModelInfo(m.name, m.input_cost_per_1k, m.output_cost_per_1k) for m in _OPENAI_CATALOG
 ]
+
 
 ANTHROPIC_MODELS: list[ModelInfo] = [
-    ModelInfo("claude-opus-4-6", 0.003, 0.015),
-    ModelInfo("claude-sonnet-4-6", 0.003, 0.015),
-    ModelInfo("claude-haiku-4-5-20251001", 0.008, 0.024),
+    ModelInfo(m.name, m.input_cost_per_1k, m.output_cost_per_1k) for m in _ANTHROPIC_CATALOG
 ]
-
-# Default model per provider for the legacy `llm/` clients, which previously
-# carried their own hardcoded literals. Those drifted: they still named
-# Claude 3 models that Anthropic has since retired, so `provider="anthropic"`
-# on the public client failed with not_found_error out of the box. Deriving
-# the default from this list keeps one source of truth — when a model is
-# retired it is removed here once, and every caller follows.
-# Sonnet, not ANTHROPIC_MODELS[0] (Opus): the legacy defaults these replace
-# were Sonnet-tier, and silently moving an existing caller onto Opus pricing
-# would be a surprise cost rather than a retirement fix.
-DEFAULT_ANTHROPIC_MODEL = next(m.name for m in ANTHROPIC_MODELS if "sonnet" in m.name)
-DEFAULT_OPENAI_MODEL = OPENAI_MODELS[0].name
-# Cheap tier, for the cost-optimised presets and recursive sub-calls.
-DEFAULT_ANTHROPIC_CHEAP_MODEL = next(m.name for m in ANTHROPIC_MODELS if "haiku" in m.name)
 
 
 OPENAI_EMBEDDING_MODELS: list[ModelInfo] = [

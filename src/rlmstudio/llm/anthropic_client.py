@@ -3,12 +3,15 @@
 
 """Anthropic Claude LLM provider implementation."""
 
+import logging
 import os
 from typing import Any
 
-from rlmstudio.ui.data.providers_catalog import DEFAULT_ANTHROPIC_MODEL
+from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_MODEL, price_per_1k
 
 from .base import BaseLLMProvider, LLMResponse
+
+logger = logging.getLogger("rlmstudio.llm.anthropic")
 
 
 class ClaudeClient(BaseLLMProvider):
@@ -217,19 +220,25 @@ class ClaudeClient(BaseLLMProvider):
         Returns:
             Cost in USD
         """
-        # Pricing per 1M tokens (approximate, update as needed)
-        pricing = {
-            "claude-3-opus-20240229": {"input": 15.0, "output": 75.0},
-            "claude-3-sonnet-20240229": {"input": 3.0, "output": 15.0},
-            "claude-3-haiku-20240307": {"input": 0.25, "output": 1.25},
-            "claude-2.1": {"input": 8.0, "output": 24.0},
-            "claude-2.0": {"input": 8.0, "output": 24.0},
-        }
+        # Priced from the shared catalog rather than a local table. The
+        # local one knew only Claude 2 and 3, and fell back to Opus 3 for
+        # anything else — so the current default, Sonnet 4.6, was billed at
+        # Opus 3 rates: $90 for 1M in + 1M out against a real $18. Any model
+        # newer than the table was overcharged roughly fivefold, silently.
+        prices = price_per_1k(self.model)
+        if prices is None:
+            # No fallback. Substituting another model's rate is what produced
+            # the error above, and a confidently wrong number is worse than
+            # an absent one — callers treat 0.0 as "not priced".
+            logger.warning(
+                "No price known for model %s; reporting 0.0 rather than "
+                "guessing from another model's rate.",
+                self.model,
+            )
+            return 0.0
 
-        # Get pricing for model (or use opus as default)
-        model_pricing = pricing.get(self.model, pricing["claude-3-opus-20240229"])
-
-        input_cost = (input_tokens / 1_000_000) * model_pricing["input"]
-        output_cost = (output_tokens / 1_000_000) * model_pricing["output"]
-
-        return input_cost + output_cost
+        # Annotated because the package ships no py.typed (#98), so a
+        # cross-module import resolves to Any and warn_return_any fires.
+        input_per_1k, output_per_1k = prices
+        total: float = (input_tokens / 1000) * input_per_1k + (output_tokens / 1000) * output_per_1k
+        return total

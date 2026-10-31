@@ -10,8 +10,9 @@ allowing significant cost optimization without sacrificing quality.
 
 from dataclasses import dataclass
 
-from rlmstudio.ui.data.providers_catalog import (
+from rlmstudio.domain.model_catalog import (
     DEFAULT_ANTHROPIC_CHEAP_MODEL,
+    DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL,
     DEFAULT_ANTHROPIC_MODEL,
 )
 
@@ -153,10 +154,10 @@ class ModelConfig:
             >>> # OpenAI: GPT-4o for root, GPT-4o-mini for subs
             >>> config = ModelConfig.cost_optimized("openai")
 
-            >>> # Anthropic: Opus for root, Haiku for subs
+            >>> # Anthropic: Sonnet for root, Haiku for subs
             >>> config = ModelConfig.cost_optimized("anthropic")
 
-            >>> # Mixed: Claude Opus for root, local Llama for subs (max savings)
+            >>> # Mixed: high-quality Claude for root, local Llama for subs
             >>> config = ModelConfig.cost_optimized("mixed")
         """
         if provider == "openai":
@@ -174,9 +175,13 @@ class ModelConfig:
                 sub_provider="anthropic",
             )
         elif provider == "mixed":
-            # Cloud Claude for quality, local Llama for cost.
+            # High-quality Claude for the root, local Llama for the subs.
+            # This preset used Opus before the retirement fix and still
+            # documents Opus; it keeps the high-quality tier rather than
+            # dropping to the balanced default the plain `anthropic` preset
+            # uses.
             return cls(
-                root_model=DEFAULT_ANTHROPIC_MODEL,
+                root_model=DEFAULT_ANTHROPIC_HIGH_QUALITY_MODEL,
                 sub_model="llama3",
                 root_provider="anthropic",
                 sub_provider="ollama",

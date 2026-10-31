@@ -186,7 +186,7 @@ class TestGetDefaultClientConfig:
         provider, model = get_default_client_config()
         assert provider == "anthropic"
         # Catalog-derived, not a literal: the pinned value was retired.
-        from rlmstudio.ui.data.providers_catalog import DEFAULT_ANTHROPIC_MODEL
+        from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_MODEL
 
         assert model == DEFAULT_ANTHROPIC_MODEL
 
