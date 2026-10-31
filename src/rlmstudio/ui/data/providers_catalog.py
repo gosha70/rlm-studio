@@ -83,6 +83,21 @@ ANTHROPIC_MODELS: list[ModelInfo] = [
     ModelInfo("claude-haiku-4-5-20251001", 0.008, 0.024),
 ]
 
+# Default model per provider for the legacy `llm/` clients, which previously
+# carried their own hardcoded literals. Those drifted: they still named
+# Claude 3 models that Anthropic has since retired, so `provider="anthropic"`
+# on the public client failed with not_found_error out of the box. Deriving
+# the default from this list keeps one source of truth — when a model is
+# retired it is removed here once, and every caller follows.
+# Sonnet, not ANTHROPIC_MODELS[0] (Opus): the legacy defaults these replace
+# were Sonnet-tier, and silently moving an existing caller onto Opus pricing
+# would be a surprise cost rather than a retirement fix.
+DEFAULT_ANTHROPIC_MODEL = next(m.name for m in ANTHROPIC_MODELS if "sonnet" in m.name)
+DEFAULT_OPENAI_MODEL = OPENAI_MODELS[0].name
+# Cheap tier, for the cost-optimised presets and recursive sub-calls.
+DEFAULT_ANTHROPIC_CHEAP_MODEL = next(m.name for m in ANTHROPIC_MODELS if "haiku" in m.name)
+
+
 OPENAI_EMBEDDING_MODELS: list[ModelInfo] = [
     ModelInfo("text-embedding-3-small", 0.00002, 0.0),
     ModelInfo("text-embedding-3-large", 0.00013, 0.0),

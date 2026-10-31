@@ -6,6 +6,8 @@
 import os
 from typing import Any
 
+from rlmstudio.ui.data.providers_catalog import DEFAULT_ANTHROPIC_MODEL
+
 from .base import BaseLLMProvider, LLMResponse
 
 
@@ -28,7 +30,7 @@ class ClaudeClient(BaseLLMProvider):
 
     def __init__(
         self,
-        model: str = "claude-3-sonnet-20240229",
+        model: str = DEFAULT_ANTHROPIC_MODEL,
         api_key: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.7,

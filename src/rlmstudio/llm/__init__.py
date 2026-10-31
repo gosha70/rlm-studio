@@ -5,6 +5,8 @@
 
 from typing import Any
 
+from rlmstudio.ui.data.providers_catalog import DEFAULT_ANTHROPIC_MODEL
+
 from .auto import (
     ConfigurationError,
     auto_detect_provider,
@@ -118,7 +120,7 @@ def get_llm_client(
             raise ValueError("Anthropic client not available. Install with: pip install anthropic")
         if api_key:
             kwargs["api_key"] = api_key
-        return _ClaudeClient(model=model or "claude-3-sonnet-20240229", **kwargs)  # type: ignore[no-any-return]
+        return _ClaudeClient(model=model or DEFAULT_ANTHROPIC_MODEL, **kwargs)  # type: ignore[no-any-return]
 
     elif provider == "ollama":
         if _OllamaClient is None:

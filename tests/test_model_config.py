@@ -60,8 +60,16 @@ class TestModelConfig:
         """Test cost-optimized configuration for Anthropic."""
         config = ModelConfig.cost_optimized("anthropic")
 
-        assert config.root_model == "claude-3-5-sonnet-20241022"
-        assert config.sub_model == "claude-3-5-haiku-20241022"
+        # Against the catalog rather than a literal: this test previously
+        # pinned claude-3-5-sonnet-20241022, which Anthropic has since
+        # retired, so it enforced the bug instead of catching it.
+        from rlmstudio.ui.data.providers_catalog import (
+            DEFAULT_ANTHROPIC_CHEAP_MODEL,
+            DEFAULT_ANTHROPIC_MODEL,
+        )
+
+        assert config.root_model == DEFAULT_ANTHROPIC_MODEL
+        assert config.sub_model == DEFAULT_ANTHROPIC_CHEAP_MODEL
         assert config.root_provider == "anthropic"
         assert config.sub_provider == "anthropic"
 

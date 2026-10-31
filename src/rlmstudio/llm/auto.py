@@ -6,6 +6,8 @@
 import os
 from typing import Any
 
+from rlmstudio.ui.data.providers_catalog import DEFAULT_ANTHROPIC_MODEL
+
 from .base import BaseLLMProvider
 
 
@@ -172,7 +174,7 @@ def get_default_client_config() -> tuple[str, str | None]:
     # Default models for each provider
     default_models = {
         "openai": "gpt-4o-mini",
-        "anthropic": "claude-3-5-sonnet-20241022",
+        "anthropic": DEFAULT_ANTHROPIC_MODEL,
         "ollama": "llama3.2",
         "lmstudio": None,  # User must specify
         "vllm": None,  # User must specify

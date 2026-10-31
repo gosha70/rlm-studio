@@ -10,6 +10,11 @@ allowing significant cost optimization without sacrificing quality.
 
 from dataclasses import dataclass
 
+from rlmstudio.ui.data.providers_catalog import (
+    DEFAULT_ANTHROPIC_CHEAP_MODEL,
+    DEFAULT_ANTHROPIC_MODEL,
+)
+
 from ..llm import get_llm_client
 from ..llm.base import BaseLLMProvider
 
@@ -163,15 +168,15 @@ class ModelConfig:
             )
         elif provider == "anthropic":
             return cls(
-                root_model="claude-3-5-sonnet-20241022",
-                sub_model="claude-3-5-haiku-20241022",
+                root_model=DEFAULT_ANTHROPIC_MODEL,
+                sub_model=DEFAULT_ANTHROPIC_CHEAP_MODEL,
                 root_provider="anthropic",
                 sub_provider="anthropic",
             )
         elif provider == "mixed":
-            # Use Claude Opus for quality, local Llama for cost
+            # Cloud Claude for quality, local Llama for cost.
             return cls(
-                root_model="claude-3-opus-20240229",
+                root_model=DEFAULT_ANTHROPIC_MODEL,
                 sub_model="llama3",
                 root_provider="anthropic",
                 sub_provider="ollama",
