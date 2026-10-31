@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from rlmstudio.application.dto import LLMResponseDTO, StreamChunk
+from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_MODEL, price_per_1k
+
+logger = logging.getLogger("rlmstudio.infrastructure.anthropic")
 
 
 class AnthropicAdapter:
@@ -70,12 +74,30 @@ class AnthropicAdapter:
         yield StreamChunk(delta="", is_final=True, response=response)
 
     def get_pricing(self) -> dict[str, float]:
-        """Return pricing for the configured model."""
-        model = getattr(self._client, "model", "claude-3-opus-20240229")
-        pricing_db = {
-            "claude-3-opus-20240229": {"input_cost_per_1m": 15.0, "output_cost_per_1m": 75.0},
-            "claude-3-sonnet-20240229": {"input_cost_per_1m": 3.0, "output_cost_per_1m": 15.0},
-            "claude-3-haiku-20240307": {"input_cost_per_1m": 0.25, "output_cost_per_1m": 1.25},
-            "claude-3-5-sonnet-20241022": {"input_cost_per_1m": 3.0, "output_cost_per_1m": 15.0},
+        """Return pricing for the configured model, per million tokens.
+
+        Priced from the shared catalog. The table this replaced listed only
+        Claude 2 and 3 and fell back to Opus 3 for anything else, so the
+        current default was billed at $15/$75 per MTok against a real
+        $3/$15 — fivefold, and silently, because a plausible number came
+        back. The adapter has no ``get_completion_cost``, so the use cases
+        price runs through here; this was not a dormant copy.
+        """
+        model = getattr(self._client, "model", DEFAULT_ANTHROPIC_MODEL)
+        prices = price_per_1k(model)
+        if prices is None:
+            # Zero rather than another model's rate: a confidently wrong
+            # figure is what produced the overcharge above, and callers read
+            # 0.0 as "not priced".
+            logger.warning(
+                "No price known for model %s; reporting 0.0 rather than "
+                "guessing from another model's rate.",
+                model,
+            )
+            return {"input_cost_per_1m": 0.0, "output_cost_per_1m": 0.0}
+
+        input_per_1k, output_per_1k = prices
+        return {
+            "input_cost_per_1m": input_per_1k * 1000,
+            "output_cost_per_1m": output_per_1k * 1000,
         }
-        return pricing_db.get(model, pricing_db["claude-3-opus-20240229"])

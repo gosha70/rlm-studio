@@ -250,3 +250,41 @@ def test_cheaper_tiers_actually_cost_less() -> None:
     assert cheap < balanced < high, (
         f"tier pricing is out of order: cheap={cheap}, balanced={balanced}, high_quality={high}"
     )
+
+
+def test_every_pricing_path_agrees_with_the_catalog() -> None:
+    """Three separate code paths priced Anthropic models, and each had its
+    own table. Two of them silently charged the current default at Claude 3
+    Opus rates — $90 for 1M in + 1M out against a real $18.
+
+    Asserting them together is what stops a fourth copy from drifting: a new
+    pricing path that does not consult the catalog fails here as soon as it
+    is added to this list.
+    """
+    from rlmstudio.domain.model_catalog import price_per_1k
+    from rlmstudio.infrastructure.llm.anthropic_adapter import AnthropicAdapter
+    from rlmstudio.llm.anthropic_client import ClaudeClient
+
+    for model in (m.name for m in ANTHROPIC_MODELS):
+        rates = price_per_1k(model)
+        assert rates is not None
+        expected_for_1m_each = (rates[0] + rates[1]) * 1000
+
+        legacy = ClaudeClient.__new__(ClaudeClient)
+        legacy.model = model
+        assert ClaudeClient.calculate_cost(legacy, 1_000_000, 1_000_000) == pytest.approx(
+            expected_for_1m_each
+        ), f"legacy client misprices {model}"
+
+        class _Stub:
+            pass
+
+        stub = _Stub()
+        stub.model = model  # type: ignore[attr-defined]
+        adapter = AnthropicAdapter.__new__(AnthropicAdapter)
+        adapter._client = stub  # type: ignore[attr-defined]
+        pricing = AnthropicAdapter.get_pricing(adapter)
+        adapter_total = pricing["input_cost_per_1m"] + pricing["output_cost_per_1m"]
+        assert adapter_total == pytest.approx(expected_for_1m_each), (
+            f"infrastructure adapter misprices {model}: ${adapter_total} vs ${expected_for_1m_each}"
+        )
