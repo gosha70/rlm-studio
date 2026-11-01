@@ -38,7 +38,7 @@ import {
   deleteLLMProvider,
   testLLMProvider,
   testLLMProviderConfig,
-  getProviderModels,
+  getLLMProviderModelsForConfig,
   type AppConfig,
   type RunProfile,
   type ChatProviderConfig,
@@ -96,6 +96,65 @@ const DEEP_LINK_BASE_URL_ALLOWED_BACKENDS: ReadonlySet<string> = new Set([
   BACKEND_LMSTUDIO,
   BACKEND_VLLM,
 ]);
+
+/** A connection-test outcome, including the backend's classified failure. */
+interface TestResult {
+  connected: boolean;
+  error?: string | null;
+  latency_ms?: number | null;
+  tested_at?: string | null;
+  failure_cause?: string | null;
+  failure_fix?: string | null;
+}
+
+/**
+ * Local wall-clock stamp with seconds — e.g. "2026-11-01 13:05:58".
+ *
+ * A "Connected" badge must always say exactly when it was tested, so
+ * seconds are never omitted.  The raw ISO value goes in the element's
+ * title for cross-timezone reference.
+ */
+function formatTestedAt(iso: string | null | undefined): string {
+  if (!iso) return "unknown";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "unknown";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
+ * Render a connection-test outcome.
+ *
+ * On failure the classified cause and fix come first; the raw upstream
+ * detail follows in small type, because "connection refused" is
+ * actionable and "[Errno 8] nodename nor servname provided" is not.
+ */
+function TestOutcome({ result }: { result: TestResult }) {
+  if (result.connected) {
+    return (
+      <div className="flex items-center gap-2">
+        <Check className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <span>
+          Connected{result.latency_ms != null ? ` (${result.latency_ms}ms)` : ""}
+          {result.tested_at && <> &middot; tested {formatTestedAt(result.tested_at)}</>}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-center gap-2">
+        <X className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <span>{result.failure_cause || result.error || "Connection failed"}</span>
+      </div>
+      {result.failure_fix && <p className="pl-5 text-xs opacity-90">{result.failure_fix}</p>}
+      {result.failure_cause && result.error && (
+        <p className="pl-5 text-xs opacity-75">{result.error}</p>
+      )}
+    </div>
+  );
+}
 
 /**
  * Default export wraps the real page in a Suspense boundary because
@@ -173,10 +232,21 @@ function SettingsPageInner() {
   const [savingLLMProvider, setSavingLLMProvider] = useState(false);
   const [llmProviderModels, setLLMProviderModels] = useState<ModelInfo[]>([]);
   const [loadingLLMModels, setLoadingLLMModels] = useState(false);
+  // True once a model fetch has finished, so an empty list is reported as
+  // "no models returned" instead of flashing that message before the first
+  // request.
+  const [modelFetchDone, setModelFetchDone] = useState(false);
+  // Why discovery returned nothing. A failed discovery is never replaced
+  // by the static catalog, so this is the only explanation the user gets.
+  const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const llmModelFetchSeqRef = useRef(0);
+  // Bumped by every probe-affecting edit and form switch, so a test that
+  // was already in flight cannot stamp a green banner onto values that have
+  // since changed.
+  const formTestSeqRef = useRef(0);
   const [deletingLLMProviderId, setDeletingLLMProviderId] = useState<string | null>(null);
   const [testingLLMProviderId, setTestingLLMProviderId] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, { connected: boolean; error?: string | null; latency_ms?: number | null }>>({});
+  const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
 
   // Cookbook → Settings deep-link state. Parsing lives in a pure
   // helper so the security-critical validation (allowed providers,
@@ -217,23 +287,67 @@ function SettingsPageInner() {
   const fetchLLMProviderModels = async (backend: string, ep?: string) => {
     const seq = ++llmModelFetchSeqRef.current;
     setLLMProviderModels([]);
+    setModelFetchError(null);
     setLoadingLLMModels(true);
+    setModelFetchDone(false);
     try {
-      const models = await getProviderModels(backend, ep || undefined);
-      if (seq === llmModelFetchSeqRef.current) setLLMProviderModels(models);
-    } catch {
-      if (seq === llmModelFetchSeqRef.current) setLLMProviderModels([]);
+      const res = await getLLMProviderModelsForConfig({
+        backend,
+        endpoint: ep || null,
+        // The key being configured, not the one in the process environment.
+        api_key: llmProviderForm.api_key.trim() || null,
+        llm_provider_id: editingLLMProviderId,
+      });
+      if (seq === llmModelFetchSeqRef.current) {
+        setLLMProviderModels(res.models);
+        setModelFetchError(
+          res.source === "live" ? null : (res.error ?? "Model discovery failed."),
+        );
+      }
+    } catch (err) {
+      if (seq === llmModelFetchSeqRef.current) {
+        setLLMProviderModels([]);
+        setModelFetchError(
+          err instanceof Error ? err.message : "Model discovery failed.",
+        );
+      }
     } finally {
-      if (seq === llmModelFetchSeqRef.current) setLoadingLLMModels(false);
+      if (seq === llmModelFetchSeqRef.current) {
+        setLoadingLLMModels(false);
+        setModelFetchDone(true);
+      }
     }
   };
 
+  // Debounce the endpoint-driven fetch: without this every keystroke of
+  // "http://spark-c2e5.local:8001/v1" fired its own 15-second request.
+  // The sequence advances immediately, not when the timer fires, so a
+  // response for the previous endpoint cannot land under the new one.
   useEffect(() => {
-    if (showLLMProviderForm && llmProviderForm.backend) {
-      const ep = (LOCAL_BACKENDS as readonly string[]).includes(llmProviderForm.backend) ? llmProviderForm.endpoint : undefined;
-      fetchLLMProviderModels(llmProviderForm.backend, ep);
-    }
-  }, [showLLMProviderForm, llmProviderForm.backend, llmProviderForm.endpoint]);
+    if (!showLLMProviderForm || !llmProviderForm.backend) return;
+    llmModelFetchSeqRef.current += 1;
+    setLoadingLLMModels(false);
+    setModelFetchDone(false);
+    setModelFetchError(null);
+    setLLMProviderModels([]);
+    // Pass the endpoint for every backend: a cloud provider may point at a
+    // compatible gateway, and sending null would make the backend treat the
+    // destination as changed and refuse the saved key.
+    const ep = llmProviderForm.endpoint;
+    const timer = setTimeout(() => {
+      fetchLLMProviderModels(llmProviderForm.backend, ep || undefined);
+    }, 500);
+    return () => clearTimeout(timer);
+  // fetchLLMProviderModels is recreated per render; including it would
+  // restart the debounce every time and never fire.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    showLLMProviderForm,
+    editingLLMProviderId,
+    llmProviderForm.backend,
+    llmProviderForm.endpoint,
+    llmProviderForm.api_key,
+  ]);
 
   const { data: config, mutate: mutateConfig } = useSWR<AppConfig>("config", getConfig);
   const { data: profiles = [], mutate: mutateProfiles } = useSWR<RunProfile[]>("profiles", getProfiles);
@@ -243,7 +357,10 @@ function SettingsPageInner() {
   );
   const { data: llmProviders = [], mutate: mutateLLMProviders } = useSWR<LLMProviderConfig[]>(
     "llm-providers",
-    getLLMProviders
+    getLLMProviders,
+    // Scheduled testing updates status and last_tested_at in the
+    // background; poll so the rows do not keep their page-load values.
+    { refreshInterval: (config?.connection_test_interval_minutes ?? 0) > 0 ? 30_000 : 0 },
   );
 
   const handleSaveBudget = async (budget: AppConfig["budget"]) => {
@@ -439,6 +556,10 @@ function SettingsPageInner() {
     setLLMProviderForm({ name: "", backend: BACKEND_OPENAI, model: "", api_key: "", endpoint: "", context_window: "" });
     setEditingLLMProviderId(null);
     setLLMProviderModels([]);
+    setModelFetchDone(false);
+    setModelFetchError(null);
+    llmModelFetchSeqRef.current += 1;
+    formTestSeqRef.current += 1;
     // Clear the form-mode test banner so a stale result from a prior
     // edit doesn't render when the form reopens for a new provider.
     setTestResults((prev) => {
@@ -452,6 +573,10 @@ function SettingsPageInner() {
   const handleEditLLMProvider = (lp: LLMProviderConfig) => {
     setEditingLLMProviderId(lp.id);
     setLLMProviderModels([]);
+    setModelFetchError(null);
+    setModelFetchDone(false);
+    llmModelFetchSeqRef.current += 1;
+    formTestSeqRef.current += 1;
     setLLMProviderForm({
       name: lp.name,
       backend: lp.backend,
@@ -480,6 +605,9 @@ function SettingsPageInner() {
   // bogus post-save status stamp in handleSaveLLMProvider, which
   // uses the banner's presence as its "propagate status" signal.
   useEffect(() => {
+    // Invalidate any in-flight probe: its result describes the previous
+    // values and must not resurrect the banner after this edit.
+    formTestSeqRef.current += 1;
     setTestResults((prev) => {
       if (!(FORM_TEST_RESULT_KEY in prev)) return prev;
       const rest = { ...prev };
@@ -567,6 +695,7 @@ function SettingsPageInner() {
   // used by the saved-row Test button.
   const handleTestLLMProviderForm = async () => {
     if (!llmProviderForm.name.trim() || !llmProviderForm.model.trim()) return;
+    const seq = ++formTestSeqRef.current;
     setTestingLLMProviderId(FORM_TEST_RESULT_KEY);
     try {
       // In edit mode, pass the provider id so the backend can fall
@@ -578,15 +707,22 @@ function SettingsPageInner() {
         llm_provider_id: editingLLMProviderId,
       };
       const result = await testLLMProviderConfig(req);
+      // A field changed while this was in flight — the answer describes
+      // values that are no longer on screen.
+      if (seq !== formTestSeqRef.current) return;
       setTestResults((prev) => ({
         ...prev,
         [FORM_TEST_RESULT_KEY]: {
           connected: result.connected,
           error: result.error,
           latency_ms: result.latency_ms,
+          tested_at: result.tested_at,
+          failure_cause: result.failure_cause,
+          failure_fix: result.failure_fix,
         },
       }));
     } catch (err) {
+      if (seq !== formTestSeqRef.current) return;
       console.error("Test failed:", err);
       setTestResults((prev) => ({
         ...prev,
@@ -617,7 +753,14 @@ function SettingsPageInner() {
       const result = await testLLMProvider(id);
       setTestResults((prev) => ({
         ...prev,
-        [id]: { connected: result.connected, error: result.error, latency_ms: result.latency_ms },
+        [id]: {
+          connected: result.connected,
+          error: result.error,
+          latency_ms: result.latency_ms,
+          tested_at: result.tested_at,
+          failure_cause: result.failure_cause,
+          failure_fix: result.failure_fix,
+        },
       }));
       mutateLLMProviders();
     } catch (err) {
@@ -639,16 +782,19 @@ function SettingsPageInner() {
     not_configured: "bg-gray-400",
   };
 
-  const formatRelativeTime = (iso: string | null | undefined): string => {
-    if (!iso) return "never";
-    const then = new Date(iso).getTime();
-    if (!Number.isFinite(then)) return "never";
-    const delta = Math.max(0, Date.now() - then) / 1000;
-    if (delta < 60) return `${Math.floor(delta)}s ago`;
-    if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
-    if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
-    return `${Math.floor(delta / 86400)}d ago`;
-  };
+  // Where the model list is being read from, for the discovery status line.
+  const isLocalFormBackend = (LOCAL_BACKENDS as readonly string[]).includes(
+    llmProviderForm.backend,
+  );
+  const modelSourceLabel = isLocalFormBackend
+    ? llmProviderForm.endpoint.trim() || "the endpoint"
+    : (BACKEND_DISPLAY_NAMES[llmProviderForm.backend] ?? llmProviderForm.backend);
+  // A saved model the endpoint does not serve — the old value would
+  // otherwise survive Save behind an empty Select trigger.
+  const staleModel =
+    llmProviderModels.length > 0 &&
+    llmProviderForm.model.trim() !== "" &&
+    !llmProviderModels.some((m) => m.name === llmProviderForm.model);
 
   return (
     <AppShell>
@@ -740,7 +886,7 @@ function SettingsPageInner() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <FieldLabel htmlFor="llmp-model" tooltip="The model identifier. For cloud providers, use the official model name (e.g., gpt-4o). For local, use the model name as loaded in your server.">Model</FieldLabel>
+                    <FieldLabel htmlFor="llmp-model" tooltip="The model identifier. Cloud providers list the models your account can use; local servers list what they are serving. Use Refresh to load the list from the provider.">Model</FieldLabel>
                     {llmProviderModels.length > 0 ? (
                       <div className="flex gap-2">
                         <Select
@@ -748,7 +894,7 @@ function SettingsPageInner() {
                           onValueChange={(v) => setLLMProviderForm({ ...llmProviderForm, model: v })}
                         >
                           <SelectTrigger id="llmp-model" className="flex-1">
-                            <SelectValue placeholder={MODEL_PLACEHOLDER[llmProviderForm.backend] ?? "e.g., model-name"} />
+                            <SelectValue placeholder={MODEL_PLACEHOLDER[llmProviderForm.backend] ?? "Model ID served by your endpoint"} />
                           </SelectTrigger>
                           <SelectContent>
                             {llmProviderModels.map((m) => (
@@ -774,9 +920,14 @@ function SettingsPageInner() {
                         <Input
                           id="llmp-model"
                           className="flex-1"
-                          placeholder={MODEL_PLACEHOLDER[llmProviderForm.backend] ?? "e.g., model-name"}
+                          placeholder={MODEL_PLACEHOLDER[llmProviderForm.backend] ?? "Model ID served by your endpoint"}
                           value={llmProviderForm.model}
                           onChange={(e) => setLLMProviderForm({ ...llmProviderForm, model: e.target.value })}
+                          // Browser form history offered retired model ids
+                          // (Qwen/Qwen3-32B, llama2, …) as a dropdown. The
+                          // live list is the only valid source.
+                          autoComplete="off"
+                          spellCheck={false}
                         />
                         <Button
                           variant="outline"
@@ -789,6 +940,23 @@ function SettingsPageInner() {
                           <RefreshCw className={cn("h-4 w-4", loadingLLMModels && "animate-spin")} aria-hidden="true" />
                         </Button>
                       </div>
+                    )}
+                    <p className="text-xs text-muted-foreground" aria-live="polite">
+                      {loadingLLMModels
+                        ? `Loading models from ${modelSourceLabel}…`
+                        : modelFetchDone && llmProviderModels.length > 0
+                          ? `${llmProviderModels.length} model${llmProviderModels.length === 1 ? "" : "s"} loaded from ${modelSourceLabel}.`
+                          : modelFetchDone && modelFetchError
+                            ? `Could not load models from ${modelSourceLabel}: ${modelFetchError} You can still type the model ID.`
+                            : modelFetchDone
+                              ? `No models loaded from ${modelSourceLabel}. Type the model ID instead.`
+                              : null}
+                    </p>
+                    {staleModel && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        Current model &ldquo;{llmProviderForm.model}&rdquo; is not served by this
+                        endpoint. Pick one above before saving.
+                      </p>
                     )}
                   </div>
                   {/*
@@ -808,6 +976,8 @@ function SettingsPageInner() {
                         placeholder={ENDPOINT_PLACEHOLDER[llmProviderForm.backend] ?? "http://localhost:8000"}
                         value={llmProviderForm.endpoint}
                         onChange={(e) => setLLMProviderForm({ ...llmProviderForm, endpoint: e.target.value })}
+                        autoComplete="off"
+                        spellCheck={false}
                       />
                     </div>
                   )}
@@ -868,9 +1038,7 @@ function SettingsPageInner() {
                   </div>
                   {testResults[FORM_TEST_RESULT_KEY] && (
                     <div className={`mt-2 rounded-md p-2 text-sm ${testResults[FORM_TEST_RESULT_KEY].connected ? "bg-emerald-500/10 text-emerald-400" : "bg-destructive/10 text-destructive"}`}>
-                      {testResults[FORM_TEST_RESULT_KEY].connected
-                        ? `Connected (${testResults[FORM_TEST_RESULT_KEY].latency_ms ?? 0}ms)`
-                        : `Failed: ${testResults[FORM_TEST_RESULT_KEY].error || "Connection failed"}`}
+                      <TestOutcome result={testResults[FORM_TEST_RESULT_KEY]} />
                     </div>
                   )}
                 </CardContent>
@@ -900,16 +1068,14 @@ function SettingsPageInner() {
                           {lp.endpoint && <> &middot; {lp.endpoint}</>}
                           {lp.context_window && <> &middot; {lp.context_window.toLocaleString()} tokens</>}
                         </p>
-                        {(lp.last_tested_at || (lp.consecutive_failures ?? 0) > 0) && (
+                        {(lp.last_tested_at || lp.status === "connected" || (lp.consecutive_failures ?? 0) > 0) && (
                           <p className="text-xs text-muted-foreground">
-                            {lp.last_tested_at && (
-                              <>
-                                Last tested {formatRelativeTime(lp.last_tested_at)}
-                                {lp.last_tested_by && (
-                                  <> ({lp.last_tested_by === "background" ? "auto" : "you"})</>
-                                )}
-                              </>
-                            )}
+                            <span title={lp.last_tested_at ?? undefined}>
+                              Last tested {formatTestedAt(lp.last_tested_at)}
+                              {lp.last_tested_by && (
+                                <> ({lp.last_tested_by === "background" ? "auto" : "you"})</>
+                              )}
+                            </span>
                             {(lp.consecutive_failures ?? 0) > 0 &&
                               lp.status === "connected" && (
                                 <span className="ml-2 text-amber-500">
@@ -953,11 +1119,8 @@ function SettingsPageInner() {
                   </CardHeader>
                   {testResult && (
                     <CardContent className="pt-0 pb-3">
-                      <div className={cn("flex items-center gap-2 text-xs", testResult.connected ? "text-emerald-600" : "text-destructive")}>
-                        {testResult.connected
-                          ? <><Check className="h-3 w-3" /> Connected{testResult.latency_ms != null && ` (${testResult.latency_ms}ms)`}</>
-                          : <><X className="h-3 w-3" /> {testResult.error || "Connection failed"}</>
-                        }
+                      <div className={cn("text-xs", testResult.connected ? "text-emerald-600" : "text-destructive")}>
+                        <TestOutcome result={testResult} />
                       </div>
                     </CardContent>
                   )}

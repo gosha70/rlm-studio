@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,6 +28,7 @@ from rlmstudio.server.models import (
     ConfigResponse,
     ConfigUpdateRequest,
     LLMProviderConfig,
+    ModelInfo,
     RuntimeSettings,
 )
 
@@ -276,6 +277,345 @@ def test_put_config_rejects_out_of_range_interval(client: TestClient) -> None:
         json={"connection_test_interval_minutes": 9999},
     )
     assert resp.status_code == 422  # Pydantic validation
+
+
+# --------------------------------------------------------------------------
+# A tested result must not outlive the configuration it describes, and a
+# model-list fetch must not masquerade as a connection test.
+# --------------------------------------------------------------------------
+
+
+def test_test_endpoint_reports_classified_failure(client: TestClient) -> None:
+    """A failure names the cause and fix, not just the upstream errno."""
+    lp_id = _add_provider(client)
+
+    class APIConnectionError(Exception):
+        """Same class name litellm uses — the classifier matches on it."""
+
+    with patch("litellm.completion", side_effect=APIConnectionError("Connection refused")):
+        resp = client.post(f"/api/llm-providers/{lp_id}/test")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["connected"] is False
+    assert data["failure_kind"] == "connection"
+    assert "Could not reach the provider" in data["failure_cause"]
+    assert data["failure_fix"]
+    assert data["tested_at"] is not None
+
+
+def test_test_endpoint_reports_tested_at_on_success(client: TestClient) -> None:
+    lp_id = _add_provider(client)
+
+    class _FakeResponse:
+        def __init__(self) -> None:
+            self.choices = [object()]
+
+    with patch("litellm.completion", return_value=_FakeResponse()):
+        resp = client.post(f"/api/llm-providers/{lp_id}/test")
+
+    assert resp.status_code == 200
+    assert resp.json()["connected"] is True
+    assert resp.json()["tested_at"] is not None
+
+
+def test_model_list_fetch_does_not_mark_provider_connected(client: TestClient) -> None:
+    """Listing models proves the endpoint answers, not that the model works."""
+    resp = client.post(
+        "/api/llm-providers",
+        json={
+            "name": "spark",
+            "backend": "vllm",
+            "model": "qwen38-27b",
+            "endpoint": "http://127.0.0.1:9/v1",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    lp_id = resp.json()["id"]
+
+    live = [ModelInfo(name="qwen38-27b")]
+    with patch(
+        "rlmstudio.server.routes.providers._fetch_models_from_api",
+        new=AsyncMock(return_value=live),
+    ):
+        models = client.get(f"/api/llm-providers/{lp_id}/models")
+
+    assert models.status_code == 200
+    assert [m["name"] for m in models.json()] == ["qwen38-27b"]
+
+    lp = client.get(f"/api/llm-providers/{lp_id}").json()
+    assert lp["status"] != "connected"
+    assert lp["last_tested_at"] is None
+
+
+@pytest.mark.parametrize("change", [{"model": "gpt-4o"}, {"endpoint": "http://127.0.0.1:9/v1"}])
+def test_update_config_that_affects_the_probe_clears_the_old_result(
+    client: TestClient, change: dict[str, str]
+) -> None:
+    lp_id = _add_provider(client)
+    state = dependencies.get_state()
+    lp = state.get_llm_provider(lp_id)
+    assert lp is not None
+    lp.status = "connected"
+    lp.last_tested_at = datetime.now(timezone.utc)
+    lp.last_tested_by = "manual"
+    lp.consecutive_failures = 2
+
+    with patch(
+        "rlmstudio.server.routes.llm_providers._discover_context_window",
+        return_value=None,
+    ):
+        resp = client.put(f"/api/llm-providers/{lp_id}", json=change)
+
+    assert resp.status_code == 200, resp.text
+    updated = client.get(f"/api/llm-providers/{lp_id}").json()
+    assert updated["status"] == "configured"
+    assert updated["last_tested_at"] is None
+    assert updated["last_tested_by"] is None
+    assert updated["consecutive_failures"] == 0
+
+
+def test_update_can_clear_the_endpoint_override(client: TestClient) -> None:
+    """JSON null clears the endpoint; it is not the same as omitting it.
+
+    Treating null as "omitted" kept the old host — and the green badge for
+    a test of that host — after the user cleared the field.
+    """
+    with patch(
+        "rlmstudio.server.routes.llm_providers._discover_context_window",
+        return_value=None,
+    ):
+        created = client.post(
+            "/api/llm-providers",
+            json={
+                "name": "clear-me",
+                "backend": "vllm",
+                "model": "qwen38-27b",
+                "endpoint": "http://127.0.0.1:8123/v1",
+            },
+        )
+    assert created.status_code == 201, created.text
+    lp_id = created.json()["id"]
+
+    state = dependencies.get_state()
+    lp = state.get_llm_provider(lp_id)
+    assert lp is not None
+    lp.status = "connected"
+    lp.last_tested_at = datetime.now(timezone.utc)
+    lp.last_tested_by = "manual"
+
+    with patch(
+        "rlmstudio.server.routes.llm_providers._discover_context_window",
+        return_value=None,
+    ):
+        resp = client.put(f"/api/llm-providers/{lp_id}", json={"endpoint": None})
+
+    assert resp.status_code == 200, resp.text
+    updated = client.get(f"/api/llm-providers/{lp_id}").json()
+    assert updated["endpoint"] is None
+    assert updated["status"] == "configured"
+    assert updated["last_tested_at"] is None
+    assert updated["last_tested_by"] is None
+
+
+def test_update_without_the_endpoint_field_keeps_the_override(
+    client: TestClient,
+) -> None:
+    """An omitted endpoint means "leave it alone" — only an explicit null clears."""
+    with patch(
+        "rlmstudio.server.routes.llm_providers._discover_context_window",
+        return_value=None,
+    ):
+        created = client.post(
+            "/api/llm-providers",
+            json={
+                "name": "keep-me",
+                "backend": "vllm",
+                "model": "qwen38-27b",
+                "endpoint": "http://127.0.0.1:8123/v1",
+            },
+        )
+        lp_id = created.json()["id"]
+        resp = client.put(f"/api/llm-providers/{lp_id}", json={"model": "qwen38-27b-awq"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["endpoint"] == "http://127.0.0.1:8123/v1"
+
+
+def test_replacing_the_api_key_clears_the_old_test_result(client: TestClient) -> None:
+    """New credentials invalidate the result produced by the previous ones."""
+    lp_id = _add_provider(client)
+    state = dependencies.get_state()
+    lp = state.get_llm_provider(lp_id)
+    assert lp is not None
+    lp.status = "connected"
+    lp.last_tested_at = datetime.now(timezone.utc)
+    lp.last_tested_by = "manual"
+    lp.consecutive_failures = 2
+
+    resp = client.put(f"/api/llm-providers/{lp_id}", json={"api_key": "sk-replaced"})
+
+    assert resp.status_code == 200, resp.text
+    updated = client.get(f"/api/llm-providers/{lp_id}").json()
+    assert updated["status"] == "configured"
+    assert updated["last_tested_at"] is None
+    assert updated["last_tested_by"] is None
+    assert updated["consecutive_failures"] == 0
+
+
+def _create_provider_with_endpoint(client: TestClient) -> str:
+    with patch(
+        "rlmstudio.server.routes.llm_providers._discover_context_window",
+        return_value=None,
+    ):
+        resp = client.post(
+            "/api/llm-providers",
+            json={
+                "name": "gateway",
+                "backend": "openai",
+                "model": "gpt-4o",
+                "api_key": "sk-saved",
+                "endpoint": "https://old.example/v1",
+            },
+        )
+    assert resp.status_code == 201, resp.text
+    lp_id: str = resp.json()["id"]
+    return lp_id
+
+
+def test_form_test_rejects_an_unknown_provider_id(client: TestClient) -> None:
+    resp = client.post(
+        "/api/llm-providers/test",
+        json={
+            "name": "x",
+            "backend": "openai",
+            "model": "gpt-4o",
+            "llm_provider_id": "missing",
+            "api_key": "sk-x",
+        },
+    )
+    assert resp.status_code == 404
+
+
+def test_form_test_rejects_a_backend_mismatch(client: TestClient) -> None:
+    lp_id = _create_provider_with_endpoint(client)
+    resp = client.post(
+        "/api/llm-providers/test",
+        json={
+            "name": "x",
+            "backend": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "llm_provider_id": lp_id,
+            "api_key": "sk-ant-x",
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_form_test_refuses_the_saved_key_for_a_changed_endpoint(
+    client: TestClient,
+) -> None:
+    """A saved secret must not follow the form to a different destination."""
+    lp_id = _create_provider_with_endpoint(client)
+
+    resp = client.post(
+        "/api/llm-providers/test",
+        json={
+            "name": "gateway",
+            "backend": "openai",
+            "model": "gpt-4o",
+            "llm_provider_id": lp_id,
+            "endpoint": "https://new.example/v1",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is False
+    assert "saved API key" in body["failure_cause"]
+    assert body["failure_fix"]
+
+
+def test_form_test_refuses_an_env_key_for_a_custom_endpoint(
+    client: TestClient,
+) -> None:
+    """Process-environment keys are not sent to a caller-supplied host."""
+    resp = client.post(
+        "/api/llm-providers/test",
+        json={
+            "name": "x",
+            "backend": "openai",
+            "model": "gpt-4o",
+            "endpoint": "https://gw.example/v1",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is False
+    assert "custom endpoint" in body["failure_cause"]
+
+
+def test_form_test_uses_the_saved_key_for_its_saved_endpoint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lp_id = _create_provider_with_endpoint(client)
+    captured: dict[str, str | None] = {}
+
+    def fake_test(
+        provider: LLMProviderConfig,
+        timeout_s: float = 10.0,
+        api_key_override: str | None = None,
+    ) -> ProviderTestResult:
+        captured["key"] = api_key_override
+        return ProviderTestResult(
+            status="connected",
+            tested_at=datetime.now(timezone.utc),
+            latency_ms=1,
+            error_message=None,
+        )
+
+    monkeypatch.setattr("rlmstudio.application.services.provider_tester.test_provider", fake_test)
+    monkeypatch.setattr(
+        "rlmstudio.server.routes.llm_providers._get_api_key",
+        lambda *_args, **_kwargs: "sk-saved",
+    )
+
+    resp = client.post(
+        "/api/llm-providers/test",
+        json={
+            "name": "gateway",
+            "backend": "openai",
+            "model": "gpt-4o",
+            "llm_provider_id": lp_id,
+            "endpoint": "https://old.example/v1",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["connected"] is True
+    assert captured["key"] == "sk-saved"
+
+
+def test_update_that_does_not_affect_the_probe_keeps_the_result(
+    client: TestClient,
+) -> None:
+    lp_id = _add_provider(client)
+    state = dependencies.get_state()
+    lp = state.get_llm_provider(lp_id)
+    assert lp is not None
+    tested_at = datetime.now(timezone.utc)
+    lp.status = "connected"
+    lp.last_tested_at = tested_at
+    lp.last_tested_by = "manual"
+
+    resp = client.put(f"/api/llm-providers/{lp_id}", json={"name": "renamed"})
+
+    assert resp.status_code == 200, resp.text
+    updated = client.get(f"/api/llm-providers/{lp_id}").json()
+    assert updated["status"] == "connected"
+    assert updated["last_tested_at"] is not None
+    assert updated["last_tested_by"] == "manual"
 
 
 def test_put_config_none_interval_means_no_change(client: TestClient) -> None:

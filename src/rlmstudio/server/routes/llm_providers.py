@@ -13,6 +13,8 @@ from rlmstudio.server.dependencies import AppState, get_state
 from rlmstudio.server.models import (
     LLMProviderConfig,
     LLMProviderCreateRequest,
+    LLMProviderModelsRequest,
+    LLMProviderModelsResponse,
     LLMProviderUpdateRequest,
     ModelInfo,
     ProviderTestResponse,
@@ -262,14 +264,20 @@ async def update_llm_provider(
                     )
             lp.name = req.name
 
+        # An explicit JSON null for ``endpoint`` means "clear the override";
+        # an omitted field means "leave it alone".  ``model_fields_set`` is
+        # the only way to tell them apart — treating both as "omitted" kept
+        # the old endpoint (and its green badge) after the user cleared it.
+        endpoint_provided = "endpoint" in req.model_fields_set
+
         # Track whether model or endpoint changed — triggers context_window re-discovery
         model_or_endpoint_changed = (req.model is not None and req.model != lp.model) or (
-            req.endpoint is not None and (req.endpoint or None) != lp.endpoint
+            endpoint_provided and (req.endpoint or None) != lp.endpoint
         )
 
         if req.model is not None:
             lp.model = req.model
-        if req.endpoint is not None:
+        if endpoint_provided:
             lp.endpoint = req.endpoint or None
         if req.runtime_settings is not None:
             lp.runtime_settings = req.runtime_settings
@@ -289,9 +297,24 @@ async def update_llm_provider(
                     lp.name,
                     lp.model,
                 )
+        if model_or_endpoint_changed:
+            # The previous probe described the old model/endpoint.  Keeping
+            # "connected" would show a green badge — and a last-tested time —
+            # for a configuration that has never been tested.
+            lp.status = "configured"
+            lp.last_tested_at = None
+            lp.last_tested_by = None
+            lp.consecutive_failures = 0
+            _status_cache.pop(lp.id, None)
+
         if req.api_key:
+            # A replacement key affects every probe: the stored result
+            # belongs to the credentials that were tested, not these.
             _persist_api_key(lp.id, lp.backend, req.api_key)
             lp.status = "configured"
+            lp.last_tested_at = None
+            lp.last_tested_by = None
+            lp.consecutive_failures = 0
             _status_cache.pop(lp.id, None)
 
         lp.updated_at = datetime.now(timezone.utc)
@@ -330,6 +353,106 @@ async def delete_llm_provider(
         state.save_config()
 
 
+def _resolve_saved_provider(
+    state: AppState, backend: str, llm_provider_id: str | None
+) -> LLMProviderConfig | None:
+    """Load the provider a form request references, and verify its backend.
+
+    A caller-supplied id must not be able to borrow one provider's stored
+    secret while claiming another backend.
+    """
+    if not llm_provider_id:
+        return None
+    saved = state.get_llm_provider(llm_provider_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="LLM Provider not found")
+    if saved.backend != backend:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"LLM Provider '{saved.name}' uses backend '{saved.backend}', not '{backend}'."
+            ),
+        )
+    return saved
+
+
+@router.post("/api/llm-providers/models")
+async def discover_llm_provider_models(
+    req: LLMProviderModelsRequest,
+    state: AppState = Depends(get_state),  # noqa: B008
+) -> LLMProviderModelsResponse:
+    """Load the model list for the values currently in the Settings form.
+
+    Unlike ``GET /api/providers/{name}/models`` this route:
+
+    * uses the API key being configured (or the saved key in edit mode),
+      not only the process environment;
+    * never substitutes the static catalog — a list the provider did not
+      return is reported as ``source="unavailable"`` with an error, so the
+      UI cannot present fallback entries as the account's live list;
+    * does not cache, so the form's Refresh button really re-reads the
+      endpoint.
+
+    A saved key is only used for the destination it was saved with.  When
+    the form changes the endpoint, the user must re-enter the key rather
+    than have the old secret sent to a new host.
+    """
+    from rlmstudio.application.services.provider_failure import redact_secrets
+    from rlmstudio.server.routes.providers import _fetch_models_from_api
+
+    entry = PROVIDERS_BY_KEY.get(req.backend)
+    if entry is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown backend: {req.backend}. Available: {list(PROVIDERS_BY_KEY.keys())}",
+        )
+
+    saved = _resolve_saved_provider(state, req.backend, req.llm_provider_id)
+    requested_endpoint = req.endpoint or None
+    endpoint_changed = saved is not None and requested_endpoint != saved.endpoint
+
+    api_key = req.api_key or None
+    if not api_key and entry.requires_api_key and endpoint_changed:
+        return LLMProviderModelsResponse(
+            source="unavailable",
+            error=(
+                "The endpoint changed, so the saved API key was not sent to it. "
+                "Re-enter the API key to load models from the new destination."
+            ),
+        )
+    if not api_key and saved is not None:
+        # Edit mode with a blank field: use the key saved for this provider.
+        api_key = _get_api_key(saved.id, saved.backend)
+    if not api_key and entry.env_var and not (entry.requires_api_key and requested_endpoint):
+        # Never send a process-environment key to an arbitrary destination.
+        api_key = os.environ.get(entry.env_var)
+    if entry.requires_api_key and not api_key:
+        return LLMProviderModelsResponse(
+            source="unavailable",
+            error=f"No API key available for {entry.display_name}. Enter one above.",
+        )
+
+    try:
+        models = await _fetch_models_from_api(
+            req.backend,
+            endpoint_override=req.endpoint,
+            api_key_override=api_key,
+        )
+    except Exception as exc:  # noqa: BLE001 — any discovery failure is a result, not a 500
+        # Sanitize once: the log and the response must not disagree about
+        # whether a key-shaped value was redacted.
+        error_text = redact_secrets(str(exc))[:300]
+        logger.warning("Model discovery failed for %s: %s", req.backend, error_text)
+        return LLMProviderModelsResponse(source="unavailable", error=error_text)
+
+    if not models:
+        return LLMProviderModelsResponse(
+            source="unavailable",
+            error="No models returned by the endpoint.",
+        )
+    return LLMProviderModelsResponse(models=models, source="live")
+
+
 class LLMProviderTestRequest(LLMProviderCreateRequest):
     """Body for ``POST /api/llm-providers/test``.
 
@@ -347,6 +470,7 @@ class LLMProviderTestRequest(LLMProviderCreateRequest):
 @router.post("/api/llm-providers/test")
 async def test_llm_provider_config(
     req: LLMProviderTestRequest,
+    state: AppState = Depends(get_state),  # noqa: B008
 ) -> ProviderTestResponse:
     """Test connection against an in-memory LLM Provider config.
 
@@ -360,28 +484,52 @@ async def test_llm_provider_config(
       saved key via ``llm_provider_id``, matching the
       "leave blank to keep current key" save-path contract.
 
+    Credential boundaries:
+
+    * a referenced provider must exist and must use the request's backend;
+    * its saved key is never sent to an endpoint that differs from the one
+      it was saved with — the user re-enters the key for a new destination;
+    * a process-environment key is likewise never sent to a caller-supplied
+      destination.
+
     Defined BEFORE the ``/{llm_provider_id}/test`` route so FastAPI's
     path resolver picks this fixed-prefix match rather than treating
     ``test`` as a literal id.
     """
     from rlmstudio.application.services.provider_tester import test_provider
 
-    if req.backend not in PROVIDERS_BY_KEY:
+    entry = PROVIDERS_BY_KEY.get(req.backend)
+    if entry is None:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown backend: {req.backend}. Available: {list(PROVIDERS_BY_KEY.keys())}",
         )
 
+    saved = _resolve_saved_provider(state, req.backend, req.llm_provider_id)
+    requested_endpoint = req.endpoint or None
+    endpoint_changed = saved is not None and requested_endpoint != saved.endpoint
+
     # Resolve the API key precedence:
     # 1. Explicit api_key in the request (user typed a new key).
-    # 2. Saved key for the referenced provider (edit mode, field blank).
+    # 2. Saved key for the referenced provider (edit mode, field blank)
+    #    — only for the endpoint it was saved with.
     # 3. None (the tester falls back to env-var lookup for providers
     #    where that makes sense; see `_build_probe_params`).
-    api_key_override: str | None = None
-    if req.api_key:
-        api_key_override = req.api_key
-    elif req.llm_provider_id:
-        api_key_override = _get_api_key(req.llm_provider_id, req.backend)
+    api_key_override: str | None = req.api_key or None
+    if api_key_override is None and entry.requires_api_key and endpoint_changed:
+        return ProviderTestResponse(
+            connected=False,
+            failure_cause=("The endpoint changed, so the saved API key was not sent to it."),
+            failure_fix="Re-enter the API key to test the new destination.",
+        )
+    if api_key_override is None and saved is not None:
+        api_key_override = _get_api_key(saved.id, saved.backend)
+    if api_key_override is None and entry.requires_api_key and requested_endpoint:
+        return ProviderTestResponse(
+            connected=False,
+            failure_cause="A custom endpoint needs its API key entered in the form.",
+            failure_fix="Enter the API key for this destination and test again.",
+        )
 
     # Build an in-memory LLMProviderConfig. Request-scoped uuid avoids
     # any chance of concurrent form tests colliding on shared state.
@@ -406,10 +554,15 @@ async def test_llm_provider_config(
             connected=True,
             latency_ms=result.latency_ms,
             model=lp.model,
+            tested_at=result.tested_at,
         )
     return ProviderTestResponse(
         connected=False,
         error=result.error_message,
+        tested_at=result.tested_at,
+        failure_kind=result.failure_kind.value if result.failure_kind else None,
+        failure_cause=result.failure_cause,
+        failure_fix=result.failure_fix,
     )
 
 
@@ -464,10 +617,15 @@ async def test_llm_provider(
             connected=True,
             latency_ms=result.latency_ms,
             model=lp.model,
+            tested_at=result.tested_at,
         )
     return ProviderTestResponse(
         connected=False,
         error=result.error_message,
+        tested_at=result.tested_at,
+        failure_kind=result.failure_kind.value if result.failure_kind else None,
+        failure_cause=result.failure_cause,
+        failure_fix=result.failure_fix,
     )
 
 
@@ -476,7 +634,13 @@ async def list_llm_provider_models(
     llm_provider_id: str,
     state: AppState = Depends(get_state),  # noqa: B008
 ) -> list[ModelInfo]:
-    """Fetch live models for a named LLM Provider instance."""
+    """Fetch live models for a named LLM Provider instance.
+
+    Uses the provider's own saved key and endpoint, so a cloud provider
+    backed only by the SecretStore — or one pointed at a compatible
+    gateway — gets its real list rather than the catalog fallback.
+    """
+    from rlmstudio.application.services.provider_failure import redact_secrets
     from rlmstudio.server.routes.providers import (
         _build_model_infos,
         _fetch_models_from_api,
@@ -488,17 +652,18 @@ async def list_llm_provider_models(
 
     try:
         live: list[ModelInfo] = await _fetch_models_from_api(
-            lp.backend, endpoint_override=lp.endpoint
+            lp.backend,
+            endpoint_override=lp.endpoint,
+            api_key_override=_get_api_key(lp.id, lp.backend),
         )
         if live:
-            # Successful model fetch proves connectivity — mark as connected
-            if lp.status != "connected":
-                lp.status = "connected"
-                _status_cache[lp.id] = "connected"
-                state.save_config()
+            # A model list proves the endpoint answers, not that the configured
+            # model completes a request.  It must not mark the provider
+            # connected: that left a green badge with no last_tested_at.
             return live
     except Exception as exc:
-        logger.warning("Failed to fetch models for LLM Provider %s: %s", lp.name, exc)
+        error_text = redact_secrets(str(exc))[:300]
+        logger.warning("Failed to fetch models for LLM Provider %s: %s", lp.name, error_text)
 
     catalog: list[ModelInfo] = _build_model_infos(lp.backend)
     return catalog
