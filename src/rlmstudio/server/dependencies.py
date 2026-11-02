@@ -159,6 +159,9 @@ class AppState:
         # based on config.connection_test_interval_minutes.
         self._connection_test_thread: threading.Thread | None = None
         self._connection_test_stop: threading.Event = threading.Event()
+        # The one-shot startup probe is process-wide once; the guard keeps a
+        # repeated call from spawning a second thread.
+        self._startup_probe_thread: threading.Thread | None = None
         # Persistent telemetry store (SQLite-backed).
         # In-memory ":memory:" for tests, on-disk for production.
         self.telemetry: TelemetryStore = TelemetryStore(":memory:" if not load_from_disk else None)
@@ -174,6 +177,11 @@ class AppState:
         # of self.config.  If a future refactor needs post-startup work,
         # factor it into _post_init_warmup() and call that BEFORE this.
         self._start_connection_testing()
+        # The one-shot startup probe is spawned after the periodic thread on
+        # purpose: it needs the stop event _start_connection_testing may
+        # install, and it sleeps before reading any config, so it cannot race
+        # initialization.  (#95 Scope 4.)
+        self._start_startup_probe()
 
     # ------------------------------------------------------------------
     # Config persistence
@@ -424,6 +432,14 @@ class AppState:
     # users).  Set via monkeypatch.setenv in tests — see spec Open Q #3.
     _INTERVAL_OVERRIDE_ENV: str = env_name("CONNECTION_TEST_INTERVAL_SECONDS_OVERRIDE")
 
+    # One-shot startup probe (#95 Scope 4).  Enabled BY DEFAULT in
+    # production; the periodic timer stays opt-in.  The delay override is
+    # test-only and changes only the wait — it cannot enable a disabled probe.
+    _STARTUP_PROBE_DELAY_S: float = 3.0
+    # Suffixes: ``env()`` adds the RLM_STUDIO_ prefix itself.
+    _STARTUP_PROBE_ENV: str = "STARTUP_PROBE"
+    _STARTUP_PROBE_DELAY_OVERRIDE_ENV: str = "STARTUP_PROBE_DELAY_SECONDS_OVERRIDE"
+
     _connection_test_logger = logging.getLogger("rlmstudio.server.connection_test_thread")
 
     def _resolve_interval_seconds(self) -> float | None:
@@ -480,10 +496,13 @@ class AppState:
         user changed the interval or is shutting down, so this cycle's
         observations are no longer authoritative.
         """
+        # Set the event even when no periodic thread exists: the one-shot
+        # startup probe shares it, so shutdown must discard its in-flight
+        # results and abort it while it is still waiting.
+        self._connection_test_stop.set()
         thread = self._connection_test_thread
         if thread is None:
             return
-        self._connection_test_stop.set()
         thread.join(timeout=2.0)
         if thread.is_alive():
             self._connection_test_logger.warning(
@@ -500,6 +519,87 @@ class AppState:
         """
         self._stop_connection_testing()
         self._start_connection_testing()
+
+    def _start_startup_probe(self) -> None:
+        """Probe every configured provider once, shortly after startup.
+
+        Enabled by default; ``RLM_STUDIO_STARTUP_PROBE=0`` disables it.  The
+        periodic timer stays opt-in (``connection_test_interval_minutes``
+        defaults to 0); this one-shot is what makes a stale key or retired
+        model visible on a fresh launch instead of only after a failed run.
+
+        The delay override is test-only: it changes the wait, never the
+        enablement, so an override cannot silently switch the feature on.
+        """
+        if self._startup_probe_thread is not None:
+            return
+        if env(self._STARTUP_PROBE_ENV) == "0":
+            return
+
+        delay = self._STARTUP_PROBE_DELAY_S
+        override = env(self._STARTUP_PROBE_DELAY_OVERRIDE_ENV)
+        if override is not None:
+            try:
+                delay = max(0.0, float(override))
+            except ValueError:
+                self._connection_test_logger.warning(
+                    "invalid %s=%r — using %.1fs",
+                    env_name(self._STARTUP_PROBE_DELAY_OVERRIDE_ENV),
+                    override,
+                    self._STARTUP_PROBE_DELAY_S,
+                )
+
+        self._startup_probe_thread = threading.Thread(
+            target=self._run_startup_probe,
+            args=(delay,),
+            name="rlmkit-startup-probe",
+            daemon=True,
+        )
+        self._startup_probe_thread.start()
+
+    def _run_startup_probe(self, delay: float) -> None:
+        """Wait, then run one cycle and the account-list check.
+
+        Captures the stop event once: a restart replaces the attribute, and
+        this one-shot must not observe the replacement as "not stopped" and
+        apply results that were explicitly abandoned.
+        """
+        stop_event = self._connection_test_stop
+        if delay > 0 and stop_event.wait(timeout=delay):
+            return
+        try:
+            self._run_test_cycle(stop_event)
+        except Exception:  # noqa: BLE001 — a failed probe must not kill anything
+            self._connection_test_logger.exception("startup provider probe failed")
+        try:
+            self._refresh_model_checks_on_load(stop_event)
+        except Exception:  # noqa: BLE001
+            self._connection_test_logger.exception("startup model check failed")
+
+    def _refresh_model_checks_on_load(self, stop_event: threading.Event) -> None:
+        """Compare every configured model with its provider's live list.
+
+        Scope 2 requires this on load; the completion probe cannot substitute
+        for it — it never fetches the account list, so it cannot report the
+        alternatives a retired model was replaced by.  Bounded per provider
+        (``MODEL_CHECK_TIMEOUT_S``) and skipped once the stop event is set.
+        """
+        import asyncio
+
+        from rlmstudio.server.provider_checks import refresh_model_check
+
+        with self._config_lock:
+            provider_ids = [lp.id for lp in self.config.llm_providers]
+        if not provider_ids or stop_event.is_set():
+            return
+
+        async def _run() -> None:
+            await asyncio.gather(
+                *(refresh_model_check(self, pid, stop_event=stop_event) for pid in provider_ids),
+                return_exceptions=True,
+            )
+
+        asyncio.run(_run())
 
     def _connection_test_loop(self) -> None:
         """Background cycle loop.  Sleeps first, then tests.
@@ -518,8 +618,12 @@ class AppState:
             if self._connection_test_stop.wait(timeout=interval_s):
                 break  # stop requested during sleep
             cycle_started = time.monotonic()
+            # Capture the event for this cycle: a restart replaces the
+            # attribute, and this cycle must still honour the stop it was
+            # started under.
+            cycle_event = self._connection_test_stop
             try:
-                self._run_test_cycle()
+                self._run_test_cycle(cycle_event)
             except Exception:  # noqa: BLE001 — cycle must not kill the thread
                 log.exception("unhandled exception in connection test cycle")
             cycle_duration = time.monotonic() - cycle_started
@@ -541,16 +645,17 @@ class AppState:
         reflects what they configured.  We discard it rather than vouch
         for an endpoint we never probed.
 
-        Fields included MUST match every field that test_provider reads.
-        The api_key is identified by reference (id), not value — rotating
-        the key is indistinguishable from setting one for the first time
-        via the usual (SecretStore) path, so fingerprinting includes the
-        provider id (which is already present as the map key) and the
-        backend/model/endpoint tuple.
+        Fields included MUST cover every change that affects the probe.  The
+        api_key is not readable here (it lives in the SecretStore), so a key
+        rotation would otherwise look identical to no edit at all: the id,
+        backend, model and endpoint are unchanged.  ``updated_at`` is bumped
+        by every provider update — including a key rotation — so it is the
+        field that catches that case.  It is over-conservative for a
+        name-only edit, and discarding a result in that case is safe.
         """
         import hashlib
 
-        fields = (lp.id, lp.backend, lp.model, lp.endpoint or "")
+        fields = (lp.id, lp.backend, lp.model, lp.endpoint or "", lp.updated_at)
         tuple_repr = repr(fields)
         return hashlib.sha1(tuple_repr.encode("utf-8"), usedforsecurity=False).hexdigest()
 
@@ -580,8 +685,13 @@ class AppState:
                 error_message=f"internal error: {exc!s}"[:200],
             )
 
-    def _run_test_cycle(self) -> None:
+    def _run_test_cycle(self, stop_event: threading.Event | None = None) -> None:
         """One cycle: snapshot → probe in parallel → apply under lock.
+
+        ``stop_event`` is the event this cycle was started under.  It is
+        captured by the caller because a restart replaces
+        ``self._connection_test_stop``; reading the attribute at apply time
+        would let an abandoned cycle see the replacement as unset.
 
         Lock discipline: held only during the snapshot and the batch-apply.
         The actual network probes run in the thread pool OUTSIDE the lock
@@ -625,8 +735,10 @@ class AppState:
         # The spec requires that in-flight cycle results be discarded on
         # stop — persisting them would vouch for connectivity based on a
         # cycle the operator explicitly abandoned (interval change or
-        # shutdown).
-        if self._connection_test_stop.is_set():
+        # shutdown).  Check the event this cycle started under, not the
+        # attribute, which a restart may have replaced.
+        cycle_event = stop_event or self._connection_test_stop
+        if cycle_event.is_set():
             log.info(
                 "stop requested during cycle; discarding %d probe result(s) without persisting",
                 len(results),
@@ -689,6 +801,7 @@ class AppState:
         """
         from rlmstudio.application.services.provider_tester import (
             record_failure_classification,
+            record_model_check_from_probe,
         )
 
         transitions: list[dict[str, Any]] = []
@@ -730,6 +843,9 @@ class AppState:
             # Even a failure below the offline threshold is worth naming: the
             # row can show the cause while the status still says "connected".
             record_failure_classification(current, result)
+            # Model check from the probe outcome only — no network call in
+            # this thread (alternatives come from save or the manual test).
+            record_model_check_from_probe(current, result)
 
             if result.status == "connected":
                 current.status = "connected"

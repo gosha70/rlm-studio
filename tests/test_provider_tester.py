@@ -12,7 +12,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import patch
 
@@ -283,3 +283,166 @@ def test_test_provider_does_not_mutate_process_global_socket_timeout() -> None:
         )
     finally:
         socket.setdefaulttimeout(original)
+
+
+# --------------------------------------------------------------------------
+# Credential boundary on the probe path (#95 review)
+# --------------------------------------------------------------------------
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def test_probe_uses_the_saved_key_for_its_saved_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rlmstudio.application.services import provider_tester
+
+    monkeypatch.setattr(provider_tester, "_get_saved_key", lambda _id: "sk-saved")
+    monkeypatch.setattr(provider_tester, "_get_env_key", lambda _backend: "sk-env")
+    lp = _make_provider(endpoint="https://gw.example/v1")
+
+    params = provider_tester._build_probe_params(lp, 5.0)
+
+    assert params["api_key"] == "sk-saved"
+    assert params["api_base"] == "https://gw.example/v1"
+
+
+def test_probe_never_sends_an_env_key_to_a_custom_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The startup probe is a new caller of this path; pin the boundary."""
+    from rlmstudio.application.services import provider_tester
+
+    monkeypatch.setattr(provider_tester, "_get_saved_key", lambda _id: None)
+    monkeypatch.setattr(provider_tester, "_get_env_key", lambda _backend: "sk-env")
+    lp = _make_provider(endpoint="https://gw.example/v1")
+
+    params = provider_tester._build_probe_params(lp, 5.0)
+
+    assert "api_key" not in params
+
+
+def test_probe_sends_an_env_key_to_the_vendor_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rlmstudio.application.services import provider_tester
+
+    monkeypatch.setattr(provider_tester, "_get_saved_key", lambda _id: None)
+    monkeypatch.setattr(provider_tester, "_get_env_key", lambda _backend: "sk-env")
+    lp = _make_provider(endpoint=None)
+
+    params = provider_tester._build_probe_params(lp, 5.0)
+
+    assert params["api_key"] == "sk-env"
+
+
+# --------------------------------------------------------------------------
+# Model-check recorders (pure — no network)
+# --------------------------------------------------------------------------
+
+
+def test_record_model_check_available() -> None:
+    from rlmstudio.application.services.provider_tester import record_model_check
+
+    lp = _make_provider()
+    record_model_check(lp, ["gpt-4o-mini", "gpt-4o"])
+
+    assert lp.model_check_status == "available"
+    assert lp.model_check_alternatives is None
+    assert lp.model_checked_at is not None
+
+
+def test_record_model_check_unavailable_keeps_five_alternatives() -> None:
+    from rlmstudio.application.services.provider_tester import record_model_check
+
+    lp = _make_provider(model="retired")
+    record_model_check(lp, ["a", "b", "c", "d", "e", "f"])
+
+    assert lp.model_check_status == "unavailable"
+    assert lp.model_check_alternatives == ["a", "b", "c", "d", "e"]
+
+
+def test_record_model_check_with_an_empty_list_is_unknown() -> None:
+    from rlmstudio.application.services.provider_tester import record_model_check
+
+    lp = _make_provider()
+    record_model_check(lp, [])
+
+    assert lp.model_check_status == "unknown"
+    assert lp.model_check_alternatives is None
+
+
+def test_record_model_check_unavailable_from_a_probe() -> None:
+    from rlmstudio.application.services.provider_tester import (
+        record_model_check_unavailable,
+    )
+
+    lp = _make_provider(model="retired")
+    record_model_check_unavailable(lp, ["a", "b"])
+
+    assert lp.model_check_status == "unavailable"
+    assert lp.model_check_alternatives == ["a", "b"]
+
+
+def test_record_model_check_from_a_connected_probe() -> None:
+    from rlmstudio.application.services.provider_tester import (
+        record_model_check_from_probe,
+    )
+
+    lp = _make_provider()
+    tested_at = _now()
+    result = ProviderTestResult(
+        status="connected", tested_at=tested_at, latency_ms=1, error_message=None
+    )
+
+    record_model_check_from_probe(lp, result)
+
+    assert lp.model_check_status == "available"
+    assert lp.model_checked_at == tested_at
+
+
+def test_record_model_check_from_a_model_unavailable_probe() -> None:
+    from rlmstudio.application.services.provider_failure import ProviderFailureKind
+    from rlmstudio.application.services.provider_tester import (
+        record_model_check_from_probe,
+    )
+
+    lp = _make_provider(model="retired")
+    result = ProviderTestResult(
+        status="offline",
+        tested_at=_now(),
+        latency_ms=None,
+        error_message="model not found",
+        failure_kind=ProviderFailureKind.MODEL_UNAVAILABLE,
+        failure_cause="model gone",
+        failure_fix="pick another",
+    )
+
+    record_model_check_from_probe(lp, result)
+
+    assert lp.model_check_status == "unavailable"
+
+
+def test_record_model_check_from_an_auth_failure_leaves_it_alone() -> None:
+    from rlmstudio.application.services.provider_failure import ProviderFailureKind
+    from rlmstudio.application.services.provider_tester import (
+        record_model_check_from_probe,
+    )
+
+    lp = _make_provider()
+    lp.model_check_status = "available"
+    result = ProviderTestResult(
+        status="offline",
+        tested_at=_now(),
+        latency_ms=None,
+        error_message="invalid x-api-key",
+        failure_kind=ProviderFailureKind.AUTH,
+        failure_cause="key rejected",
+        failure_fix="update it",
+    )
+
+    record_model_check_from_probe(lp, result)
+
+    assert lp.model_check_status == "available"

@@ -390,6 +390,7 @@ async def _fetch_models_from_api(
     provider_name: str,
     endpoint_override: str | None = None,
     api_key_override: str | None = None,
+    timeout: float = 15.0,
 ) -> list[ModelInfo]:
     """Fetch live model list from a provider's API.
 
@@ -413,7 +414,7 @@ async def _fetch_models_from_api(
             return api_key_override
         return "" if endpoint_override else os.environ.get(default_env, "")
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         if provider_name == "anthropic":
             api_key = _key_for("ANTHROPIC_API_KEY")
             if not api_key:

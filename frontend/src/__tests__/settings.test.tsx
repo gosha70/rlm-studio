@@ -496,7 +496,7 @@ describe("SettingsPage", () => {
     // The notice text depends on the current config.connection_test_interval_minutes.
     // Mock's default is 0, so the "disabled — enable on General" message should be visible.
     expect(
-      screen.getByText(/Auto-testing of connections is disabled/i),
+      screen.getByText(/Recurring auto-testing is disabled/i),
     ).toBeInTheDocument();
   });
 
@@ -600,6 +600,78 @@ describe("SettingsPage", () => {
       screen.getByText(/Last failure: The API key was rejected\./),
     ).toBeInTheDocument();
     expect(screen.getByText(/update it in Settings/)).toBeInTheDocument();
+  });
+
+  test("a provider row flags a model the provider does not offer", () => {
+    const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+    vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+      if (key === "config") return swrStub(MOCK_CONFIG);
+      if (key === "llm-providers")
+        return swrStub([
+          {
+            id: "lp-model",
+            name: "Stale model",
+            backend: "vllm",
+            model: "retired-model",
+            endpoint: "http://spark:8001/v1",
+            runtime_settings: {
+              temperature: 0.7,
+              top_p: 1.0,
+              max_output_tokens: 4096,
+              timeout_seconds: 30,
+            },
+            status: "configured",
+            model_check_status: "unavailable",
+            model_check_alternatives: ["qwen38-27b", "qwen38-27b-awq"],
+            last_tested_at: null,
+            last_tested_by: null,
+            consecutive_failures: 0,
+          },
+        ]);
+      return swrStub(undefined);
+    }) as typeof useSWR);
+
+    render(<SettingsPage />);
+
+    expect(screen.getByText(/is not offered by this provider/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Available: qwen38-27b, qwen38-27b-awq\./),
+    ).toBeInTheDocument();
+  });
+
+  test("a provider row shows an unknown model check quietly", () => {
+    const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+    vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+      if (key === "config") return swrStub(MOCK_CONFIG);
+      if (key === "llm-providers")
+        return swrStub([
+          {
+            id: "lp-unknown",
+            name: "Unreachable",
+            backend: "vllm",
+            model: "qwen38-27b",
+            endpoint: "http://spark:8001/v1",
+            runtime_settings: {
+              temperature: 0.7,
+              top_p: 1.0,
+              max_output_tokens: 4096,
+              timeout_seconds: 30,
+            },
+            status: "configured",
+            model_check_status: "unknown",
+            last_tested_at: null,
+            last_tested_by: null,
+            consecutive_failures: 0,
+          },
+        ]);
+      return swrStub(undefined);
+    }) as typeof useSWR);
+
+    render(<SettingsPage />);
+
+    expect(
+      screen.getByText(/Model check could not reach the provider\./),
+    ).toBeInTheDocument();
   });
 
   test("editing a cloud gateway sends its saved endpoint to discovery", async () => {

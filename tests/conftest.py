@@ -81,3 +81,32 @@ def pytest_configure(config: pytest.Config) -> None:
     import tempfile
 
     os.environ.setdefault("RLM_STUDIO_DIR", tempfile.mkdtemp(prefix="rlm-studio-test-state-"))
+    # The one-shot startup probe is on by default in production; the suite
+    # must never make real provider calls.  Tests that exercise it set the
+    # variable to "1" plus a zero-delay override.
+    os.environ.setdefault("RLM_STUDIO_STARTUP_PROBE", "0")
+    config.addinivalue_line(
+        "markers",
+        "real_model_discovery: use the real model-discovery fetch "
+        "(the save-time model check is stubbed by default)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_save_time_model_discovery(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+):
+    """Keep provider saves off the network.
+
+    Saving a provider validates its model against the provider's live list.
+    In the suite that fetch is stubbed to "no models" (the check records
+    ``unknown``) unless a test asks for the real function via
+    ``@pytest.mark.real_model_discovery`` or patches it itself.
+    """
+    if request.node.get_closest_marker("real_model_discovery"):
+        return
+
+    async def _no_models(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    monkeypatch.setattr("rlmstudio.server.routes.providers._fetch_models_from_api", _no_models)

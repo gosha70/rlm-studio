@@ -203,6 +203,7 @@ class _RecordingClient:
         return _FakeResponse(_RecordingClient.payload)
 
 
+@pytest.mark.real_model_discovery
 def test_cloud_discovery_honors_a_custom_endpoint(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -218,6 +219,7 @@ def test_cloud_discovery_honors_a_custom_endpoint(
     assert _RecordingClient.last_headers == {"Authorization": "Bearer sk-x"}
 
 
+@pytest.mark.real_model_discovery
 def test_cloud_discovery_endpoint_without_v1_still_gets_the_models_path(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -231,6 +233,7 @@ def test_cloud_discovery_endpoint_without_v1_still_gets_the_models_path(
     assert _RecordingClient.last_url == "https://gw.example/v1/models"
 
 
+@pytest.mark.real_model_discovery
 def test_env_key_is_not_used_for_a_custom_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -249,6 +252,7 @@ def test_env_key_is_not_used_for_a_custom_endpoint(
     assert _RecordingClient.last_url is None
 
 
+@pytest.mark.real_model_discovery
 def test_gateway_model_ids_are_not_filtered_as_openai_vendor_ids(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -264,6 +268,7 @@ def test_gateway_model_ids_are_not_filtered_as_openai_vendor_ids(
     assert [m["name"] for m in data["models"]] == ["qwen38-27b", "custom-model", "gpt-4o"]
 
 
+@pytest.mark.real_model_discovery
 def test_official_openai_keeps_unlisted_chat_models_and_drops_non_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
