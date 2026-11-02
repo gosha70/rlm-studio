@@ -26,7 +26,7 @@ Design (``specs/rlm-working-state`` G5/G6/D4a/D5):
 
 from __future__ import annotations
 
-import re
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -34,6 +34,8 @@ from rlmstudio.application.sandbox_vars import (
     RLM_DEFAULT_COMPACTION_KEEP_LAST,
 )
 from rlmstudio.application.services.result_registry import ResultRegistry
+
+logger = logging.getLogger(__name__)
 
 COMPACTION_REASON_THRESHOLD = "threshold"
 COMPACTION_REASON_OVERFLOW = "overflow_retry"
@@ -101,7 +103,10 @@ def estimate_tokens(
         try:
             return max(1, int(counter(messages=messages)))
         except Exception:
-            pass
+            logger.debug(
+                "count_tokens(messages=...) failed; using the chars/4 fallback",
+                exc_info=True,
+            )
     chars = message_chars(messages)
     if prior_prompt_tokens is not None and prior_prompt_chars > 0:
         appended = max(0, chars - prior_prompt_chars)
@@ -228,11 +233,11 @@ def _safe_count(counter: MessageTokenCounter | None, messages: list[dict[str, st
         try:
             return max(1, int(counter(messages=messages)))
         except Exception:
-            pass
+            logger.debug(
+                "token counting during compaction failed; using chars/4",
+                exc_info=True,
+            )
     return max(1, message_chars(messages) // 4)
-
-
-_FENCED_CODE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
 def _one_line_action(content: str) -> str | None:
@@ -253,11 +258,29 @@ def _one_line_action(content: str) -> str | None:
         query = str(getattr(action, "query", "") or "")
         return _clip(f"subcall(query={query!r})")
 
-    match = _FENCED_CODE.search(content)
-    if match:
-        for line in match.group(1).splitlines():
-            if line.strip():
-                return _clip(line.strip())
+    return _fenced_code_line(content)
+
+
+def _fenced_code_line(content: str) -> str | None:
+    """The first non-empty code line inside a fenced block, if any.
+
+    A hand-written scan rather than a regular expression: the model-authored
+    content is untrusted, and a ``\\s*``-based fence pattern backtracks
+    polynomially on long newline runs (CodeQL py/polynomial-redos).
+    """
+    marker = "```"
+    start = content.find(marker)
+    if start < 0:
+        return None
+    newline = content.find("\n", start + len(marker))
+    if newline < 0:
+        return None
+    end = content.find(marker, newline + 1)
+    if end < 0:
+        return None
+    for line in content[newline + 1 : end].splitlines():
+        if line.strip():
+            return _clip(line.strip())
     return None
 
 

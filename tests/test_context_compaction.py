@@ -111,6 +111,27 @@ class TestCompactMessages:
         assert compacted == messages
         assert record.changed is False
 
+    def test_v1_fenced_code_action_is_shortened_to_its_first_line(self) -> None:
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": "QUESTION"},
+            {
+                "role": "assistant",
+                "content": "Here is the call:\n```python\nprint(peek(0, 10))\nprint('more')\n```",
+            },
+            {"role": "user", "content": "Execution result:\npreview 1"},
+            {"role": "assistant", "content": _inspect("peek", start=0, end=1)},
+            {"role": "user", "content": "Execution result:\npreview 2"},
+        ]
+        registry = ResultRegistry()
+        registry.note_message(3, registry.register("a", kind="inspect", step=1).id)
+        registry.note_message(5, registry.register("b", kind="inspect", step=2).id)
+
+        compacted, _ = compact_messages(messages, registry, keep_last=1)
+
+        assert compacted[2]["content"] == f"{COMPACTED_ACTION_PREFIX}print(peek(0, 10))"
+        assert compacted[4] == messages[4]
+
     def test_unregistered_execution_output_is_left_intact(self) -> None:
         messages, registry = _paired_messages(3)
         unregistered = {"role": "user", "content": "Execution result:\narbitrary code output"}
