@@ -30,6 +30,7 @@ __all__ = [
     "ProviderFailureError",
     "classify_provider_failure",
     "describe_provider_failure",
+    "failure_answer",
     "failure_kind_of",
     "failure_kind_value",
     "redact_secrets",
@@ -279,11 +280,13 @@ class ProviderFailureError(RuntimeError):
     exists to avoid.
     """
 
-    def __init__(self, message: str, failure: ProviderFailure) -> None:
+    def __init__(self, message: str, failure: ProviderFailure, detail: str = "") -> None:
         super().__init__(message)
         self.kind = failure.kind
         self.cause_text = failure.cause
         self.fix_text = failure.fix
+        # Redacted upstream text, for the answer card's small-print line.
+        self.detail = detail
 
 
 def failure_kind_of(exc: BaseException) -> ProviderFailureKind | None:
@@ -307,3 +310,44 @@ def failure_kind_value(exc: BaseException) -> str | None:
     """
     kind = failure_kind_of(exc)
     return kind.value if kind is not None else None
+
+
+# Short card titles.  The cause and fix body comes from
+# describe_provider_failure, so these add no second wording of the remedy.
+_FAILURE_TITLES: dict[ProviderFailureKind, str] = {
+    ProviderFailureKind.AUTH: "Authentication failed",
+    ProviderFailureKind.MODEL_UNAVAILABLE: "Model not available",
+    ProviderFailureKind.CONNECTION: "Cannot reach the provider",
+    ProviderFailureKind.TIMEOUT: "The provider did not respond in time",
+    ProviderFailureKind.RATE_LIMIT: "Rate limited by the provider",
+    ProviderFailureKind.UNKNOWN: "The provider call failed",
+}
+
+
+def failure_answer(exc: BaseException) -> str | None:
+    """Return a ⚠️ markdown card for a classified provider failure.
+
+    The user-facing counterpart of :func:`failure_kind_value`: the run's
+    answer field carries a card naming the cause and the fix instead of a
+    provider traceback.  Returns ``None`` when the exception carries no
+    classification, so callers keep their existing fallback.
+    """
+    kind = failure_kind_of(exc)
+    if kind is None:
+        return None
+
+    failure = describe_provider_failure(kind)
+    cause = getattr(exc, "cause_text", None) or failure.cause
+    fix = getattr(exc, "fix_text", None) or failure.fix
+    detail = getattr(exc, "detail", "")
+
+    lines = [
+        f"⚠️ **{_FAILURE_TITLES[kind]}**",
+        "",
+        cause,
+        "",
+        f"**How to fix:** {fix}",
+    ]
+    if detail:
+        lines.extend(["", f"_{detail}_"])
+    return "\n".join(lines)

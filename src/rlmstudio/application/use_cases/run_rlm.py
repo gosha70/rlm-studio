@@ -41,7 +41,10 @@ from rlmstudio.application.sandbox_vars import (
 )
 from rlmstudio.application.services.execution_preview import format_preview, truncation_marker
 from rlmstudio.application.services.inspect_dispatcher import dispatch_inspect, display_code
-from rlmstudio.application.services.provider_failure import failure_kind_value
+from rlmstudio.application.services.provider_failure import (
+    failure_answer,
+    failure_kind_value,
+)
 from rlmstudio.application.services.result_registry import ReadSlice, ResultRef, ResultRegistry
 from rlmstudio.domain.entities import BudgetConfig, BudgetState
 from rlmstudio.domain.exceptions import BudgetExceededError
@@ -899,7 +902,7 @@ class RunRLMUseCase:
                     trace=trace,
                 )
             return RunResultDTO(
-                answer="",
+                answer=failure_answer(exc) or "",
                 mode_used=MODE_RLM,
                 success=False,
                 error=error_str,
@@ -1774,7 +1777,7 @@ class RunRLMUseCase:
                     trace=trace,
                 )
             return RunResultDTO(
-                answer="",
+                answer=failure_answer(exc) or "",
                 mode_used=MODE_RLM,
                 success=False,
                 error=error_str,

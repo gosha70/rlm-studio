@@ -687,6 +687,10 @@ class AppState:
         result is discarded without mutating consecutive_failures or any
         other field.  The next cycle will probe the new config.
         """
+        from rlmstudio.application.services.provider_tester import (
+            record_failure_classification,
+        )
+
         transitions: list[dict[str, Any]] = []
         discarded: list[dict[str, Any]] = []
         current_by_id = {lp.id: lp for lp in self.config.llm_providers}
@@ -723,6 +727,9 @@ class AppState:
             old_status = current.status
             current.last_tested_at = result.tested_at
             current.last_tested_by = source
+            # Even a failure below the offline threshold is worth naming: the
+            # row can show the cause while the status still says "connected".
+            record_failure_classification(current, result)
 
             if result.status == "connected":
                 current.status = "connected"

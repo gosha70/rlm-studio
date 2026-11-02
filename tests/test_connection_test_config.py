@@ -219,6 +219,48 @@ def test_manual_test_failure_flips_status_and_sets_counter_to_one(
     assert lp["last_tested_at"] is not None
 
 
+def test_manual_test_failure_persists_the_classification(client: TestClient) -> None:
+    """The row can name the cause after the transient banner is gone."""
+    lp_id = _add_provider(client)
+
+    class AuthenticationError(Exception):
+        """Same class name litellm uses — the classifier matches on it."""
+
+    with patch("litellm.completion", side_effect=AuthenticationError("invalid x-api-key")):
+        resp = client.post(f"/api/llm-providers/{lp_id}/test")
+
+    assert resp.status_code == 200
+    lp = client.get(f"/api/llm-providers/{lp_id}").json()
+    assert lp["last_failure_kind"] == "auth"
+    assert "API key" in lp["last_failure_cause"]
+    assert "Settings" in lp["last_failure_fix"]
+
+
+def test_manual_test_success_clears_the_failure_classification(
+    client: TestClient,
+) -> None:
+    lp_id = _add_provider(client)
+    state = dependencies.get_state()
+    lp = state.get_llm_provider(lp_id)
+    assert lp is not None
+    lp.last_failure_kind = "auth"
+    lp.last_failure_cause = "The API key was rejected."
+    lp.last_failure_fix = "Check the key."
+
+    class _FakeResponse:
+        def __init__(self) -> None:
+            self.choices = [object()]
+
+    with patch("litellm.completion", return_value=_FakeResponse()):
+        resp = client.post(f"/api/llm-providers/{lp_id}/test")
+
+    assert resp.status_code == 200
+    updated = client.get(f"/api/llm-providers/{lp_id}").json()
+    assert updated["last_failure_kind"] is None
+    assert updated["last_failure_cause"] is None
+    assert updated["last_failure_fix"] is None
+
+
 def test_manual_test_resets_counter_from_nonzero_on_success(
     client: TestClient,
 ) -> None:
@@ -360,6 +402,9 @@ def test_update_config_that_affects_the_probe_clears_the_old_result(
     lp.last_tested_at = datetime.now(timezone.utc)
     lp.last_tested_by = "manual"
     lp.consecutive_failures = 2
+    lp.last_failure_kind = "auth"
+    lp.last_failure_cause = "The API key was rejected."
+    lp.last_failure_fix = "Check the key."
 
     with patch(
         "rlmstudio.server.routes.llm_providers._discover_context_window",
@@ -372,6 +417,9 @@ def test_update_config_that_affects_the_probe_clears_the_old_result(
     assert updated["status"] == "configured"
     assert updated["last_tested_at"] is None
     assert updated["last_tested_by"] is None
+    assert updated["last_failure_kind"] is None
+    assert updated["last_failure_cause"] is None
+    assert updated["last_failure_fix"] is None
     assert updated["consecutive_failures"] == 0
 
 

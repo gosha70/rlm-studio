@@ -589,6 +589,12 @@ class LLMProviderConfig(BaseModel):
     # and the background connection-test thread.
     last_tested_at: datetime | None = None  # ISO-8601 UTC
     last_tested_by: Literal["manual", "background"] | None = None
+    # Classification of the most recent failed probe (#95), so the row can
+    # state the cause and the fix after the transient test banner is gone.
+    # Cleared by a successful probe or any change to the probed configuration.
+    last_failure_kind: str | None = None
+    last_failure_cause: str | None = None
+    last_failure_fix: str | None = None
     # Consecutive failure counter (connected → offline requires N≥2 to debounce
     # transient blips).  Persisted across restarts so a blip just before
     # restart does not get erased.  See §Failure Semantics and Open Q #7 of

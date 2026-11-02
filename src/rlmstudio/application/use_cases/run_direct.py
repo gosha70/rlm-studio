@@ -24,15 +24,24 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_STEP,
 )
-from rlmstudio.application.services.provider_failure import failure_kind_value
+from rlmstudio.application.services.provider_failure import (
+    failure_answer,
+    failure_kind_value,
+)
 from rlmstudio.infrastructure.llm.litellm_adapter import TIMEOUT_ERROR_PREFIX
 from rlmstudio.prompts import get_mode_system_prompt
 
 logger = logging.getLogger(__name__)
 
 
-def _format_error_answer(error_str: str) -> str:
+def _format_error_answer(exc: Exception) -> str:
     """Return a user-facing ⚠️ warning for the error, with actionable fix for known categories."""
+    # Classified provider failures (auth, retired model, rate limit) get the
+    # card the classifier built; the heuristics below cover the rest.
+    classified = failure_answer(exc)
+    if classified is not None:
+        return classified
+    error_str = str(exc)
     error_lower = error_str.lower()
     if (
         error_str.startswith(TIMEOUT_ERROR_PREFIX)
@@ -165,7 +174,7 @@ class RunDirectUseCase:
             elapsed = time.time() - start
             error_str = str(exc)
             return RunResultDTO(
-                answer=_format_error_answer(error_str),
+                answer=_format_error_answer(exc),
                 mode_used=MODE_DIRECT,
                 success=False,
                 error=error_str,
@@ -302,7 +311,7 @@ class RunDirectUseCase:
             elapsed = time.time() - start
             error_str = str(exc)
             return RunResultDTO(
-                answer=_format_error_answer(error_str),
+                answer=_format_error_answer(exc),
                 mode_used=MODE_DIRECT,
                 success=False,
                 error=error_str,

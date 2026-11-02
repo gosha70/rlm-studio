@@ -65,6 +65,12 @@ Connection and execution are separate. The **LLM Providers** tab creates and tes
 
 Credentials stay with their destination: if you change a saved provider's endpoint, Test Connection asks you to re-enter the API key rather than sending the old secret to a new host. Changing only the model keeps the saved key.
 
+After a failed test or background probe, the provider row keeps a
+`Last failure: <cause> · <fix>` line until the next successful test or a
+change to the model, endpoint or key. A failed run on the Chat page shows the
+same cause and fix in place of the answer, in every execution mode — a
+rejected key, a retired model and an unreachable host each name themselves.
+
 A successful test shows the round-trip latency and the clock time it ran, and turns the row's badge green (*Connected*). A failed test shows what went wrong and what to do about it — for example, "Could not reach the provider at 'http://…'" with the fix "Make sure the server is running and reachable" — followed by the raw upstream detail. A rejected key, a missing model and an unreachable host produce different messages.
 
 Every row that says **Connected** also states when it was last tested, to the second, and whether you or the background daemon ran the test. Editing the model or the endpoint invalidates the old result: the row returns to *configured* and the timestamp clears until the new configuration is tested. Providers that are not *connected* or *configured* — for example *offline* — are hidden from the Chat and Compare pickers until a test succeeds again.

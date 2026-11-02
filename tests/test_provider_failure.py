@@ -14,9 +14,11 @@ import pytest
 
 from rlmstudio.application.services.provider_failure import (
     SECRET_PLACEHOLDER,
+    ProviderFailureError,
     ProviderFailureKind,
     classify_provider_failure,
     describe_provider_failure,
+    failure_answer,
     redact_secrets,
 )
 
@@ -67,6 +69,42 @@ def test_falls_back_to_message_keywords(message: str, expected: ProviderFailureK
     """Providers that raise a generic class with a descriptive body still
     classify, via keywords, so the probe is not blind to them."""
     assert classify_provider_failure(Exception(message)) is expected
+
+
+# ---------------------------------------------------------------------------
+# The user-facing answer card
+# ---------------------------------------------------------------------------
+
+
+def test_failure_answer_carries_cause_fix_and_detail() -> None:
+    """A failed run gets a card naming the cause and the fix, not a traceback."""
+    failure = describe_provider_failure(ProviderFailureKind.AUTH, provider_name="Anthropic")
+    exc = ProviderFailureError("key rejected", failure, "invalid x-api-key")
+
+    answer = failure_answer(exc)
+
+    assert answer is not None
+    assert "Authentication failed" in answer
+    assert failure.cause in answer
+    assert failure.fix in answer
+    assert "invalid x-api-key" in answer
+
+
+def test_failure_answer_titles_a_retired_model() -> None:
+    failure = describe_provider_failure(
+        ProviderFailureKind.MODEL_UNAVAILABLE, model="claude-sonnet-4-20250514"
+    )
+    answer = failure_answer(ProviderFailureError("404", failure, "not_found_error"))
+
+    assert answer is not None
+    assert "Model not available" in answer
+    assert "claude-sonnet-4-20250514" in answer
+    assert "Settings" in answer  # the fix points at the provider's model list
+
+
+def test_failure_answer_is_none_when_unclassified() -> None:
+    """Unclassified failures keep the caller's existing fallback."""
+    assert failure_answer(RuntimeError("something odd happened")) is None
 
 
 def test_unrecognised_failure_stays_unknown() -> None:
@@ -305,11 +343,12 @@ def test_use_case_carries_failure_kind_on_its_error_result() -> None:
     """
     litellm = pytest.importorskip("litellm")
 
+    from rlmstudio.application.dto import LLMResponseDTO
     from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
     from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
 
     class _RejectingAdapter(LiteLLMAdapter):
-        def complete(self, *_args: object, **_kwargs: object) -> object:
+        def complete(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
             raise self._translate_exception(
                 litellm.AuthenticationError(
                     "AnthropicException - invalid x-api-key",

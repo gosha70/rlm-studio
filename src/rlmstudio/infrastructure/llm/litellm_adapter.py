@@ -912,7 +912,7 @@ class LiteLLMAdapter:
             # lets the server attach a stable classification to the run
             # payload instead of making the UI match on wording.
             classified = ProviderFailureError(
-                f"{failure.cause} {failure.fix} (Detail: {detail})", failure
+                f"{failure.cause} {failure.fix} (Detail: {detail})", failure, detail
             )
             return classified
 

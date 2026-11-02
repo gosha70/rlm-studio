@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed — actionable provider failures (stale key, retired model)
+
+- A failed run now answers with a card naming the cause and the fix instead
+  of a provider SDK traceback — authentication, model not available, rate
+  limit, connection, timeout. It is built once in
+  `application/services/provider_failure.py`, so Direct, RLM, RAG and the
+  Official engine all say the same thing. RLM previously returned an empty
+  answer, which the Chat UI rendered as "Error: Execution failed"; the error
+  branch now also falls back to `result.error` when a mode returns no answer.
+- The provider row persists the classification of its last failed probe
+  (`last_failure_kind` / `last_failure_cause` / `last_failure_fix`) from both
+  manual Test Connection and the background cycle, and shows
+  `Last failure: <cause> · <fix>` until a successful probe or a change to
+  the probed configuration clears it.
+- The release gate's customer-journey plan now requires deliberately bad
+  keys and retired model ids to produce the cause-and-fix message.
+
 ### Added — `py.typed`: mypy now checks across module boundaries
 
 - The package ships a `py.typed` marker (both wheel and sdist), so a

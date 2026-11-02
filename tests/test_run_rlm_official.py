@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from rlmstudio.application.dto import RunConfigDTO
+from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
 from rlmstudio.application.sandbox_vars import (
     MODE_RLM_OFFICIAL,
     RESULT_KEY_COST_KNOWN,
@@ -18,6 +18,11 @@ from rlmstudio.application.sandbox_vars import (
 from rlmstudio.application.services.outcome_classifier import (
     OutcomeCategory,
     classify_execution_outcome,
+)
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailureError,
+    ProviderFailureKind,
+    describe_provider_failure,
 )
 from rlmstudio.application.use_cases.run_rlm_official import RunRLMOfficialUseCase
 from tests.fakes.fake_rlm_engine import (
@@ -39,6 +44,38 @@ _TIGHT_BUDGET = 0.05
 
 def _category(result: Any) -> OutcomeCategory:
     return classify_execution_outcome(result.success, result.error, result.answer).category
+
+
+def _classified_error() -> ProviderFailureError:
+    failure = describe_provider_failure(ProviderFailureKind.AUTH)
+    return ProviderFailureError("classified failure", failure, "invalid x-api-key")
+
+
+class _ProviderFailureEngine:
+    """Engine whose run raises a classified provider failure."""
+
+    version = "test-version"
+
+    def is_available(self) -> tuple[bool, str]:
+        return True, ""
+
+    def run(self, content: str, query: str, config: RunConfigDTO) -> RunResultDTO:
+        raise _classified_error()
+
+    async def run_async(self, content: str, query: str, config: RunConfigDTO) -> RunResultDTO:
+        raise _classified_error()
+
+
+class TestProviderFailure:
+    def test_classified_engine_failure_is_actionable(self) -> None:
+        result = RunRLMOfficialUseCase(_ProviderFailureEngine()).execute("doc", "q")
+
+        assert result.success is False
+        assert result.failure_kind == "auth"
+        assert "Authentication failed" in result.answer
+        assert "update it in Settings" in result.answer
+        # The engine may have paid for work before raising.
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is False
 
 
 class TestHappyPath:
