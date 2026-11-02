@@ -24,9 +24,11 @@ run rather than per step, and its ``local`` environment executes model-written
 code in-process — a runaway loop there cannot be stopped, only abandoned by
 the use case's wall-clock guard.  That environment also mutates process-global
 state (``sys.stdout``/``sys.stderr`` and the working directory) around every
-code cell under a per-instance lock, so this adapter serialises ``local`` runs
-process-wide; see :data:`_LOCAL_ENV_LOCK`.  Select the Docker sandbox to run
-the engine in a container instead, which removes both limits.
+code cell under a per-instance lock, so this adapter takes the exclusive side
+of Studio's in-process gate (``rlmstudio.envs.in_process_state``) for every
+``local`` run.  Studio's own cells take the shared side, so none of them can
+execute inside that window.  Select the Docker sandbox to run the engine in a
+container instead, which removes both limits.
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_STEP,
 )
+from rlmstudio.envs.in_process_state import acquire_exclusive, release_exclusive
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +101,9 @@ _RLMS_MIN_DEPTH = 1
 # The engine's in-process ``local`` environment swaps ``sys.stdout`` /
 # ``sys.stderr`` and chdirs into a temp directory around every code cell, under
 # a lock that only covers one instance.  Two concurrent slots would therefore
-# restore each other's streams and leave the server in a deleted directory, so
-# every ``local`` run in this process takes this lock instead.
-_LOCAL_ENV_LOCK = threading.Lock()
+# restore each other's streams and leave the server in a deleted directory.
+# Every ``local`` run therefore takes the exclusive side of the process gate,
+# which also keeps Studio's own in-process cells out of the window.
 # Waiting cap for a slot that has no wall-clock budget of its own.
 _LOCAL_ENV_LOCK_TIMEOUT_SECONDS = 30.0
 # Share of a slot's budget it may spend queueing, so a run that does get the
@@ -132,8 +135,8 @@ NOTE_LOCAL_ENV = (
     "The official engine ran its REPL in-process (rlms 'local' environment), which is "
     "not isolated and redirects this process's output and working directory while each "
     "code cell runs; official runs and their sub-calls are therefore serialised one at "
-    "a time. Select the Docker sandbox in Settings to isolate them and run them in "
-    "parallel."
+    "a time, and Studio's own in-process cells wait for them. Select the Docker sandbox "
+    "in Settings to isolate them and run them in parallel."
 )
 NOTE_COST_UNKNOWN = (
     "No price is known for this model; cost is shown as 0 and the slot is excluded "
@@ -152,9 +155,10 @@ NOTE_INTERRUPTED_TOKENS_UNKNOWN = (
     "are shown as 0; the cost, where known, is the figure the cap was checked against."
 )
 BUSY_REASON = (
-    "Another official RLM run is still holding the in-process REPL, which only one run "
-    "can use at a time. Select the Docker sandbox in Settings to run official slots "
-    "side by side."
+    "Another in-process RLM cell — an official run or a Studio sandbox — is still "
+    "holding the process's shared streams and working directory, which only one such "
+    "environment can use at a time. Select the Docker sandbox in Settings to run "
+    "official slots side by side."
 )
 
 
@@ -411,23 +415,25 @@ class RlmsEngineAdapter:
         if environment != _ENV_LOCAL:
             return self._run_engine(content, query, config, environment, environment_kwargs)
 
-        # The in-process REPL mutates process-global state, so only one run at a
-        # time.  The wait is a *slice* of the slot's budget, never the whole of
-        # it: the use case's wall-clock guard is counting the same budget from
-        # earlier, so waiting the full amount would guarantee the caller gave up
-        # first — the queued run would never get to report itself busy, and its
-        # abandoned thread would then run a fresh full-length engine call that
-        # nobody is waiting for while still holding this lock.
+        # The in-process REPL mutates process-global state, so only one
+        # in-process environment — an official run or a Studio cell — may
+        # execute at a time.  The wait is a *slice* of the slot's budget, never
+        # the whole of it: the use case's wall-clock guard is counting the same
+        # budget from earlier, so waiting the full amount would guarantee the
+        # caller gave up first — the queued run would never get to report
+        # itself busy, and its abandoned thread would then run a fresh
+        # full-length engine call that nobody is waiting for while still
+        # holding the exclusive side.
         queued_at = time.time()
-        if not _LOCAL_ENV_LOCK.acquire(timeout=self._lock_wait(config)):
-            logger.warning("Official RLM engine busy: in-process REPL still held")
+        if not acquire_exclusive(timeout=self._lock_wait(config)):
+            logger.warning("Official RLM engine busy: in-process cell state still held")
             # ``queued_at`` so the failed slot reports the time it spent waiting.
             return self._failed(BUSY_REASON, queued_at, environment, config)
         try:
             queued_config = self._config_after_queueing(config, queued_at)
             return self._run_engine(content, query, queued_config, environment, environment_kwargs)
         finally:
-            _LOCAL_ENV_LOCK.release()
+            release_exclusive()
 
     @staticmethod
     def _lock_wait(config: RunConfigDTO) -> float:
