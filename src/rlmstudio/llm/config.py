@@ -1,36 +1,15 @@
 # Copyright (c) 2026 EGOGE
 # SPDX-License-Identifier: Apache-2.0
 
-"""LLM provider configuration."""
+"""LLM provider configuration.
+
+Model pricing lives in :mod:`rlmstudio.domain.model_catalog`; this module
+carries no price table. A ``pricing`` block in an older config file is
+ignored when loading.
+"""
 
 from dataclasses import dataclass, field
 from typing import Any
-
-
-@dataclass
-class ModelPricing:
-    """Pricing information for a specific model."""
-
-    input_cost_per_1m: float
-    """Cost per 1 million input tokens in USD"""
-
-    output_cost_per_1m: float
-    """Cost per 1 million output tokens in USD"""
-
-    def to_dict(self) -> dict[str, float]:
-        """Convert to dictionary."""
-        return {
-            "input_cost_per_1m": self.input_cost_per_1m,
-            "output_cost_per_1m": self.output_cost_per_1m,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, float]) -> "ModelPricing":
-        """Create from dictionary."""
-        return cls(
-            input_cost_per_1m=data["input_cost_per_1m"],
-            output_cost_per_1m=data["output_cost_per_1m"],
-        )
 
 
 @dataclass
@@ -91,48 +70,26 @@ class LLMProviderConfig:
 
 @dataclass
 class LLMConfig:
-    """LLM configuration including provider settings and pricing."""
+    """LLM configuration: the default provider, when one is configured."""
 
     # Default provider to use
     default_provider: LLMProviderConfig | None = None
-
-    # Model pricing database
-    pricing: dict[str, ModelPricing] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "default_provider": self.default_provider.to_dict() if self.default_provider else None,
-            "pricing": {model: pricing.to_dict() for model, pricing in self.pricing.items()},
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "LLMConfig":
-        """Create from dictionary."""
+        """Create from dictionary.
+
+        Unknown keys — including the ``pricing`` block older config files
+        carry — are ignored, so an existing config still loads.
+        """
         default_provider = None
         if data.get("default_provider"):
             default_provider = LLMProviderConfig.from_dict(data["default_provider"])
 
-        pricing = {}
-        if "pricing" in data:
-            pricing = {
-                model: ModelPricing.from_dict(price_data)
-                for model, price_data in data["pricing"].items()
-            }
-
-        return cls(
-            default_provider=default_provider,
-            pricing=pricing,
-        )
-
-    def get_pricing(self, model: str) -> ModelPricing | None:
-        """
-        Get pricing for a model.
-
-        Args:
-            model: Model identifier
-
-        Returns:
-            ModelPricing if found, None otherwise
-        """
-        return self.pricing.get(model)
+        return cls(default_provider=default_provider)

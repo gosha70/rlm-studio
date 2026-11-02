@@ -280,8 +280,9 @@ describe("ModelSelector", () => {
       />
     );
     const input = screen.getByRole("textbox", { name: "Model name" });
-    fireEvent.change(input, { target: { value: "claude-3-opus" } });
-    expect(onChange).toHaveBeenCalledWith("claude-3-opus");
+    // Any string is valid here; do not use a model id that dates the test.
+    fireEvent.change(input, { target: { value: "custom-model-id" } });
+    expect(onChange).toHaveBeenCalledWith("custom-model-id");
   });
 
   test("shows 'No models available' state when models list is empty", () => {

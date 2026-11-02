@@ -160,12 +160,11 @@ class TestUIUtils:
         assert format_percentage_savings(0.0, 50.0) == "N/A"
 
     def test_constants_accessible(self) -> None:
-        from rlmstudio.ui.utils import APP_TITLE, COLORS, EXECUTION_MODES, PROVIDERS
+        from rlmstudio.ui.utils import APP_TITLE, COLORS, EXECUTION_MODES
 
         assert APP_TITLE == "RLMKit Chat Studio"
         assert "rlm" in COLORS
         assert "compare" in EXECUTION_MODES
-        assert "openai" in PROVIDERS
 
 
 # ---------------------------------------------------------------------------

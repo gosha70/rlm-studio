@@ -38,48 +38,6 @@ COLORS = {
     "warning": "#F59E0B",  # Amber
 }
 
-# Provider info
-PROVIDERS = {
-    "openai": {
-        "label": "OpenAI",
-        "models": ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"],
-        "default_model": "gpt-4",
-        "pricing": {
-            "gpt-4": {"input": 0.03, "output": 0.06},
-            "gpt-4-turbo": {"input": 0.01, "output": 0.03},
-            "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
-        },
-    },
-    "anthropic": {
-        "label": "Anthropic (Claude)",
-        "models": ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
-        "default_model": "claude-3-sonnet",
-        "pricing": {
-            "claude-3-opus": {"input": 0.015, "output": 0.075},
-            "claude-3-sonnet": {"input": 0.003, "output": 0.015},
-            "claude-3-haiku": {"input": 0.00025, "output": 0.00125},
-        },
-    },
-    "ollama": {
-        "label": "Ollama (Local)",
-        "models": ["llama2", "mistral", "neural-chat"],
-        "default_model": "llama2",
-        "pricing": {
-            "llama2": {"input": 0.0, "output": 0.0},
-            "mistral": {"input": 0.0, "output": 0.0},
-            "neural-chat": {"input": 0.0, "output": 0.0},
-        },
-    },
-    "lmstudio": {
-        "label": "LM Studio (Local)",
-        "models": ["local-model"],
-        "default_model": "local-model",
-        "pricing": {
-            "local-model": {"input": 0.0, "output": 0.0},
-        },
-    },
-}
-
 
 def format_tokens(count: int) -> str:
     """Format token count as human-readable string."""
@@ -140,7 +98,6 @@ __all__ = [
     "APP_VERSION",
     "EXECUTION_MODES",
     "COLORS",
-    "PROVIDERS",
     "format_tokens",
     "format_cost",
     "format_time",

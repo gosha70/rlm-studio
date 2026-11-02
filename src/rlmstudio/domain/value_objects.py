@@ -83,7 +83,7 @@ class ModelId:
 
     Attributes:
         provider: Provider identifier (e.g. "openai", "anthropic").
-        model_name: Model identifier (e.g. "gpt-4o", "claude-3-opus").
+        model_name: Model identifier (e.g. "gpt-4o", "claude-sonnet-4-6").
     """
 
     provider: str

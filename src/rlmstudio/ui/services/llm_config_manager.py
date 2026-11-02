@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from rlmstudio.branding import state_dir
+from rlmstudio.domain.model_catalog import ANTHROPIC_MODELS, OPENAI_MODELS
 
 from .models import LLMProviderConfig
 
@@ -131,16 +132,11 @@ class LLMConfigManager:
             return self.get_provider_config(self._active_provider)
         return None
 
-    # Known valid models per provider (for offline validation)
+    # Known valid models per provider, for offline validation.  Derived from
+    # the domain catalog so this list cannot drift into naming retired models.
     VALID_MODELS = {
-        "openai": {"gpt-4", "gpt-4-turbo", "gpt-4o", "gpt-3.5-turbo", "gpt-4o-mini"},
-        "anthropic": {
-            "claude-3-opus",
-            "claude-3-sonnet",
-            "claude-3-haiku",
-            "claude-3-5-sonnet",
-            "claude-3-5-haiku",
-        },
+        "openai": {m.name for m in OPENAI_MODELS},
+        "anthropic": {m.name for m in ANTHROPIC_MODELS},
     }
 
     def test_connection(

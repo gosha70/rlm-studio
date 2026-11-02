@@ -33,7 +33,7 @@ class ModelConfig:
     tasks can use cheaper models while critical reasoning uses powerful models.
 
     Attributes:
-        root_model: Model name for root agent (e.g., "gpt-4o", "claude-3-opus")
+        root_model: Model name for root agent (e.g., "gpt-4o", "claude-sonnet-4-6")
         root_provider: Provider for root model (e.g., "openai", "anthropic")
         sub_model: Model name for sub-agents (e.g., "gpt-4o-mini", "llama3")
         sub_provider: Provider for sub-agents
@@ -51,7 +51,7 @@ class ModelConfig:
 
         >>> # Cross-provider: Claude for root, local Llama for subs
         >>> config = ModelConfig(
-        ...     root_model="claude-3-opus",
+        ...     root_model="claude-sonnet-4-6",
         ...     root_provider="anthropic",
         ...     sub_model="llama3-70b",
         ...     sub_provider="ollama"

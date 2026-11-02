@@ -179,6 +179,25 @@ class TestRLMConfig:
         assert config.execution.default_timeout == 10.0
         assert config.monitoring.enable_telemetry is True
 
+    def test_old_config_with_pricing_block_still_loads(self):
+        """Removing the pricing schema must not make an older file fatal.
+
+        Configs written before the block was deleted still carry it; loading
+        ignores the unknown key and a re-save drops it.
+        """
+        data = {
+            "llm": {
+                "default_provider": {"provider": "openai", "model": "gpt-4o"},
+                "pricing": {"gpt-4": {"input_cost_per_1m": 30.0, "output_cost_per_1m": 60.0}},
+            }
+        }
+
+        config = RLMConfig.from_dict(data)
+
+        assert config.llm.default_provider is not None
+        assert config.llm.default_provider.model == "gpt-4o"
+        assert "pricing" not in config.llm.to_dict()
+
     def test_to_dict(self):
         """Test converting config to dictionary."""
         config = RLMConfig()
