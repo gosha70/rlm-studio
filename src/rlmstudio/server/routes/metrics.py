@@ -49,9 +49,11 @@ router = APIRouter()
 # Non-SUCCESS categories — used to filter failure points.
 _FAILURE_CATEGORIES = frozenset(c for c in OutcomeCategory if c != OutcomeCategory.SUCCESS)
 
-# Enum value -> the response literal.  A mapping rather than a cast: mypy
-# checks each value against FailureCategory, so a renamed or added category
-# fails here instead of at the response boundary.
+# Enum value -> the response literal.  mypy checks each mapped *value*
+# against FailureCategory, but a dict is not exhaustiveness-checked:
+# tests/test_failure_metrics.py pins that every non-SUCCESS OutcomeCategory
+# member has an entry, so an added category cannot reach the endpoint as a
+# KeyError.
 _FAILURE_CATEGORY_BY_VALUE: dict[str, FailureCategory] = {
     "timeout": "timeout",
     "prefill_timeout": "prefill_timeout",

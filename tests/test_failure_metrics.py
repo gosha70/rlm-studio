@@ -20,6 +20,20 @@ def _now() -> float:
     return time.time()
 
 
+def test_every_outcome_category_maps_to_a_failure_literal() -> None:
+    """The dict is not exhaustiveness-checked; this pins its coverage.
+
+    Without it, adding an ``OutcomeCategory`` member would leave the
+    response mapping short an entry, and the first run of that category
+    would raise ``KeyError`` inside the metrics endpoint.
+    """
+    from rlmstudio.application.services.outcome_classifier import OutcomeCategory
+    from rlmstudio.server.routes.metrics import _FAILURE_CATEGORY_BY_VALUE
+
+    expected = {c.value for c in OutcomeCategory if c is not OutcomeCategory.SUCCESS}
+    assert set(_FAILURE_CATEGORY_BY_VALUE) == expected
+
+
 def _ts():  # noqa: ANN202
     from datetime import datetime, timezone
 
