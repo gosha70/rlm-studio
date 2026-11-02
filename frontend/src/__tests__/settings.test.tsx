@@ -5,14 +5,19 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { vi, describe, test, expect, beforeEach } from "vitest";
 import { BudgetConfig } from "@/components/settings/budget-config";
 import { ModelSelector } from "@/components/settings/model-selector";
 import { ConnectionTester } from "@/components/settings/connection-tester";
 import { ProviderCard } from "@/components/settings/provider-card";
 import useSWR from "swr";
-import { testProvider } from "@/lib/api";
+import {
+  getLLMProviderModelsForConfig,
+  testLLMProviderConfig,
+  testProvider,
+  type ProviderTestResponse,
+} from "@/lib/api";
 import SettingsPage from "@/app/settings/page";
 import type { BudgetConfig as BudgetConfigType, ModelInfo, ProviderInfo } from "@/lib/api";
 
@@ -26,6 +31,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     testProvider: vi.fn(),
     saveProvider: vi.fn().mockResolvedValue({ message: "Saved" }),
+    // Keep the Settings form's debounced model discovery off the network.
+    getProviderModels: vi.fn().mockResolvedValue([]),
+    testLLMProviderConfig: vi.fn(),
+    getLLMProviderModelsForConfig: vi.fn().mockResolvedValue({
+      models: [],
+      source: "unavailable",
+      error: "No models returned by the endpoint.",
+    }),
   };
 });
 
@@ -484,5 +497,144 @@ describe("SettingsPage", () => {
     expect(
       screen.getByText(/Auto-testing of connections is disabled/i),
     ).toBeInTheDocument();
+  });
+
+  test("a connected provider shows the absolute test time with seconds", () => {
+    const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+    vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+      if (key === "config") return swrStub(MOCK_CONFIG);
+      if (key === "llm-providers")
+        return swrStub([
+          {
+            id: "lp-spark",
+            name: "DGX Spark",
+            backend: "vllm",
+            model: "qwen38-27b",
+            endpoint: "http://spark-c2e5.local:8001/v1",
+            runtime_settings: {
+              temperature: 0.7,
+              top_p: 1.0,
+              max_output_tokens: 4096,
+              timeout_seconds: 30,
+            },
+            status: "connected",
+            last_tested_at: "2026-11-01T13:05:58Z",
+            last_tested_by: "manual",
+            consecutive_failures: 0,
+          },
+        ]);
+      return swrStub(undefined);
+    }) as typeof useSWR);
+
+    render(<SettingsPage />);
+    // Absolute local stamp, seconds included — never "6m ago".
+    expect(
+      screen.getByText(/Last tested \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/\(you\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Last tested .* ago/)).not.toBeInTheDocument();
+  });
+
+  test("the model input opts out of browser autofill", async () => {
+    render(<SettingsPage />);
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+    const input = await screen.findByLabelText("Model");
+    expect(input).toHaveAttribute("autocomplete", "off");
+  });
+
+  test("model discovery reports an unavailable source instead of fallback data", async () => {
+    vi.mocked(getLLMProviderModelsForConfig).mockResolvedValueOnce({
+      models: [],
+      source: "unavailable",
+      error: "Connection refused",
+    });
+    render(<SettingsPage />);
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+
+    expect(
+      await screen.findByText(
+        /Could not load models from .*Connection refused/,
+        undefined,
+        { timeout: 3000 },
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test("editing a cloud gateway sends its saved endpoint to discovery", async () => {
+    const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+    vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+      if (key === "config") return swrStub(MOCK_CONFIG);
+      if (key === "llm-providers")
+        return swrStub([
+          {
+            id: "lp-gw",
+            name: "Gateway",
+            backend: "openai",
+            model: "gpt-4o",
+            endpoint: "https://gw.example/v1",
+            runtime_settings: {
+              temperature: 0.7,
+              top_p: 1.0,
+              max_output_tokens: 4096,
+              timeout_seconds: 30,
+            },
+            status: "configured",
+            last_tested_at: null,
+            last_tested_by: null,
+            consecutive_failures: 0,
+          },
+        ]);
+      return swrStub(undefined);
+    }) as typeof useSWR);
+    vi.mocked(getLLMProviderModelsForConfig).mockClear();
+
+    render(<SettingsPage />);
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    // The saved gateway endpoint must reach discovery; sending null would
+    // make the backend treat the destination as changed and refuse the key.
+    await waitFor(
+      () =>
+        expect(vi.mocked(getLLMProviderModelsForConfig)).toHaveBeenCalledWith(
+          expect.objectContaining({
+            backend: "openai",
+            endpoint: "https://gw.example/v1",
+            llm_provider_id: "lp-gw",
+          }),
+        ),
+      { timeout: 3000 },
+    );
+  });
+
+  test("an in-flight form test cannot stamp a result after the form changes", async () => {
+    let resolveTest: (value: ProviderTestResponse) => void = () => {};
+    vi.mocked(testLLMProviderConfig).mockReturnValueOnce(
+      new Promise<ProviderTestResponse>((resolve) => {
+        resolveTest = resolve;
+      }),
+    );
+    render(<SettingsPage />);
+    const user = (await import("@testing-library/user-event")).default.setup();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+    await user.type(screen.getByLabelText("Name"), "probe");
+    await user.type(screen.getByLabelText("Model"), "qwen38-27b");
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    // Change a probe-affecting field while the request is outstanding.
+    await user.type(screen.getByLabelText("Model"), "-awq");
+
+    await act(async () => {
+      resolveTest({
+        connected: true,
+        latency_ms: 5,
+        tested_at: "2026-11-01T13:05:58Z",
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/Connected/)).not.toBeInTheDocument();
   });
 });

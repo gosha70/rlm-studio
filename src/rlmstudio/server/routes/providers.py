@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
+from rlmstudio.application.services.provider_failure import redact_secrets
 from rlmstudio.server.dependencies import AppState, get_state
 from rlmstudio.server.models import (
     ModelInfo,
@@ -331,26 +333,93 @@ def _update_provider_config(state: AppState, provider_name: str, req: ProviderSa
         existing.enabled = req.enabled
 
 
+_ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
+_OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
+
+
+# Families that cannot serve chat completions.  This is a DENYLIST, not an
+# allowlist: a chat model the account is entitled to must appear in the
+# picker without this code learning its name first.  An allowlist here is
+# the same aging-list failure as hardcoding example model ids — it silently
+# hides every model released after the list was written.
+_NON_CHAT_MODEL_PREFIXES = (
+    "text-embedding-",
+    "whisper-",
+    "tts-",
+    "dall-e-",
+    "omni-moderation-",
+    "text-moderation-",
+    "babbage-",
+    "davinci-",
+    "curie-",
+    "ada-",
+)
+
+
+def _is_chat_capable_model(model_id: str) -> bool:
+    """Whether an OpenAI model id can serve a chat completion.
+
+    ``/v1/models`` carries no capability metadata, so the only local signal
+    is the id.  Unknown ids are kept: showing a non-chat model costs one
+    failed probe with a classified error, while hiding a chat model makes
+    it impossible to configure.  Fine-tune ids (``ft:<base>:<org>:<suffix>``)
+    are judged by their base model.
+    """
+    base = model_id
+    if base.startswith("ft:"):
+        base = base[len("ft:") :].split(":", 1)[0]
+    return not base.startswith(_NON_CHAT_MODEL_PREFIXES)
+
+
+def _models_endpoint_url(provider_name: str, endpoint_override: str | None) -> str:
+    """Return the models URL, honoring a configured compatible gateway.
+
+    A cloud provider may point at a compatible gateway.  Discovery must ask
+    that gateway rather than the vendor — otherwise the gateway's key is
+    sent to the vendor and the returned list describes the wrong service.
+    The endpoint may be given with or without a trailing ``/v1``.
+    """
+    default = _ANTHROPIC_MODELS_URL if provider_name == "anthropic" else _OPENAI_MODELS_URL
+    if not endpoint_override:
+        return default
+    base = re.sub(r"/v1/?$", "", endpoint_override.rstrip("/"))
+    return f"{base}/v1/models"
+
+
 async def _fetch_models_from_api(
-    provider_name: str, endpoint_override: str | None = None
+    provider_name: str,
+    endpoint_override: str | None = None,
+    api_key_override: str | None = None,
 ) -> list[ModelInfo]:
     """Fetch live model list from a provider's API.
 
     For local providers (Ollama, LM Studio), *endpoint_override* takes
     precedence over the catalog default so users on non-standard ports
     hit the correct server.
+
+    For cloud providers, *api_key_override* takes precedence over the
+    process environment: the Settings form tests a key that has not been
+    saved yet, and the account's model list must be the one that key sees.
     """
     entry = PROVIDERS_BY_KEY.get(provider_name)
     if not entry:
         return []
 
+    # An environment key is only used for the vendor's own API.  When the
+    # caller supplies a destination it must also supply the credential —
+    # otherwise an arbitrary ?endpoint= would receive the process key.
+    def _key_for(default_env: str) -> str:
+        if api_key_override:
+            return api_key_override
+        return "" if endpoint_override else os.environ.get(default_env, "")
+
     async with httpx.AsyncClient(timeout=15) as client:
         if provider_name == "anthropic":
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            api_key = _key_for("ANTHROPIC_API_KEY")
             if not api_key:
                 return []
             resp = await client.get(
-                "https://api.anthropic.com/v1/models",
+                _models_endpoint_url("anthropic", endpoint_override),
                 headers={
                     "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",
@@ -368,16 +437,31 @@ async def _fetch_models_from_api(
             ]
 
         elif provider_name == "openai":
-            api_key = os.environ.get("OPENAI_API_KEY", "")
+            api_key = _key_for("OPENAI_API_KEY")
             if not api_key:
                 return []
             resp = await client.get(
-                "https://api.openai.com/v1/models",
+                _models_endpoint_url("openai", endpoint_override),
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             resp.raise_for_status()
             data = resp.json().get("data", [])
-            chat_prefixes = ("gpt-", "o1", "o3", "o4")
+            if endpoint_override:
+                # A compatible gateway defines its own catalogue: its ids
+                # are not bound by OpenAI's naming (Qwen, custom names, …),
+                # so return the live list unchanged rather than filtering
+                # it away.
+                return [
+                    ModelInfo(
+                        name=m["id"],
+                        input_cost_per_1k=0.0,
+                        output_cost_per_1k=0.0,
+                    )
+                    for m in data
+                ]
+            # Official OpenAI endpoint: drop known non-chat families only.
+            # Everything else is kept, so a model released tomorrow is not
+            # hidden by a list written today.
             return [
                 ModelInfo(
                     name=m["id"],
@@ -385,7 +469,7 @@ async def _fetch_models_from_api(
                     output_cost_per_1k=0.0,
                 )
                 for m in data
-                if any(m["id"].startswith(p) for p in chat_prefixes)
+                if _is_chat_capable_model(m["id"])
             ]
 
         elif provider_name == "ollama":
@@ -425,7 +509,12 @@ async def list_provider_models(
     endpoint: str | None = None,
     state: AppState = Depends(get_state),  # noqa: B008
 ) -> list[ModelInfo]:
-    """Fetch models live from a provider API, with 5-minute cache and catalog fallback."""
+    """Fetch models live from a provider API, with 5-minute cache and catalog fallback.
+
+    Legacy: accepts no credential and cannot report provenance.  The Settings
+    form uses ``POST /api/llm-providers/models``, which discovers with the key
+    being configured, never substitutes the catalog, and is uncached.
+    """
     # Cache key includes endpoint so different endpoints don't share stale data
     cache_key = f"{provider_name}:{endpoint or ''}"
     cached = _model_cache.get(cache_key)
@@ -438,7 +527,13 @@ async def list_provider_models(
             _model_cache[cache_key] = (time.time(), models)
             return models
     except Exception as exc:
-        logger.warning("Failed to fetch models for %s: %s", provider_name, exc)
+        # This route can authenticate with a vendor environment key, so a
+        # provider error that echoes credentials must not reach the log raw.
+        logger.warning(
+            "Failed to fetch models for %s: %s",
+            provider_name,
+            redact_secrets(str(exc))[:300],
+        )
 
     # Fall back to hardcoded catalog
     return _build_model_infos(provider_name)

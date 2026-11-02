@@ -354,6 +354,32 @@ export interface ProviderTestResponse {
   latency_ms?: number | null;
   model?: string | null;
   error?: string | null;
+  /** ISO-8601 UTC instant of the probe. */
+  tested_at?: string | null;
+  /** Classified failure, when connected is false. */
+  failure_kind?: string | null;
+  failure_cause?: string | null;
+  failure_fix?: string | null;
+}
+
+export interface LLMProviderModelsRequest {
+  backend: string;
+  endpoint?: string | null;
+  /** Used for this request only; never persisted. */
+  api_key?: string | null;
+  /**
+   * Edit mode: resolve the saved key when the form's key field is blank.
+   * A saved key is only used when the endpoint is unchanged — a new
+   * destination requires the key to be re-entered.
+   */
+  llm_provider_id?: string | null;
+}
+
+export interface LLMProviderModelsResponse {
+  models: ModelInfo[];
+  /** "live" means the provider returned this list; "unavailable" means it did not. */
+  source: "live" | "unavailable";
+  error?: string | null;
 }
 
 export interface BudgetConfig {
@@ -904,7 +930,9 @@ export const testLLMProvider = (id: string) =>
  * In Edit mode the frontend passes ``llm_provider_id`` so the
  * backend can resolve the saved API key when the form's api_key
  * field is blank — mirroring the save path's "leave blank to keep
- * current key" contract.
+ * current key" contract. The saved key is refused when the form's
+ * endpoint differs from the saved one, so the key is never sent to a
+ * different host without the user re-entering it.
  */
 export interface LLMProviderTestRequest extends LLMProviderCreateRequest {
   llm_provider_id?: string | null;
@@ -918,6 +946,19 @@ export const testLLMProviderConfig = (req: LLMProviderTestRequest) =>
 
 export const getLLMProviderModels = (id: string) =>
   fetchJSON<ModelInfo[]>(`/api/llm-providers/${id}/models`);
+
+/**
+ * Discover models for the values currently in the Settings form.
+ *
+ * Uses the typed API key (or the saved key in edit mode), returns whether
+ * the list is live or unavailable, and is uncached so Refresh really
+ * re-reads the endpoint.  The static catalog is never substituted.
+ */
+export const getLLMProviderModelsForConfig = (req: LLMProviderModelsRequest) =>
+  fetchJSON<LLMProviderModelsResponse>("/api/llm-providers/models", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 
 // Config
 

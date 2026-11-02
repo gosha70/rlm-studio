@@ -548,6 +548,13 @@ class ProviderTestResponse(BaseModel):
     latency_ms: int | None = None
     model: str | None = None
     error: str | None = None
+    # When the probe ran and, on failure, the classified cause/fix from
+    # application/services/provider_failure.py.  ``error`` stays the raw
+    # sanitised upstream detail; these fields are what the UI shows first.
+    tested_at: datetime | None = None
+    failure_kind: str | None = None
+    failure_cause: str | None = None
+    failure_fix: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +610,33 @@ class LLMProviderUpdateRequest(BaseModel):
     endpoint: str | None = None
     runtime_settings: RuntimeSettings | None = None
     context_window: int | None = None
+
+
+class LLMProviderModelsRequest(BaseModel):
+    """Model discovery for the values currently in the Settings form.
+
+    ``api_key`` is used for this request only and never persisted.  In edit
+    mode the form sends ``llm_provider_id`` with a blank key so the saved
+    key can be resolved, mirroring the form-test contract.
+    """
+
+    backend: str
+    endpoint: str | None = None
+    api_key: str | None = None
+    llm_provider_id: str | None = None
+
+
+class LLMProviderModelsResponse(BaseModel):
+    """Discovery result with provenance.
+
+    ``source`` says whether ``models`` came from the provider itself.
+    ``unavailable`` with an empty list means discovery failed or returned
+    nothing — the UI must not present a static catalog as live data.
+    """
+
+    models: list[ModelInfo] = Field(default_factory=list)
+    source: Literal["live", "unavailable"] = "unavailable"
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------

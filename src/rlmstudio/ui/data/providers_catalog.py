@@ -115,7 +115,7 @@ PROVIDERS: list[ProviderEntry] = [
         api_key_placeholder="Not required for local Ollama",
         requires_api_key=False,
         default_endpoint="http://localhost:11434",
-        model_input_hint="e.g., llama2, neural-chat, mistral",
+        model_input_hint="Model name listed by ollama list",
     ),
     ProviderEntry(
         key="lmstudio",
@@ -124,7 +124,7 @@ PROVIDERS: list[ProviderEntry] = [
         api_key_placeholder="Not required for local LM Studio",
         requires_api_key=False,
         default_endpoint="http://localhost:1234/v1",
-        model_input_hint="e.g., mistral, neural-chat",
+        model_input_hint="Model ID served by your endpoint",
     ),
     ProviderEntry(
         key="vllm",
@@ -133,7 +133,7 @@ PROVIDERS: list[ProviderEntry] = [
         api_key_placeholder="Optional — leave blank for a local/private server",
         requires_api_key=False,
         default_endpoint="http://localhost:8000/v1",
-        model_input_hint="e.g., Qwen/Qwen2.5-7B-Instruct (HuggingFace model ID)",
+        model_input_hint="Model ID served by your endpoint",
     ),
 ]
 
