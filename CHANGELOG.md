@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed — per-step cost in execution traces (issue #94)
+
+- Every step in a trace now carries its own `cost_usd`, priced from the
+  step's model and token counts through the same LiteLLM cost map the run
+  total uses (`infrastructure/llm/pricing.py`). A token-bearing step whose
+  model is not in that map reports `null` — the UI's "Unavailable" — rather
+  than a fabricated `$0.0000`; a row with no tokens of its own (subcall,
+  runtime fingerprint) is a genuine `$0.00`. Both builders are covered:
+  in-memory executions and telemetry-backed runs, the latter falling back to
+  the run's model when a step row has none.
+- Added a `StepDetail` story and component tests for the three cost states.
+
 ### Added — model-vs-account check and a startup probe (issue #95, scopes 2 and 4)
 
 - Saving a provider now compares its configured model against the provider's

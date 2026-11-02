@@ -218,6 +218,23 @@ describe("StepDetail", () => {
     expect(screen.getByText("1.23s")).toBeInTheDocument();
     expect(screen.getByText("Duration")).toBeInTheDocument();
   });
+
+  // Issue #94: the three cost states the backend can now produce.
+  test("shows Unavailable when the model could not be priced", () => {
+    render(<StepDetail step={makeStep({ cost_usd: null })} />);
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();
+  });
+
+  test("shows a genuine zero cost as a dollar figure", () => {
+    render(<StepDetail step={makeStep({ cost_usd: 0 })} />);
+    expect(screen.getByText("$0.0000")).toBeInTheDocument();
+  });
+
+  test("shows a priced step cost", () => {
+    render(<StepDetail step={makeStep({ cost_usd: 0.0075 })} />);
+    expect(screen.getByText("$0.0075")).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------
