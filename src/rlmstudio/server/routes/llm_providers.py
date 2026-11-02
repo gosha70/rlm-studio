@@ -20,6 +20,7 @@ from rlmstudio.server.models import (
     ProviderTestResponse,
     RuntimeSettings,
 )
+from rlmstudio.server.provider_checks import refresh_model_check
 from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY
 from rlmstudio.ui.services.secret_store import FileSecretStore, KeyringSecretStore
 
@@ -224,8 +225,11 @@ async def create_llm_provider(
         state.config.llm_providers.append(lp)
         state.save_config()
 
-        result = lp.model_copy()
-        result.status = _compute_status(lp)
+    # Validate the model against the account (#95 Scope 2).  Bounded, and a
+    # failure records "unknown" rather than failing the save.
+    await refresh_model_check(state, lp.id)
+    result = lp.model_copy()
+    result.status = _compute_status(lp)
     return result
 
 
@@ -307,6 +311,9 @@ async def update_llm_provider(
             lp.last_failure_kind = None
             lp.last_failure_cause = None
             lp.last_failure_fix = None
+            lp.model_check_status = None
+            lp.model_check_alternatives = None
+            lp.model_checked_at = None
             lp.consecutive_failures = 0
             _status_cache.pop(lp.id, None)
 
@@ -320,14 +327,21 @@ async def update_llm_provider(
             lp.last_failure_kind = None
             lp.last_failure_cause = None
             lp.last_failure_fix = None
+            lp.model_check_status = None
+            lp.model_check_alternatives = None
+            lp.model_checked_at = None
             lp.consecutive_failures = 0
             _status_cache.pop(lp.id, None)
 
         lp.updated_at = datetime.now(timezone.utc)
         state.save_config()
 
-        result = lp.model_copy()
-        result.status = _compute_status(lp)
+    if model_or_endpoint_changed or req.api_key:
+        # The check describes the model/endpoint/key that was saved; refresh
+        # it only when one of those changed.
+        await refresh_model_check(state, llm_provider_id)
+    result = lp.model_copy()
+    result.status = _compute_status(lp)
     return result
 
 
@@ -588,8 +602,10 @@ async def test_llm_provider(
       ``consecutive_failures=1``.  The user is actively looking at the
       result and should see the flip immediately.
     """
+    from rlmstudio.application.services.provider_failure import ProviderFailureKind
     from rlmstudio.application.services.provider_tester import (
         record_failure_classification,
+        record_model_check_from_probe,
         test_provider,
     )
 
@@ -619,8 +635,14 @@ async def test_llm_provider(
         lp.last_tested_at = result.tested_at
         lp.last_tested_by = "manual"
         record_failure_classification(lp, result)
+        record_model_check_from_probe(lp, result)
         _status_cache[lp.id] = lp.status
         state.save_config()
+
+    if result.failure_kind is ProviderFailureKind.MODEL_UNAVAILABLE:
+        # The probe proved the model unusable; fill in what the provider
+        # actually offers so the row can name the alternatives.
+        await refresh_model_check(state, llm_provider_id, force_unavailable=True)
 
     if result.status == "connected":
         return ProviderTestResponse(

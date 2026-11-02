@@ -325,6 +325,10 @@ export interface LLMProviderConfig {
   last_failure_kind?: string | null;
   last_failure_cause?: string | null;
   last_failure_fix?: string | null;
+  // Model-vs-account validation (#95 Scope 2). null = never checked.
+  model_check_status?: "available" | "unavailable" | "unknown" | null;
+  model_check_alternatives?: string[] | null;
+  model_checked_at?: string | null;
   consecutive_failures?: number;
 }
 

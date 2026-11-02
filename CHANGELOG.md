@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — model-vs-account check and a startup probe (issue #95, scopes 2 and 4)
+
+- Saving a provider now compares its configured model against the provider's
+  live model list (bounded to five seconds) and records
+  `model_check_status` (`available` / `unavailable` / `unknown`), up to five
+  `model_check_alternatives`, and when the check ran. A missing model is
+  flagged in the Settings row with the alternatives; a timeout, rejected key
+  or malformed discovery response records `unknown` — it neither fails the
+  save nor downgrades the provider's status. The check is refreshed whenever
+  the model, endpoint or key changes (cleared before the new discovery so the
+  old destination's result is never shown) and by manual and background
+  probes.
+- Every configured provider is tested once about three seconds after the
+  server starts, so a stale key or retired model is visible on a fresh launch
+  rather than only after a failed run. The recurring timer stays off by
+  default; `RLM_STUDIO_STARTUP_PROBE=0` disables the one-shot. It shares the
+  periodic thread's stop event and stale-result guard.
+- The probe path no longer sends a process-environment API key to a provider
+  with a custom endpoint: that destination must carry its own saved key, the
+  same boundary discovery already enforced.
+
 ### Fixed — actionable provider failures (stale key, retired model)
 
 - A failed run now answers with a card naming the cause and the fix instead

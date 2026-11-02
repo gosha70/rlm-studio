@@ -79,19 +79,21 @@ For step-by-step setup per backend, see **[docs/hosts/README.md](hosts/README.md
 
 #### Scheduled connection testing
 
-RLM Studio can re-test every configured provider on a timer so you see offline backends before a chat run fails. Configure it under **Settings → LLM Providers** (the interval itself lives on the **General** tab):
+RLM Studio tests every configured provider **once, about three seconds after the server starts**, so a key that was revoked or a model that was retired shows up on a fresh launch instead of only after a failed run. Recurring testing is opt-in, configured under **Settings → LLM Providers** (the interval itself lives on the **General** tab):
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
-| **Connection test interval (minutes)** | 0 | How often the background daemon re-tests all providers. `0` disables the daemon. Range: 0–1440 (24 h). |
+| **Connection test interval (minutes)** | 0 | How often the background daemon re-tests all providers. `0` leaves only the startup check. Range: 0–1440 (24 h). |
 
-Each cycle tests up to 5 providers in parallel with a 10-second per-test timeout. A provider flips to **offline** only after 2 consecutive failures (to avoid flap from a transient network blip). A single manual **Test Connection** success flips an offline provider back to connected immediately.
+Set `RLM_STUDIO_STARTUP_PROBE=0` in the server's environment to skip the startup check. Each cycle (startup or scheduled) tests up to 5 providers in parallel with a 10-second per-test timeout. A provider flips to **offline** only after 2 consecutive failures (to avoid flap from a transient network blip). A single manual **Test Connection** success flips an offline provider back to connected immediately.
 
 Each provider row shows three audit fields:
 
 - **Last tested** — local date and time of the most recent test, accurate to the second (e.g. `2026-11-01 13:05:58`).
 - **Last tested by** — *you* (you clicked **Test Connection**) or *auto* (the background daemon).
 - **Consecutive failures** — number of back-to-back failures against the current threshold.
+
+The row also validates the configured **Model** against the provider's live model list. A model the provider no longer offers is called out with up to five alternatives it does offer; if the check could not reach the provider it says so rather than guessing. The check runs when you save a provider — bounded to five seconds, and a timeout or rejected key records *unknown* instead of failing the save — and is refreshed by every probe, manual or automatic.
 
 ### Chat Providers and Profiles
 

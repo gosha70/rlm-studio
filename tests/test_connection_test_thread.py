@@ -21,7 +21,8 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -484,3 +485,447 @@ def test_first_cycle_sleeps_before_testing(
 
     # At least one wait with timeout ~0.5 happened before _run_test_cycle.
     assert any(t is not None and 0.4 < float(t) < 0.7 for t in wait_calls)
+
+
+# --------------------------------------------------------------------------
+# Model check from the probe (#95 Scope 2)
+# --------------------------------------------------------------------------
+
+
+def _model_missing_result() -> ProviderTestResult:
+    return ProviderTestResult(
+        status="offline",
+        tested_at=datetime.now(timezone.utc),
+        latency_ms=None,
+        error_message="model not found",
+        failure_kind=ProviderFailureKind.MODEL_UNAVAILABLE,
+        failure_cause="The provider does not offer this model.",
+        failure_fix="Pick a model from the provider's list.",
+    )
+
+
+def test_cycle_records_an_available_model_on_connect(state: AppState) -> None:
+    lp = _make_lp(status="offline")
+    lp.model_check_status = "unavailable"
+    state.config.llm_providers = [lp]
+
+    with patch.object(AppState, "_safe_test", lambda self, p: _connected_result()):
+        state._run_test_cycle()
+
+    assert state.config.llm_providers[0].model_check_status == "available"
+
+
+def test_cycle_records_an_unavailable_model(state: AppState) -> None:
+    lp = _make_lp(status="connected")
+    state.config.llm_providers = [lp]
+
+    with patch.object(AppState, "_safe_test", lambda self, p: _model_missing_result()):
+        state._run_test_cycle()
+
+    assert state.config.llm_providers[0].model_check_status == "unavailable"
+
+
+# --------------------------------------------------------------------------
+# One-shot startup probe (#95 Scope 4)
+# --------------------------------------------------------------------------
+
+
+def _startup_state(monkeypatch: pytest.MonkeyPatch) -> AppState:
+    """AppState whose constructor-time startup probe is suppressed."""
+    monkeypatch.setenv("RLM_STUDIO_STARTUP_PROBE", "0")
+    s = AppState(load_from_disk=False)
+    s.save_config = lambda: None  # type: ignore[assignment]
+    return s
+
+
+def _enable_startup_probe(monkeypatch: pytest.MonkeyPatch, delay: str = "0") -> None:
+    monkeypatch.setenv("RLM_STUDIO_STARTUP_PROBE", "1")
+    monkeypatch.setenv("RLM_STUDIO_STARTUP_PROBE_DELAY_SECONDS_OVERRIDE", delay)
+
+
+def test_startup_probe_is_enabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RLM_STUDIO_STARTUP_PROBE", raising=False)
+    monkeypatch.setenv("RLM_STUDIO_STARTUP_PROBE_DELAY_SECONDS_OVERRIDE", "30")
+    state = AppState(load_from_disk=False)
+    state.save_config = lambda: None  # type: ignore[assignment]
+    try:
+        assert state._startup_probe_thread is not None
+    finally:
+        state._stop_connection_testing()
+        thread = state._startup_probe_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+
+
+def test_startup_probe_disabled_by_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RLM_STUDIO_STARTUP_PROBE", "0")
+    state = AppState(load_from_disk=False)
+    state.save_config = lambda: None  # type: ignore[assignment]
+
+    assert state._startup_probe_thread is None
+
+
+def test_startup_probe_runs_one_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _startup_state(monkeypatch)
+    lp = _make_lp(status="configured")
+    state.config.llm_providers = [lp]
+    _enable_startup_probe(monkeypatch, "0")
+
+    with patch.object(AppState, "_safe_test", lambda self, p: _connected_result()):
+        state._start_startup_probe()
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=5.0)
+
+    assert lp.status == "connected"
+    assert lp.last_tested_by == "background"
+
+
+def test_startup_probe_is_not_rerun(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _startup_state(monkeypatch)
+    _enable_startup_probe(monkeypatch, "0")
+
+    with patch.object(AppState, "_run_test_cycle", lambda self: None):
+        state._start_startup_probe()
+        first = state._startup_probe_thread
+        assert first is not None
+        first.join(timeout=5.0)
+
+        state._start_startup_probe()  # guard: no second thread
+        state.restart_connection_testing()  # never restarts the one-shot
+        assert state._startup_probe_thread is first
+
+
+def test_startup_probe_aborts_on_shutdown_while_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _startup_state(monkeypatch)
+    calls: list[int] = []
+    _enable_startup_probe(monkeypatch, "5")
+
+    with patch.object(AppState, "_run_test_cycle", lambda self: calls.append(1)):
+        state._start_startup_probe()
+        state._stop_connection_testing()  # sets the shared stop event
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=2.0)
+
+    assert calls == []
+
+
+def test_startup_cycle_discards_results_on_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _startup_state(monkeypatch)
+    lp = _make_lp(status="configured")
+    state.config.llm_providers = [lp]
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_test(_self: AppState, _p: LLMProviderConfig) -> ProviderTestResult:
+        entered.set()
+        release.wait(timeout=5.0)
+        return _connected_result()
+
+    _enable_startup_probe(monkeypatch, "0")
+    with patch.object(AppState, "_safe_test", _blocking_test):
+        state._start_startup_probe()
+        assert entered.wait(timeout=2.0)
+        state._stop_connection_testing()
+        release.set()
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=5.0)
+
+    assert lp.status == "configured"
+    assert lp.last_tested_at is None
+
+
+def test_startup_cycle_discards_results_when_provider_edited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _startup_state(monkeypatch)
+    lp = _make_lp(status="configured")
+    state.config.llm_providers = [lp]
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_test(_self: AppState, _p: LLMProviderConfig) -> ProviderTestResult:
+        entered.set()
+        release.wait(timeout=5.0)
+        return _connected_result()
+
+    _enable_startup_probe(monkeypatch, "0")
+    with patch.object(AppState, "_safe_test", _blocking_test):
+        state._start_startup_probe()
+        assert entered.wait(timeout=2.0)
+        with state._config_lock:
+            lp.model = "edited-mid-cycle"
+        release.set()
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=5.0)
+
+    assert lp.status == "configured"
+    assert lp.last_tested_at is None
+
+
+def test_repeated_start_connection_testing_spawns_no_startup_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _startup_state(monkeypatch)
+    _enable_startup_probe(monkeypatch, "5")
+    try:
+        state._start_startup_probe()
+        first = state._startup_probe_thread
+        assert first is not None
+        for _ in range(3):
+            state._start_connection_testing()
+        assert state._startup_probe_thread is first
+    finally:
+        state._stop_connection_testing()
+        first = state._startup_probe_thread
+        if first is not None:
+            first.join(timeout=2.0)
+
+
+def test_startup_probe_does_not_shorten_the_periodic_first_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _startup_state(monkeypatch)
+    lp = _make_lp(status="configured")
+    state.config.llm_providers = [lp]
+    _enable_startup_probe(monkeypatch, "0")
+    monkeypatch.setenv("RLM_STUDIO_CONNECTION_TEST_INTERVAL_SECONDS_OVERRIDE", "5")
+
+    with patch.object(AppState, "_safe_test", lambda self, p: _connected_result()):
+        state._start_connection_testing()  # periodic loop: sleeps 5s first
+        state._start_startup_probe()  # one-shot: runs now
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=5.0)
+        assert lp.status == "connected"
+
+        # Reset and wait: the periodic loop must still be in its first sleep.
+        lp.status = "configured"
+        time.sleep(0.3)
+        assert lp.status == "configured"
+
+    state._stop_connection_testing()
+
+
+def test_startup_cycle_discards_results_after_a_key_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key-only edit changes nothing in the model/endpoint fingerprint.
+
+    The revision (updated_at) must catch it, or the old-key cycle restores
+    the state the update just cleared.
+    """
+    state = _startup_state(monkeypatch)
+    lp = _make_lp(status="configured")
+    state.config.llm_providers = [lp]
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_test(_self: AppState, _p: LLMProviderConfig) -> ProviderTestResult:
+        entered.set()
+        release.wait(timeout=5.0)
+        return _connected_result()
+
+    _enable_startup_probe(monkeypatch, "0")
+    with patch.object(AppState, "_safe_test", _blocking_test):
+        state._start_startup_probe()
+        assert entered.wait(timeout=2.0)
+        with state._config_lock:
+            lp.updated_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+            lp.status = "configured"
+            lp.last_tested_at = None
+        release.set()
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=5.0)
+
+    assert lp.status == "configured"
+    assert lp.last_tested_at is None
+
+
+def test_restart_discards_an_inflight_startup_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restart replaces the stop event; the in-flight cycle must keep
+    checking the event it started under, not the replacement."""
+    state = _startup_state(monkeypatch)
+    lp = _make_lp(status="configured")
+    state.config.llm_providers = [lp]
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_test(_self: AppState, _p: LLMProviderConfig) -> ProviderTestResult:
+        entered.set()
+        release.wait(timeout=5.0)
+        return _connected_result()
+
+    _enable_startup_probe(monkeypatch, "0")
+    monkeypatch.setenv("RLM_STUDIO_CONNECTION_TEST_INTERVAL_SECONDS_OVERRIDE", "5")
+    try:
+        with patch.object(AppState, "_safe_test", _blocking_test):
+            state._start_startup_probe()
+            assert entered.wait(timeout=2.0)
+            state.restart_connection_testing()  # sets the old event, installs a new one
+            release.set()
+            thread = state._startup_probe_thread
+            assert thread is not None
+            thread.join(timeout=5.0)
+    finally:
+        state._stop_connection_testing()
+
+    assert lp.status == "configured"
+    assert lp.last_tested_at is None
+
+
+def test_restart_while_the_startup_probe_waits_aborts_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _startup_state(monkeypatch)
+    calls: list[int] = []
+    _enable_startup_probe(monkeypatch, "5")
+
+    def _cycle(_self: AppState, _event: object = None) -> None:
+        calls.append(1)
+
+    with patch.object(AppState, "_run_test_cycle", _cycle):
+        state._start_startup_probe()
+        state.restart_connection_testing()
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=2.0)
+
+    assert calls == []
+
+
+def test_startup_populates_alternatives_from_the_account_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scope 2's load-time contract: the startup path fetches /v1/models.
+
+    The completion probe alone cannot report what a retired model was
+    replaced by; this is the account-list comparison running on load.
+    """
+    from rlmstudio.server.models import ModelInfo
+
+    state = _startup_state(monkeypatch)
+    lp = _make_lp(status="configured", model="retired-model")
+    state.config.llm_providers = [lp]
+    _enable_startup_probe(monkeypatch, "0")
+
+    async def _models(*_args: object, **_kwargs: object) -> list[ModelInfo]:
+        return [ModelInfo(name="gpt-4o"), ModelInfo(name="gpt-4o-mini")]
+
+    with (
+        # Auth failure says nothing about the model, so only discovery can set it.
+        patch.object(AppState, "_safe_test", lambda self, p: _auth_failure_result()),
+        patch("rlmstudio.server.routes.providers._fetch_models_from_api", _models),
+    ):
+        state._start_startup_probe()
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=5.0)
+
+    assert lp.model_check_status == "unavailable"
+    assert lp.model_check_alternatives == ["gpt-4o", "gpt-4o-mini"]
+
+
+class _RecordingThread:
+    """Captures a thread's target/args instead of starting it."""
+
+    instances: list[_RecordingThread] = []
+
+    def __init__(
+        self,
+        target: Any = None,
+        args: tuple[Any, ...] = (),
+        name: str | None = None,
+        daemon: bool | None = None,
+    ) -> None:
+        self.target = target
+        self.args = args
+        self.name = name
+        self.daemon = daemon
+        _RecordingThread.instances.append(self)
+
+    def start(self) -> None:
+        return None
+
+    def join(self, timeout: float | None = None) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return False
+
+
+def test_startup_probe_captures_its_event_before_spawning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restart between start() and execution must not revive the probe.
+
+    The target must use the event captured at scheduling time, not the
+    attribute a restart may have replaced.
+    """
+    state = _startup_state(monkeypatch)
+    _enable_startup_probe(monkeypatch, "1")
+    calls: list[int] = []
+    _RecordingThread.instances = []
+
+    with (
+        patch("rlmstudio.server.dependencies.threading.Thread", _RecordingThread),
+        patch.object(AppState, "_run_test_cycle", lambda self, event=None: calls.append(1)),
+    ):
+        state._start_startup_probe()
+        rec = _RecordingThread.instances[-1]
+        scheduled_event = rec.args[1]
+        assert scheduled_event is state._connection_test_stop
+
+        # Simulate a restart between start() and the target running.
+        state._connection_test_stop = threading.Event()
+        scheduled_event.set()
+        rec.target(*rec.args)
+
+    assert calls == []
+
+
+def test_connection_loop_uses_the_event_it_was_started_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A loop whose join timed out must exit, not follow the replacement event."""
+    state = _startup_state(monkeypatch)
+    monkeypatch.setenv("RLM_STUDIO_CONNECTION_TEST_INTERVAL_SECONDS_OVERRIDE", "5")
+    calls: list[int] = []
+    _RecordingThread.instances = []
+
+    with patch.object(AppState, "_run_test_cycle", lambda self, event=None: calls.append(1)):
+        # Scope the Thread patch to the spawn only: the worker below must be a
+        # real thread, or it would never run the loop.
+        with patch("rlmstudio.server.dependencies.threading.Thread", _RecordingThread):
+            state._start_connection_testing()
+            rec = _RecordingThread.instances[-1]
+            started_event = rec.args[0]
+            assert started_event is state._connection_test_stop
+
+            # Simulate a restart that replaced the attribute after a
+            # timed-out join.
+            replacement = threading.Event()
+            state._connection_test_stop = replacement  # unset replacement
+            started_event.set()  # the lifecycle this loop belongs to stopped
+
+        # Run the loop with a timeout: the fixed version exits immediately;
+        # a regression that follows the replacement would sleep instead, so
+        # unblock it after the timeout to keep the test failing, not hanging.
+        worker = threading.Thread(target=rec.target, args=rec.args, daemon=True)
+        worker.start()
+        worker.join(timeout=1.0)
+        still_running = worker.is_alive()
+        replacement.set()
+
+    assert not still_running
+    assert calls == []

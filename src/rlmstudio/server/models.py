@@ -595,6 +595,12 @@ class LLMProviderConfig(BaseModel):
     last_failure_kind: str | None = None
     last_failure_cause: str | None = None
     last_failure_fix: str | None = None
+    # Model-vs-account validation (#95 Scope 2).  None = never checked;
+    # "unknown" = discovery could not reach the provider.  Refreshed on save
+    # and on probes, read by the Settings list without extra network calls.
+    model_check_status: Literal["available", "unavailable", "unknown"] | None = None
+    model_check_alternatives: list[str] | None = None
+    model_checked_at: datetime | None = None
     # Consecutive failure counter (connected → offline requires N≥2 to debounce
     # transient blips).  Persisted across restarts so a blip just before
     # restart does not get erased.  See §Failure Semantics and Open Q #7 of

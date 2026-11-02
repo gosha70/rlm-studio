@@ -13,8 +13,9 @@ Covers:
 
 from __future__ import annotations
 
+import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -698,3 +699,245 @@ def test_provider_tester_result_shape_matches_manual_route_consumer() -> None:
     assert isinstance(result.tested_at, datetime)
     assert result.latency_ms == 42
     assert result.error_message is None
+
+
+# --------------------------------------------------------------------------
+# Model-vs-account validation (#95 Scope 2)
+# --------------------------------------------------------------------------
+
+_MODELS_FETCH = "rlmstudio.server.routes.providers._fetch_models_from_api"
+_DISCOVER_CONTEXT = "rlmstudio.server.routes.llm_providers._discover_context_window"
+
+
+def _model_infos(*names: str) -> list[ModelInfo]:
+    return [ModelInfo(name=n) for n in names]
+
+
+def _create_checked_provider(client: TestClient, model: str = "gpt-4o-mini") -> dict:
+    """Create an OpenAI provider whose live list contains *model*."""
+    with (
+        patch(_MODELS_FETCH, new=AsyncMock(return_value=_model_infos(model))),
+        patch(_DISCOVER_CONTEXT, return_value=None),
+    ):
+        resp = client.post(
+            "/api/llm-providers",
+            json={
+                "name": f"mc-{model}",
+                "backend": "openai",
+                "model": model,
+                "api_key": "sk-test",
+            },
+        )
+    assert resp.status_code == 201, resp.text
+    body: dict = resp.json()
+    return body
+
+
+def test_create_records_an_available_model(client: TestClient) -> None:
+    body = _create_checked_provider(client)
+
+    assert body["model_check_status"] == "available"
+    assert body["model_check_alternatives"] is None
+    assert body["model_checked_at"] is not None
+
+
+def test_create_flags_an_unavailable_model_with_alternatives(client: TestClient) -> None:
+    with (
+        patch(
+            _MODELS_FETCH,
+            new=AsyncMock(return_value=_model_infos("gpt-4o", "gpt-4o-mini")),
+        ),
+        patch(_DISCOVER_CONTEXT, return_value=None),
+    ):
+        resp = client.post(
+            "/api/llm-providers",
+            json={
+                "name": "mc-retired",
+                "backend": "openai",
+                "model": "retired-model",
+                "api_key": "sk-test",
+            },
+        )
+
+    body = resp.json()
+    assert body["model_check_status"] == "unavailable"
+    assert body["model_check_alternatives"] == ["gpt-4o", "gpt-4o-mini"]
+    # The check never touches the provider's connection status.
+    assert body["status"] == "configured"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TimeoutError("timed out"),
+        RuntimeError("401 unauthorized"),
+        ValueError("malformed JSON body"),
+    ],
+)
+def test_create_survives_a_discovery_failure(client: TestClient, exc: Exception) -> None:
+    """Timeout, auth rejection and malformed data are all "unknown", not a
+    failed save and not a false "unavailable"."""
+    with (
+        patch(_MODELS_FETCH, new=AsyncMock(side_effect=exc)),
+        patch(_DISCOVER_CONTEXT, return_value=None),
+    ):
+        resp = client.post(
+            "/api/llm-providers",
+            json={
+                "name": "mc-outage",
+                "backend": "openai",
+                "model": "gpt-4o-mini",
+                "api_key": "sk-test",
+            },
+        )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["model_check_status"] == "unknown"
+    assert body["model_check_alternatives"] is None
+    assert body["model"] == "gpt-4o-mini"
+    assert body["status"] == "configured"
+
+
+def test_update_model_refreshes_the_check(client: TestClient) -> None:
+    created = _create_checked_provider(client)
+    lp_id = created["id"]
+    assert created["model_check_status"] == "available"
+
+    with (
+        patch(_MODELS_FETCH, new=AsyncMock(return_value=_model_infos("gpt-4o-mini"))),
+        patch(_DISCOVER_CONTEXT, return_value=None),
+    ):
+        resp = client.put(f"/api/llm-providers/{lp_id}", json={"model": "retired-model"})
+
+    body = resp.json()
+    assert body["model_check_status"] == "unavailable"
+    assert body["model_check_alternatives"] == ["gpt-4o-mini"]
+
+
+def test_update_survives_a_discovery_failure(client: TestClient) -> None:
+    created = _create_checked_provider(client)
+    lp_id = created["id"]
+
+    with (
+        patch(_MODELS_FETCH, new=AsyncMock(side_effect=TimeoutError("timed out"))),
+        patch(_DISCOVER_CONTEXT, return_value=None),
+    ):
+        resp = client.put(f"/api/llm-providers/{lp_id}", json={"model": "gpt-4o"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["model_check_status"] == "unknown"
+    assert body["status"] == "configured"
+
+
+def test_update_unrelated_field_keeps_the_check(client: TestClient) -> None:
+    created = _create_checked_provider(client)
+    lp_id = created["id"]
+
+    fetch = AsyncMock(return_value=_model_infos("gpt-4o-mini"))
+    with patch(_MODELS_FETCH, new=fetch):
+        resp = client.put(f"/api/llm-providers/{lp_id}", json={"name": "renamed"})
+
+    assert fetch.await_count == 0
+    assert resp.json()["model_check_status"] == "available"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"model": "retired-model"},
+        {"endpoint": "http://127.0.0.1:9/v1"},
+        {"api_key": "sk-replaced"},
+    ],
+    ids=["model", "endpoint", "api-key"],
+)
+def test_edit_clears_the_model_check_before_discovery(
+    client: TestClient, change: dict[str, str]
+) -> None:
+    """The old destination's result must not be visible during the re-check.
+
+    ``backend`` is not editable after creation (the update request has no
+    such field), so the three editable probe inputs are pinned here.
+    """
+    created = _create_checked_provider(client)
+    lp_id = created["id"]
+    state = dependencies.get_state()
+    observed: list[str | None] = []
+
+    async def _capture(*_args: object, **_kwargs: object) -> list[ModelInfo]:
+        current = state.get_llm_provider(lp_id)
+        observed.append(current.model_check_status if current else "missing")
+        return _model_infos("gpt-4o-mini", "retired-model")
+
+    with (
+        patch(_MODELS_FETCH, new=AsyncMock(side_effect=_capture)),
+        patch(_DISCOVER_CONTEXT, return_value=None),
+    ):
+        resp = client.put(f"/api/llm-providers/{lp_id}", json=change)
+
+    assert resp.status_code == 200, resp.text
+    assert observed == [None]  # cleared before the new discovery ran
+    assert resp.json()["model_check_status"] == "available"
+
+
+def test_key_rotation_discards_an_inflight_model_check(client: TestClient) -> None:
+    """A key-only edit changes no model/endpoint, so the check's guard must
+    also compare the configuration revision."""
+    created = _create_checked_provider(client)
+    lp_id = created["id"]
+    state = dependencies.get_state()
+
+    async def _rotate_key_then_return(*_args: object, **_kwargs: object) -> list[ModelInfo]:
+        # Simulate a concurrent PUT with a new key: it bumps updated_at and
+        # clears the check, which is what the in-flight result must not undo.
+        with state._config_lock:
+            current = state.get_llm_provider(lp_id)
+            assert current is not None
+            current.updated_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+            current.model_check_status = None
+            current.model_check_alternatives = None
+        return _model_infos("gpt-4o-mini")
+
+    with patch(_MODELS_FETCH, new=AsyncMock(side_effect=_rotate_key_then_return)):
+        resp = client.put(f"/api/llm-providers/{lp_id}", json={"api_key": "sk-rotated"})
+
+    assert resp.status_code == 200, resp.text
+    updated = client.get(f"/api/llm-providers/{lp_id}").json()
+    assert updated["model_check_status"] is None
+
+
+def test_fingerprint_changes_on_a_key_rotation() -> None:
+    """The probe path's stale-result guard must see a key-only edit."""
+    state = dependencies.get_state()
+    lp = LLMProviderConfig(id="fp", name="fp", backend="openai", model="gpt-4o-mini")
+    rotated = lp.model_copy(update={"updated_at": datetime.now(timezone.utc)})
+
+    assert state._provider_fingerprint(lp) != state._provider_fingerprint(rotated)
+
+
+def test_model_check_failure_log_is_redacted(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = "sk-" + "D" * 24
+    with (
+        patch(
+            _MODELS_FETCH,
+            new=AsyncMock(side_effect=RuntimeError(f"Authorization: Bearer {secret}")),
+        ),
+        patch(_DISCOVER_CONTEXT, return_value=None),
+        caplog.at_level(logging.DEBUG, logger="rlmstudio.server.provider_checks"),
+    ):
+        resp = client.post(
+            "/api/llm-providers",
+            json={
+                "name": "mc-redacted",
+                "backend": "openai",
+                "model": "gpt-4o-mini",
+                "api_key": "sk-test",
+            },
+        )
+
+    assert resp.status_code == 201, resp.text
+    assert secret not in caplog.text
+    assert "<redacted>" in caplog.text

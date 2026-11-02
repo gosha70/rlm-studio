@@ -842,9 +842,9 @@ function SettingsPageInner() {
                 </>
               ) : (
                 <>
-                  Auto-testing of connections is disabled. Enable it on the{" "}
-                  <strong>General</strong> tab to catch provider outages without a manual
-                  click.
+                  Recurring auto-testing is disabled. A one-time check runs at startup;
+                  enable an interval on the <strong>General</strong> tab to keep testing
+                  provider outages without a manual click.
                 </>
               )}
             </div>
@@ -1096,6 +1096,19 @@ function SettingsPageInner() {
                           >
                             Last failure: {lp.last_failure_cause}
                             {lp.last_failure_fix && <> &middot; {lp.last_failure_fix}</>}
+                          </p>
+                        )}
+                        {lp.model_check_status === "unavailable" && (
+                          <p className="text-xs text-destructive">
+                            Model &ldquo;{lp.model}&rdquo; is not offered by this provider.{" "}
+                            {lp.model_check_alternatives && lp.model_check_alternatives.length > 0
+                              ? `Available: ${lp.model_check_alternatives.join(", ")}.`
+                              : "Open the provider to see its model list."}
+                          </p>
+                        )}
+                        {lp.model_check_status === "unknown" && (
+                          <p className="text-xs text-muted-foreground">
+                            Model check could not reach the provider.
                           </p>
                         )}
                       </div>

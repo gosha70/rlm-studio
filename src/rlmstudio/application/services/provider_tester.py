@@ -129,19 +129,39 @@ class ProviderTestResult:
     failure_fix: str | None = None
 
 
-def _get_api_key(llm_provider_id: str, backend: str) -> str | None:
-    """Retrieve the API key (instance-scoped first, then env var)."""
+def _get_saved_key(llm_provider_id: str) -> str | None:
+    """Retrieve the instance-scoped key from the secret store only."""
     key_name = f"llm_provider:{llm_provider_id}"
     store: KeyringSecretStore | FileSecretStore = (
         KeyringSecretStore() if KeyringSecretStore.is_available() else FileSecretStore()
     )
-    raw_key: str | None = store.get(key_name)
-    if raw_key:
-        return raw_key
+    return store.get(key_name)
+
+
+def _get_env_key(backend: str) -> str | None:
+    """Retrieve the backend's process-environment key, if any."""
     entry = PROVIDERS_BY_KEY.get(backend)
     if entry and entry.env_var:
         return os.environ.get(entry.env_var)
     return None
+
+
+def _get_api_key(llm_provider_id: str, backend: str) -> str | None:
+    """Retrieve the API key (instance-scoped first, then env var)."""
+    return _get_saved_key(llm_provider_id) or _get_env_key(backend)
+
+
+def resolve_provider_key(provider: LLMProviderConfig, override: str | None = None) -> str | None:
+    """Resolve the key for a provider's own destination.
+
+    Instance-scoped first; a process-environment key only when the provider
+    has no custom endpoint.  Shared by the connection probe and the save-time
+    model check so both enforce the same credential boundary.
+    """
+    api_key = override or _get_saved_key(provider.id)
+    if not api_key and not provider.endpoint:
+        api_key = _get_env_key(provider.backend)
+    return api_key
 
 
 def _sanitize_error_message(exc: BaseException) -> str:
@@ -198,7 +218,7 @@ def _build_probe_params(
 
     entry = PROVIDERS_BY_KEY.get(provider.backend)
     if entry and entry.requires_api_key:
-        api_key = api_key_override or _get_api_key(provider.id, provider.backend)
+        api_key = resolve_provider_key(provider, api_key_override)
         if api_key:
             params["api_key"] = api_key
 
@@ -364,3 +384,53 @@ def record_failure_classification(provider: LLMProviderConfig, result: ProviderT
     provider.last_failure_kind = result.failure_kind.value if result.failure_kind else None
     provider.last_failure_cause = result.failure_cause
     provider.last_failure_fix = result.failure_fix
+
+
+def record_model_check(
+    provider: LLMProviderConfig,
+    model_names: list[str],
+    *,
+    checked_at: datetime | None = None,
+) -> None:
+    """Record whether the provider's configured model is in its live list.
+
+    An empty list means discovery did not return anything — the check is
+    ``unknown`` rather than claiming the model is gone.
+    """
+    if not model_names:
+        provider.model_check_status = "unknown"
+        provider.model_check_alternatives = None
+    elif provider.model in model_names:
+        provider.model_check_status = "available"
+        provider.model_check_alternatives = None
+    else:
+        provider.model_check_status = "unavailable"
+        provider.model_check_alternatives = model_names[:5]
+    provider.model_checked_at = checked_at or datetime.now(timezone.utc)
+
+
+def record_model_check_unavailable(
+    provider: LLMProviderConfig,
+    model_names: list[str],
+    *,
+    checked_at: datetime | None = None,
+) -> None:
+    """Record a probe-proven missing model, keeping alternatives if fetched."""
+    provider.model_check_status = "unavailable"
+    provider.model_check_alternatives = model_names[:5] or None
+    provider.model_checked_at = checked_at or datetime.now(timezone.utc)
+
+
+def record_model_check_from_probe(provider: LLMProviderConfig, result: ProviderTestResult) -> None:
+    """Update the model check from a probe outcome, with no network call.
+
+    A bad key or an unreachable endpoint says nothing about the model, so
+    those outcomes leave the previous check untouched.
+    """
+    if result.status == "connected":
+        provider.model_check_status = "available"
+        provider.model_check_alternatives = None
+        provider.model_checked_at = result.tested_at
+    elif result.failure_kind is ProviderFailureKind.MODEL_UNAVAILABLE:
+        provider.model_check_status = "unavailable"
+        provider.model_checked_at = result.tested_at
