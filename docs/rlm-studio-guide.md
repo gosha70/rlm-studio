@@ -37,26 +37,43 @@ RLM Studio has six pages, accessible from the sidebar:
 
 ## Settings
 
-Settings is where you configure everything before running experiments. It has six tabs.
+Settings is where you configure everything before running experiments. It has seven tabs: **LLM Providers**, **Chat Providers**, **Budget**, **Profiles**, **Prompts**, **General**, and **Appearance**.
 
-### Providers
+### LLM Providers
 
-Providers are the raw LLM connections. RLM Studio supports OpenAI, Anthropic, Ollama (local), LM Studio (local), and vLLM (local) out of the box — plus any of the 100+ backends LiteLLM supports via env var overrides. For each provider you can:
+An **LLM Provider** is a named connection to one inference backend. RLM Studio supports OpenAI, Anthropic, Ollama (local), LM Studio (local), and vLLM (self-hosted) out of the box — plus any of the 100+ backends LiteLLM supports via environment-variable overrides.
 
-- **Select a model** from the provider's model catalog
-- **Enter an API key** (or rely on environment variables like `OPENAI_API_KEY`)
-- **Set a custom endpoint** (for local models or proxies)
-- **Configure runtime settings** — temperature, top_p, max output tokens, timeout
-- **Enable/disable** the provider for chat
-- **Test the connection** to verify the key and endpoint work
+Connection and execution are separate. The **LLM Providers** tab creates and tests the connection; the **Chat Providers** tab binds that connection to a Profile and makes it runnable. A provider can be connected here and still appear nowhere in Chat until a Chat Provider references it.
 
-Providers that detect an environment variable show "API key set" automatically. You only need to configure them manually if you want to override the key or change the default model.
+#### Adding a provider
+
+1. Open **Settings → LLM Providers → Add LLM Provider**.
+2. Give it a **Name** you will recognise in dropdowns (e.g. "DGX Spark — Qwen").
+3. Choose the **Backend**.
+4. For Ollama, LM Studio or vLLM, enter the **Endpoint** — the base URL of the server, including `/v1` when it serves the OpenAI-compatible API (e.g. `http://spark-c2e5.local:8001/v1`).
+5. Pick the **Model**. The field loads the list from the provider: cloud backends return the models your account can use (or the compatible gateway you entered as the endpoint), local backends return what they are serving. For a cloud backend, enter the API key first — discovery authenticates with the key you type. Use the refresh button to reload. If discovery fails, the page says why and the field stays editable, so you can type the model ID by hand.
+6. For OpenAI or Anthropic, paste the **API key**. Local backends do not need one unless a proxy in front of them requires one.
+7. Leave **Context Window** blank to discover it from the model endpoint, or set it manually if discovery gets it wrong.
+8. Click **Test Connection**, then **Create** or **Save**.
+
+#### Testing a provider connection
+
+**Test Connection** sends one short request to the configured model and reports what came back. The test itself saves nothing.
+
+- **In the form** it tests the values currently on screen, including unsaved edits to the endpoint, model and key. This is the check to run before saving.
+- **On a saved row** it tests the stored configuration and updates that row's status and last-tested time.
+
+Credentials stay with their destination: if you change a saved provider's endpoint, Test Connection asks you to re-enter the API key rather than sending the old secret to a new host. Changing only the model keeps the saved key.
+
+A successful test shows the round-trip latency and the clock time it ran, and turns the row's badge green (*Connected*). A failed test shows what went wrong and what to do about it — for example, "Could not reach the provider at 'http://…'" with the fix "Make sure the server is running and reachable" — followed by the raw upstream detail. A rejected key, a missing model and an unreachable host produce different messages.
+
+Every row that says **Connected** also states when it was last tested, to the second, and whether you or the background daemon ran the test. Editing the model or the endpoint invalidates the old result: the row returns to *configured* and the timestamp clears until the new configuration is tested. Providers that are not *connected* or *configured* — for example *offline* — are hidden from the Chat and Compare pickers until a test succeeds again.
 
 For step-by-step setup per backend, see **[docs/hosts/README.md](hosts/README.md)** — it covers the decision tree across backends, deployment topologies (all-local vs laptop + remote GPU vs all-cloud), and security boundaries for keyless local backends.
 
 #### Scheduled connection testing
 
-RLM Studio can re-test every configured provider on a timer so you see offline backends before a chat run fails. Configure it under **Settings → Providers**:
+RLM Studio can re-test every configured provider on a timer so you see offline backends before a chat run fails. Configure it under **Settings → LLM Providers** (the interval itself lives on the **General** tab):
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
@@ -66,8 +83,8 @@ Each cycle tests up to 5 providers in parallel with a 10-second per-test timeout
 
 Each provider row shows three audit fields:
 
-- **Last tested at** — UTC timestamp of the most recent test.
-- **Last tested by** — `manual` (you clicked Test Connection) or `background` (the daemon).
+- **Last tested** — local date and time of the most recent test, accurate to the second (e.g. `2026-11-01 13:05:58`).
+- **Last tested by** — *you* (you clicked **Test Connection**) or *auto* (the background daemon).
 - **Consecutive failures** — number of back-to-back failures against the current threshold.
 
 ### Chat Providers and Profiles

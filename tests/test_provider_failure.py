@@ -57,6 +57,10 @@ def test_classifies_the_real_litellm_exception_classes() -> None:
         ('{"type":"not_found_error","message":"model: x"}', ProviderFailureKind.MODEL_UNAVAILABLE),
         ("the model does not exist", ProviderFailureKind.MODEL_UNAVAILABLE),
         ("rate limit exceeded", ProviderFailureKind.RATE_LIMIT),
+        ("[Errno 61] Connection refused", ProviderFailureKind.CONNECTION),
+        ("[Errno 8] nodename nor servname provided, or not known", ProviderFailureKind.CONNECTION),
+        ("[Errno -2] Name or service not known", ProviderFailureKind.CONNECTION),
+        ("Failed to establish a new connection", ProviderFailureKind.CONNECTION),
     ],
 )
 def test_falls_back_to_message_keywords(message: str, expected: ProviderFailureKind) -> None:
@@ -220,6 +224,8 @@ def test_provider_failure_error_is_a_runtime_error() -> None:
 
     assert isinstance(exc, RuntimeError)
     assert str(exc) == "boom"
+    # ProviderFailureError last: mypy narrows to the most recent isinstance.
+    assert isinstance(exc, ProviderFailureError)
     assert exc.kind is ProviderFailureKind.AUTH
 
 

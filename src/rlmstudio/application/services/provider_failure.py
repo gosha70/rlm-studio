@@ -130,6 +130,26 @@ _KEYWORD_KINDS: tuple[tuple[ProviderFailureKind, tuple[str, ...]], ...] = (
         ProviderFailureKind.RATE_LIMIT,
         ("rate limit", "rate_limit", "too many requests", "quota"),
     ),
+    # Last: a message that also names a model or an auth problem should
+    # classify by that more specific cause first.  These are the shapes
+    # litellm/httpx surface for a server that is down or an unresolvable
+    # host — e.g. "[Errno 61] Connection refused" on macOS, or
+    # "nodename nor servname provided" when mDNS fails.
+    (
+        ProviderFailureKind.CONNECTION,
+        (
+            "connection refused",
+            "connection error",
+            "connection reset",
+            "connect call failed",
+            "failed to establish a new connection",
+            "nodename nor servname",
+            "name or service not known",
+            "temporary failure in name resolution",
+            "no route to host",
+            "network is unreachable",
+        ),
+    ),
 )
 
 

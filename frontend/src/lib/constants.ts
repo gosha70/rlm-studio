@@ -66,13 +66,20 @@ export const BACKEND_DISPLAY_NAMES: Record<string, string> = {
   [BACKEND_VLLM]: "vLLM",
 };
 
-/** Model placeholder text per backend. */
+/**
+ * Model placeholder text per backend.
+ *
+ * Deliberately free of concrete model IDs: an example here is a hardcoded
+ * value with no owner, and the last set named models the vendors had already
+ * retired.  The live model list (fetched from the provider) is the source of
+ * truth; this text only explains what to type when discovery is unavailable.
+ */
 export const MODEL_PLACEHOLDER: Record<string, string> = {
-  [BACKEND_OPENAI]: "e.g., gpt-4o",
-  [BACKEND_ANTHROPIC]: "e.g., claude-sonnet-4-5",
-  [BACKEND_VLLM]: "e.g., Qwen/Qwen2.5-7B-Instruct",
-  [BACKEND_OLLAMA]: "e.g., llama3.2",
-  [BACKEND_LMSTUDIO]: "e.g., llama3.2",
+  [BACKEND_OPENAI]: "Model ID from your account",
+  [BACKEND_ANTHROPIC]: "Model ID from your account",
+  [BACKEND_VLLM]: "Model ID served by your endpoint",
+  [BACKEND_OLLAMA]: "Model name listed by ollama list",
+  [BACKEND_LMSTUDIO]: "Model ID served by your endpoint",
 };
 
 /** Endpoint placeholder text per local backend. */

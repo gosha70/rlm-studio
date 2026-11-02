@@ -5,6 +5,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed — LLM Provider configuration
+
+- **The Model field no longer offers browser-history values.** It is a plain
+  text input, so the browser surfaced every id ever typed into it
+  (`Qwen/Qwen3-32B`, `llama2`, …) even when the configured endpoint served none
+  of them. The field now opts out of autofill, states which endpoint its live
+  list came from, and calls out a saved model the endpoint no longer serves
+  instead of retaining it silently. Model examples that had already aged
+  (`Qwen/Qwen2.5-7B-Instruct`, `mistral`, `neural-chat`) are replaced with
+  provider-agnostic hints.
+- **"Connected" is dated and is never shown without a test.** Rows show
+  `Last tested YYYY-MM-DD HH:MM:SS` instead of "6m ago"; refreshing the model
+  list no longer marks a provider connected; editing the model, endpoint or
+  API key clears the previous result; clearing an endpoint override now
+  actually removes it (JSON null was being treated as "field omitted"); and
+  with scheduled testing enabled the list revalidates so background results
+  appear without a reload.
+- **Model discovery uses the key being configured, and says when it failed.**
+  A new `POST /api/llm-providers/models` authenticates with the form's key
+  (or the saved key in edit mode), returns `source: live|unavailable` with an
+  error instead of substituting the static catalog, and is uncached so
+  Refresh really re-reads the endpoint. A compatible gateway's model list is
+  returned unfiltered; on the official endpoint only known non-chat families
+  are dropped, so `chatgpt-*` and models released after this list was written
+  stay selectable. An in-flight form test is discarded when the values change
+  underneath it.
+- **Credentials stay with their destination.** A saved key is only used for
+  the endpoint it was saved with (changing the endpoint requires re-entering
+  it); form requests must reference an existing provider whose backend
+  matches, so one provider's secret cannot be borrowed under another
+  backend; an environment key is never sent to a caller-supplied host; cloud
+  model discovery queries a configured compatible gateway instead of the
+  vendor's public API; and discovery errors are redacted before they reach
+  the log as well as the response.
+- **Connection-test failures name the cause and the fix.** The test routes now
+  return the shared classifier's `failure_kind` / `failure_cause` /
+  `failure_fix` instead of only the raw upstream detail.
+- **The user guide documents how to add and test a provider**, and the v1.0.0
+  frontend test plan carries the DGX Spark / local-vLLM walkthrough.
+
 ### RLM working state — result registry and `read_result` (PR 1 of #77)
 
 - **Added:** every v2 `inspect` result is now kept in full on the controller
