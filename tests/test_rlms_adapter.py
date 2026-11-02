@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib.metadata
+import io
 import sys
 import threading
 import time
@@ -42,7 +43,7 @@ from rlmstudio.application.services.outcome_classifier import (
     OutcomeCategory,
     classify_execution_outcome,
 )
-from rlmstudio.infrastructure.engines import rlms_adapter
+from rlmstudio.envs.in_process_state import acquire_exclusive, release_exclusive
 from rlmstudio.infrastructure.engines.rlms_adapter import (
     BUSY_REASON,
     MAX_TRACE_RECURSION_DEPTH,
@@ -1167,6 +1168,55 @@ class TestLocalEnvironmentIsSerialised:
 
         assert fake_rlm.init_kwargs["max_concurrent_subcalls"] == 1
 
+    def test_a_local_run_keeps_studio_cells_out_of_its_stream_window(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        """Issue #90: ``rlms`` swaps the process's streams inside its own code.
+
+        The thread-local proxy cannot reach that swap, so the gate must keep a
+        Studio cell out until the official cell restores the streams.
+        """
+        from rlmstudio.envs.pyrepl_env import PyReplEnv
+
+        swapped = threading.Event()
+        cell_finished = threading.Event()
+        ran_inside_window: list[bool] = []
+        cell_stdout: list[str] = []
+
+        def simulate_engine_cell(**_: Any) -> None:
+            original = sys.stdout
+            sys.stdout = io.StringIO()  # what rlms does around a code cell
+            swapped.set()
+            try:
+                # Without the gate the cell finishes here and this records
+                # True; with it, the cell cannot start until the run lets go.
+                ran_inside_window.append(cell_finished.wait(timeout=0.3))
+            finally:
+                sys.stdout = original
+
+        fake_rlm.on_completion = simulate_engine_cell
+
+        official = threading.Thread(
+            target=lambda: _adapter(sandbox_type="restricted").run("d", "q", _CONFIG),
+            daemon=True,
+        )
+        official.start()
+        assert swapped.wait(timeout=10.0)
+
+        def run_cell() -> None:
+            cell_stdout.append(PyReplEnv().execute("print('studio-cell')")["stdout"])
+            cell_finished.set()
+
+        cell = threading.Thread(target=run_cell, daemon=True)
+        cell.start()
+        official.join(timeout=10.0)
+        cell.join(timeout=10.0)
+
+        assert not official.is_alive()
+        assert not cell.is_alive()
+        assert ran_inside_window == [False]
+        assert cell_stdout == ["studio-cell\n"]
+
     def test_docker_runs_keep_the_engine_default_concurrency(self, fake_rlm: _FakeRlm) -> None:
         _adapter(sandbox_type="docker").run("d", "q", _CONFIG)
 
@@ -1189,20 +1239,24 @@ class TestLocalEnvironmentIsSerialised:
     @staticmethod
     @contextmanager
     def _lock_held(release_after: float | None = None) -> Iterator[None]:
-        """Hold the adapter's process-wide local-environment lock on another thread.
+        """Hold the exclusive in-process gate on another thread.
 
-        A thread rather than the test's own thread because the lock is not
-        reentrant and the adapter must observe it as held by someone else.
-        ``release_after`` lets go of it that many seconds in, so the run under
-        test queues for a while and then proceeds.
+        A thread rather than the test's own thread because the exclusive side
+        is not reentrant and the adapter must observe it as held by someone
+        else.  ``release_after`` lets go of it that many seconds in, so the
+        run under test queues for a while and then proceeds.
         """
         acquired = threading.Event()
         release = threading.Event()
 
         def _hold() -> None:
-            with rlms_adapter._LOCAL_ENV_LOCK:
+            if not acquire_exclusive(timeout=10.0):
+                return
+            try:
                 acquired.set()
                 release.wait(timeout=release_after if release_after is not None else 10.0)
+            finally:
+                release_exclusive()
 
         holder = threading.Thread(target=_hold, name="lock-holder", daemon=True)
         holder.start()

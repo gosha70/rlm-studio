@@ -17,6 +17,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   the run's model when a step row has none.
 - Added a `StepDetail` story and component tests for the three cost states.
 
+### Fixed — in-process cells no longer overlap an official engine run (issue #90)
+
+- Studio's in-process sandboxes (`PyReplEnv` behind the local sandbox, and the
+  restricted sandbox the server uses by default) and the official engine's
+  in-process `local` REPL now share one process-state gate. Studio cells take
+  the shared side and still run in parallel with each other; an official
+  `local` run takes the exclusive side for the whole run, because `rlms` swaps
+  `sys.stdout`/`sys.stderr` and changes the working directory inside the
+  dependency, beyond the reach of Studio's thread-local capture. A Compare
+  grid pairing an `rlm` slot with an `rlm_official` slot can therefore no
+  longer run a Studio cell inside that window. Docker and subprocess sandboxes
+  mutate nothing in this process and never take the gate.
+- The official engine's "busy" message and local-environment note now name
+  Studio's own cells as possible holders.
+
 ### Added — model-vs-account check and a startup probe (issue #95, scopes 2 and 4)
 
 - Saving a provider now compares its configured model against the provider's
@@ -197,8 +212,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   process's output and working directory around every code cell, official
   runs and their batched sub-calls are serialised; a cell may spend up to a
   quarter of its timeout queueing, that time comes off its own budget, and a
-  cell still waiting after it reports the engine as busy. The rule covers
-  official runs against each other, not Studio's own in-process sandbox. The
+  cell still waiting after it reports the engine as busy. The same gate keeps
+  Studio's own in-process cells out of that window, so an official cell and an
+  `rlm` cell in one grid can no longer overlap. The
   engine's deadline is also set just inside Studio's wall-clock guard so a run
   that runs out of time stops itself and reports its spend, leaving the guard
   as the backstop for a REPL stuck inside one iteration. The Docker sandbox

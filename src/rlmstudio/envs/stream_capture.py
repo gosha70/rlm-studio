@@ -24,6 +24,12 @@ inside their own process or container and are unaffected. What a library
 caller does with ``sys.stdout`` outside a cell is also unaffected: with no
 thread-local target set, the proxy is a pass-through to the original stream.
 
+The official engine's in-process ``local`` REPL does its own redirect inside
+the ``rlms`` dependency, where this proxy cannot reach, so capture also takes
+the shared side of :mod:`rlmstudio.envs.in_process_state`.  That keeps Studio
+cells out of an official run's window without serialising them against each
+other.
+
 See issue #90.
 """
 
@@ -34,6 +40,8 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import IO, Any
+
+from rlmstudio.envs.in_process_state import shared_scope
 
 __all__ = ["capture_streams", "install", "is_installed"]
 
@@ -126,14 +134,21 @@ def capture_streams(stdout: IO[str], stderr: IO[str]) -> Iterator[None]:
 
     Restores the previous thread-local targets on exit, including when the
     body raises, so nesting (a cell that itself captures) behaves.
+
+    The capture holds the shared side of
+    :mod:`rlmstudio.envs.in_process_state` while it is active.  That lets
+    Studio cells run in parallel with each other but keeps them out of an
+    official engine run, whose ``rlms`` ``local`` REPL replaces the process's
+    streams and working directory inside the dependency.
     """
-    install()
-    previous_out = getattr(_state, "stdout_target", None)
-    previous_err = getattr(_state, "stderr_target", None)
-    _state.stdout_target = stdout
-    _state.stderr_target = stderr
-    try:
-        yield
-    finally:
-        _state.stdout_target = previous_out
-        _state.stderr_target = previous_err
+    with shared_scope():
+        install()
+        previous_out = getattr(_state, "stdout_target", None)
+        previous_err = getattr(_state, "stderr_target", None)
+        _state.stdout_target = stdout
+        _state.stderr_target = stderr
+        try:
+            yield
+        finally:
+            _state.stdout_target = previous_out
+            _state.stderr_target = previous_err

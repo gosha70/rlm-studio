@@ -19,6 +19,7 @@ import time
 
 import pytest
 
+from rlmstudio.envs.in_process_state import acquire_exclusive, release_exclusive
 from rlmstudio.envs.stream_capture import capture_streams, is_installed
 
 LINES_PER_CELL = 200
@@ -230,6 +231,63 @@ def test_install_is_idempotent_and_does_not_chain_proxies() -> None:
         # And the proxies must not be each other's original.
         assert sys.stdout._original is not sys.stderr  # type: ignore[union-attr]
         assert sys.stderr._original is not sys.stdout  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# The gate shared with the official engine (#90, remaining gap)
+# ---------------------------------------------------------------------------
+
+
+def test_capture_waits_for_the_exclusive_in_process_scope() -> None:
+    """A Studio cell must not run inside an official local run's window.
+
+    ``rlms`` replaces the process's ``sys.stdout``/``sys.stderr`` and changes
+    the working directory inside its own dependency, where the thread-local
+    proxy cannot reach.  The shared side keeps the cell out until the official
+    run releases the exclusive side.
+    """
+    assert acquire_exclusive(timeout=5.0)
+    entered = threading.Event()
+    finished = threading.Event()
+
+    def cell() -> None:
+        with capture_streams(io.StringIO(), io.StringIO()):
+            entered.set()
+        finished.set()
+
+    thread = threading.Thread(target=cell, daemon=True)
+    thread.start()
+    try:
+        assert not entered.wait(timeout=0.25), "the cell ran inside the official window"
+    finally:
+        release_exclusive()
+
+    thread.join(timeout=10)
+    assert entered.is_set()
+    assert finished.is_set()
+
+
+def test_exclusive_scope_waits_for_an_active_capture() -> None:
+    """An official local run must queue behind a Studio cell, not overlap it."""
+    entered = threading.Event()
+    release_cell = threading.Event()
+
+    def cell() -> None:
+        with capture_streams(io.StringIO(), io.StringIO()):
+            entered.set()
+            release_cell.wait(timeout=10)
+
+    thread = threading.Thread(target=cell, daemon=True)
+    thread.start()
+    assert entered.wait(timeout=10)
+    try:
+        assert not acquire_exclusive(timeout=0.25)
+    finally:
+        release_cell.set()
+        thread.join(timeout=10)
+
+    assert acquire_exclusive(timeout=5.0)
+    release_exclusive()
 
 
 # ---------------------------------------------------------------------------
