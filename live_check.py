@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
-"""Live-provider check for the litellm 1.89.7 -> 1.103.x upgrade (PR #91).
+"""Live-provider smoke check.
 
-Every automated test in this repository mocks the LLM, by design, so a
-green suite says nothing about whether litellm's real request path still
-works after a fourteen-minor-version jump. This drives the running
-server's own HTTP API -- the same endpoints the Studio UI calls -- so
-nothing here re-implements provider resolution or pricing.
+Every automated test in this repository mocks the LLM, by design, so a green
+suite says nothing about whether the real request path works: provider
+resolution, the pricing map, and token accounting. This drives the running
+server's own HTTP API -- the same endpoints the Studio UI calls -- so nothing
+here re-implements those paths.
 
 Usage:
 
     uv run python -m rlmstudio.server          # terminal 1
     uv run python live_check.py --list         # show Chat Providers, run nothing
-    uv run python live_check.py                # first enabled provider
-    uv run python live_check.py --provider NAME
+    uv run python live_check.py                # first enabled provider per mode
+    uv run python live_check.py --direct-provider NAME --rlm-provider NAME
 
-Exits non-zero if any check fails. Spends real tokens on a real key:
-two short turns, a few thousand tokens.
+A Chat Provider's own execution mode wins over the request's mode, so the
+script needs one provider in `direct` mode and one in `rlm` mode. With no
+flags it picks the first enabled provider in each mode; `--provider` is kept
+as an alias for `--direct-provider`. Use `--base` for a server that is not
+on http://127.0.0.1:8000.
+
+Exits non-zero if any check fails. Spends real tokens on a real key: two
+short turns, a few thousand tokens. The timeout stops *polling*; it cannot
+cancel an execution that is already running on the server (see TurnTimeoutError).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -73,6 +81,43 @@ RLM_QUESTION = (
     "record, and what was the tolerance? Answer with both numbers."
 )
 
+# The fixture has a deterministic answer. Without these the check accepts any
+# non-empty string, including a factually wrong one. Matched as whole numbers
+# so "470" cannot satisfy "47".
+RLM_EXPECTED_NUMBERS = ("47", "30")
+
+
+class TurnTimeoutError(RuntimeError):
+    """Polling gave up; the execution may still be running on the server.
+
+    The REST API has no cancellation endpoint — the WebSocket `cancel`
+    message is the only way to stop a task — so this script cannot end a run
+    it has stopped waiting for. The message names the execution so the user
+    can watch it in Traces/Dashboard.
+    """
+
+    def __init__(
+        self,
+        mode: str,
+        execution_id: str,
+        timeout_s: int,
+        last_status: str | None,
+    ) -> None:
+        self.mode = mode
+        self.execution_id = execution_id
+        self.timeout_s = timeout_s
+        self.last_status = last_status
+        super().__init__(
+            f"{mode} turn {execution_id} was still {last_status or 'running'} "
+            f"after {timeout_s}s; polling stopped, but the server may still be "
+            f"running it"
+        )
+
+
+def _has_number(text: str, number: str) -> bool:
+    return re.search(rf"\b{re.escape(number)}\b", text) is not None
+
+
 # A short document for the Direct turn. /api/chat requires `content` or
 # `file_ids` as well as `query`, so a question with no material attached is
 # rejected — this is a workbench for querying content, not a chat box.
@@ -118,6 +163,7 @@ def _run_turn(base: str, mode: str, document: str, question: str, provider_id: s
     print(f"  submitted {mode}: execution {execution_id}")
 
     deadline = time.monotonic() + TIMEOUT_SECONDS[mode]
+    last_status: str | None = None
     while time.monotonic() < deadline:
         time.sleep(POLL_SECONDS)
         try:
@@ -129,9 +175,10 @@ def _run_turn(base: str, mode: str, document: str, question: str, provider_id: s
         assert isinstance(trace, dict)
         if trace.get("status") != "running":
             return trace
+        last_status = str(trace.get("status"))
         print(f"    ... {len(trace.get('steps') or [])} steps so far", end="\r")
 
-    raise TimeoutError(f"{mode} turn did not finish in {TIMEOUT_SECONDS[mode]}s")
+    raise TurnTimeoutError(mode, str(execution_id), TIMEOUT_SECONDS[mode], last_status)
 
 
 def _check(results: list[tuple[bool, str]], ok: bool, label: str) -> None:
@@ -169,6 +216,17 @@ def _report(mode: str, trace: dict, results: list[tuple[bool, str]]) -> None:
         # A single-step RLM run is a valid outcome, not a regression — the
         # model may simply answer without inspecting.
         _check(results, len(steps) >= 1, "rlm: at least one step recorded")
+
+        # The fixture has one right answer. A non-empty string is not the
+        # same thing: "This answer is factually wrong." passed every other
+        # check in this function.
+        missing = [n for n in RLM_EXPECTED_NUMBERS if not _has_number(answer, n)]
+        _check(
+            results,
+            not missing,
+            "rlm: answer states both fixture values (47 hours, tolerance 30)"
+            + (f" — missing {' and '.join(missing)}" if missing else ""),
+        )
 
         for s in steps:
             print(
@@ -307,6 +365,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n{mode.upper()} — HTTP {exc.code}: {body}")
             results.append((False, f"{mode}: turn completed"))
             continue
+        except TurnTimeoutError as exc:
+            print(f"\n{mode.upper()} — {exc}")
+            print(
+                "  The server may still be running this execution and making "
+                "provider calls.\n"
+                f"  Watch it in Traces/Dashboard (execution {exc.execution_id}); "
+                "this script has stopped polling and cannot cancel it."
+            )
+            results.append((False, f"{mode}: turn finished within {exc.timeout_s}s"))
+            continue
         except Exception as exc:
             print(f"\n{mode.upper()} — raised {type(exc).__name__}: {exc}")
             results.append((False, f"{mode}: turn completed"))
@@ -334,12 +402,16 @@ def main(argv: list[str] | None = None) -> int:
         elif not reached_model:
             print(
                 "\nZero tokens on every turn means no request reached the model,\n"
-                "so this says nothing about the litellm upgrade. Read the ERROR\n"
-                "line above: an authentication error means the provider's key is\n"
-                "invalid or expired, which is configuration, not code."
+                "so the run says nothing about the client's request path. Read the\n"
+                "ERROR line above: an authentication error means the provider's key\n"
+                "is invalid or expired, which is configuration, not code."
             )
         return 1
-    print("\nAll checks passed. PR #91 has nothing left blocking it.")
+    print(
+        "\nAll checks passed: both turns reached a real model, the pricing map "
+        "resolved the model, and token accounting reconciled. This says nothing "
+        "about answer quality beyond the one fixture value the RLM turn asserts."
+    )
     return 0
 
 

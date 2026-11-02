@@ -3,6 +3,13 @@
 # /api, /health and /ws to the backend (scripts/dev/backend.sh). Stopping one
 # leaves the other running.
 #
+# Ownership: start records the launched pid, its process group and start time
+# in ${TMPDIR}/rlm-studio-dev/frontend-<repo-id>.pid. stop signals only that
+# group, and only while the recorded start time still matches — an unrelated
+# Next.js app on the port is never touched. A start that fails (build error,
+# readiness timeout, or a different process answering on the port) terminates
+# the process it launched.
+#
 # Usage:
 #   scripts/dev/frontend.sh start         # production build + `next start`
 #   scripts/dev/frontend.sh start --dev   # `next dev` with hot reload (UI work only)
@@ -18,26 +25,21 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# shellcheck source=scripts/dev/process.sh
+. "$SCRIPT_DIR/process.sh"
+
+NAME="frontend"
 FRONTEND_DIR="$REPO_ROOT/frontend"
 PORT="${FRONTEND_PORT:-3000}"
 export INTERNAL_API_URL="${INTERNAL_API_URL:-http://localhost:${RLM_STUDIO_PORT:-8000}}"
-TMP_ROOT="${TMPDIR:-/tmp}"
-LOG_DIR="${TMP_ROOT%/}/rlm-studio-dev"
+LOG_DIR="$(dev_log_dir)"
 LOG="$LOG_DIR/frontend.log"
+PID_FILE="$LOG_DIR/frontend-$(repo_id "$REPO_ROOT").pid"
 MIN_NODE_MAJOR=22
-# Only processes whose command line matches this are ever killed.
-OWN_PROCESS_PATTERN="next"
 START_TIMEOUT_S=120
 STOP_TIMEOUT_S=10
-
-listener_pids() {
-  lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true
-}
-
-is_ours() {
-  ps -o command= -p "$1" 2>/dev/null | grep -Eq "$OWN_PROCESS_PATTERN"
-}
 
 node_major() {
   node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || echo 0
@@ -56,73 +58,92 @@ ensure_node() {
   fi
 }
 
-status() {
-  local pids
-  pids="$(listener_pids)"
-  if [ -z "$pids" ]; then
-    echo "frontend: stopped (nothing listening on :$PORT)"
-    return 1
+cleanup_start() {
+  if [ "${START_OK:-0}" = "1" ]; then
+    return 0
   fi
-  echo "frontend: running on :$PORT (pid $(echo $pids)), proxying to $INTERNAL_API_URL"
+  if [ -n "${LAUNCHED_PGID:-}" ]; then
+    if terminate_group "$LAUNCHED_PGID" "$STOP_TIMEOUT_S"; then
+      rm -f "$PID_FILE"
+    else
+      echo "$NAME: cleanup could not terminate process group $LAUNCHED_PGID." >&2
+      echo "        Keeping the ownership record at $PID_FILE; inspect with:" >&2
+      echo "        ps -o pid=,pgid=,command= -g $LAUNCHED_PGID" >&2
+    fi
+  fi
+}
+
+status() {
+  status_owned "$NAME" "$PID_FILE" "$PORT"
 }
 
 start() {
-  local mode="${1:-}" pids
-  pids="$(listener_pids)"
-  if [ -n "$pids" ]; then
-    echo "frontend: :$PORT is already in use (pid $(echo $pids))." >&2
-    echo "          Run '$0 stop', or set FRONTEND_PORT to another port." >&2
-    exit 1
-  fi
+  local mode="${1:-}" pid pgid started _ up=0
+  trap cleanup_start EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  require_startable "$NAME" "$PID_FILE" || exit 1
+  ensure_port_free "$NAME" "$PORT" \
+    "Run '$0 stop', or set FRONTEND_PORT to another port." || exit 1
   ensure_node
   if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-    echo "frontend: dependencies missing — run 'npm ci --prefix frontend' first." >&2
+    echo "$NAME: dependencies missing — run 'npm ci --prefix frontend' first." >&2
     exit 1
   fi
+
   mkdir -p "$LOG_DIR"
   cd "$FRONTEND_DIR"
   if [ "$mode" = "--dev" ]; then
+    set -m
     nohup npm run dev -- -p "$PORT" >"$LOG" 2>&1 &
   else
-    echo "frontend: building (proxy target $INTERNAL_API_URL)…"
-    npm run build >"$LOG" 2>&1 || { echo "frontend: build failed — see $LOG" >&2; exit 1; }
+    echo "$NAME: building (proxy target $INTERNAL_API_URL)…"
+    npm run build >"$LOG" 2>&1 || { echo "$NAME: build failed — see $LOG" >&2; exit 1; }
+    set -m
     nohup npm run start -- -p "$PORT" >>"$LOG" 2>&1 &
   fi
-  echo "frontend: starting on :$PORT (log: $LOG)"
+  pid=$!
+  pgid="$(ps_field "$pid" pgid)"
+  started="$(ps_field "$pid" lstart)"
+  if [ -z "$pgid" ] || [ -z "$started" ]; then
+    echo "$NAME: launched process exited immediately — see $LOG" >&2
+    exit 1
+  fi
+  LAUNCHED_PGID="$pgid"
+  write_identity "$PID_FILE" "$pid" "$pgid" "$started"
+  disown || true
+  echo "$NAME: starting on :$PORT (pid $pid, log: $LOG)"
+
   for _ in $(seq "$START_TIMEOUT_S"); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "$NAME: exited during startup — see $LOG" >&2
+      exit 1
+    fi
     if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then
-      echo "frontend: up — http://localhost:$PORT"
-      return 0
+      up=1
+      break
     fi
     sleep 1
   done
-  echo "frontend: did not answer within ${START_TIMEOUT_S}s — see $LOG" >&2
-  exit 1
+  if [ "$up" != "1" ]; then
+    echo "$NAME: did not answer within ${START_TIMEOUT_S}s — see $LOG" >&2
+    exit 1
+  fi
+  if ! listener_in_group "$PORT" "$pgid"; then
+    echo "$NAME: :$PORT answered, but not from the process this script started." >&2
+    echo "        Stopping it; find the other listener with:" >&2
+    echo "        lsof -nP -iTCP:$PORT -sTCP:LISTEN" >&2
+    exit 1
+  fi
+
+  START_OK=1
+  trap - EXIT INT TERM
+  echo "$NAME: up — http://localhost:$PORT"
 }
 
 stop() {
-  local pids pid
-  pids="$(listener_pids)"
-  if [ -z "$pids" ]; then
-    echo "frontend: not running on :$PORT"
-    return 0
-  fi
-  for pid in $pids; do
-    if ! is_ours "$pid"; then
-      echo "frontend: pid $pid on :$PORT is not a Next.js server — not touching it:" >&2
-      ps -o pid=,command= -p "$pid" >&2
-      exit 1
-    fi
-  done
-  # shellcheck disable=SC2086
-  kill $pids
-  for _ in $(seq "$STOP_TIMEOUT_S"); do
-    [ -z "$(listener_pids)" ] && { echo "frontend: stopped"; return 0; }
-    sleep 1
-  done
-  # shellcheck disable=SC2086
-  kill -9 $pids 2>/dev/null || true
-  echo "frontend: stopped (forced after ${STOP_TIMEOUT_S}s)"
+  stop_owned "$NAME" "$PID_FILE" "$PORT" "$STOP_TIMEOUT_S"
 }
 
 case "${1:-}" in
