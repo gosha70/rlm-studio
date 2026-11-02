@@ -911,10 +911,7 @@ class LiteLLMAdapter:
             # `except RuntimeError` keeps working; the carried kind is what
             # lets the server attach a stable classification to the run
             # payload instead of making the UI match on wording.
-            # Annotated because the package ships no `py.typed`, so mypy sees
-            # cross-module `rlmstudio.*` symbols as Any and `warn_return_any`
-            # would flag the return.
-            classified: RuntimeError = ProviderFailureError(
+            classified = ProviderFailureError(
                 f"{failure.cause} {failure.fix} (Detail: {detail})", failure
             )
             return classified

@@ -34,6 +34,7 @@ from rlmstudio.application.services.outcome_classifier import (
 )
 from rlmstudio.server.dependencies import AppState, get_state
 from rlmstudio.server.models import (
+    FailureCategory,
     FailureCategorySummary,
     FailureMetricsResponse,
     MetricsResponse,
@@ -47,6 +48,17 @@ router = APIRouter()
 
 # Non-SUCCESS categories — used to filter failure points.
 _FAILURE_CATEGORIES = frozenset(c for c in OutcomeCategory if c != OutcomeCategory.SUCCESS)
+
+# Enum value -> the response literal.  A mapping rather than a cast: mypy
+# checks each value against FailureCategory, so a renamed or added category
+# fails here instead of at the response boundary.
+_FAILURE_CATEGORY_BY_VALUE: dict[str, FailureCategory] = {
+    "timeout": "timeout",
+    "prefill_timeout": "prefill_timeout",
+    "budget_exhausted": "budget_exhausted",
+    "context_overflow": "context_overflow",
+    "general_error": "general_error",
+}
 
 
 @dataclass
@@ -365,7 +377,10 @@ def _build_failure_response(
     failure_rate = total_failures / total_runs if total_runs else 0.0
 
     def _to_summaries(bucket: dict[str, int]) -> list[FailureCategorySummary]:
-        return [FailureCategorySummary(category=k, count=v) for k, v in sorted(bucket.items())]
+        return [
+            FailureCategorySummary(category=_FAILURE_CATEGORY_BY_VALUE[k], count=v)
+            for k, v in sorted(bucket.items())
+        ]
 
     return FailureMetricsResponse(
         session_id=session_id,

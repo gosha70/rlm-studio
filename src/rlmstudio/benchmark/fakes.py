@@ -16,10 +16,15 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from rlmstudio.application.dto import LLMResponseDTO, RunConfigDTO, RunResultDTO
+from rlmstudio.application.dto import (
+    LLMResponseDTO,
+    RunConfigDTO,
+    RunResultDTO,
+    StreamChunk,
+)
 from rlmstudio.application.sandbox_vars import (
     MODE_RAG,
     MODE_RLM,
@@ -81,6 +86,16 @@ class ScriptedLLM:
 
     def complete_stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
         yield self.complete(messages).content
+
+    async def complete_async(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
+        """Satisfy LLMPort's async counterpart without a thread hop."""
+        return self.complete(messages)
+
+    async def complete_stream_async(
+        self, messages: list[dict[str, str]]
+    ) -> AsyncIterator[StreamChunk]:
+        """One terminal chunk carrying the whole scripted reply."""
+        yield StreamChunk(delta="", is_final=True, response=self.complete(messages))
 
     def count_tokens(self, text: str) -> int:
         return max(1, len(text) // 4)

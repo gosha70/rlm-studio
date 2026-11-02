@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -373,15 +373,18 @@ class MetricsResponse(BaseModel):
     timeline: list[TimelineEntry] = Field(default_factory=list)
 
 
+FailureCategory: TypeAlias = Literal[
+    "timeout",
+    "prefill_timeout",
+    "budget_exhausted",
+    "context_overflow",
+    "general_error",
+]
+
+
 class FailureCategorySummary(BaseModel):
     # Keep in sync with OutcomeCategory enum in outcome_classifier.py
-    category: Literal[
-        "timeout",
-        "prefill_timeout",
-        "budget_exhausted",
-        "context_overflow",
-        "general_error",
-    ]
+    category: FailureCategory
     count: int = 0
 
 

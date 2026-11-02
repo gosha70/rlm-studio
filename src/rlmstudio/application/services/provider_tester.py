@@ -162,11 +162,8 @@ def _sanitize_error_message(exc: BaseException) -> str:
     if " - " in msg:
         msg = msg.split(" - ", 1)[1]
     # Redaction lives in provider_failure so the run path, which also shows
-    # upstream text now, shares exactly these patterns (#95). The annotation
-    # is load-bearing for mypy: the package ships no `py.typed`, so every
-    # cross-module `rlmstudio.*` import resolves to Any and `warn_return_any`
-    # would otherwise flag the return below.
-    redacted: str = redact_secrets(msg)
+    # upstream text now, shares exactly these patterns (#95).
+    redacted = redact_secrets(msg)
     # Hard cap — upstream may echo request bodies into error strings.
     return redacted[:_ERROR_MESSAGE_MAX_LEN]
 

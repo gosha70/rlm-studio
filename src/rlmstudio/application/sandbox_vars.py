@@ -5,7 +5,7 @@ infrastructure skips them on return), so they live here as the single
 source of truth rather than as magic strings scattered across files.
 """
 
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 # ---------------------------------------------------------------------------
 # Sandbox variable names — bound via sandbox.set_variable(), read by model
@@ -56,12 +56,16 @@ HISTORY_PATH_REPL_VARIABLE = "repl_variable"
 # Execution mode identifiers
 # ---------------------------------------------------------------------------
 
-MODE_DIRECT = "direct"
-MODE_RLM = "rlm"
-MODE_RAG = "rag"
-MODE_COMPARE = "compare"
-MODE_AUTO = "auto"
-MODE_RLM_OFFICIAL = "rlm_official"
+# Each constant carries its exact literal type, not `str`: assigning a
+# plain `str` default to a Pydantic field typed `Literal[...]` is a type
+# error, and `Literal["rlm"]` is also assignable to the narrower
+# `Literal["rlm", "direct", "rag"]` used by the metrics DTO.
+MODE_DIRECT: Final[Literal["direct"]] = "direct"
+MODE_RLM: Final[Literal["rlm"]] = "rlm"
+MODE_RAG: Final[Literal["rag"]] = "rag"
+MODE_COMPARE: Final[Literal["compare"]] = "compare"
+MODE_AUTO: Final[Literal["auto"]] = "auto"
+MODE_RLM_OFFICIAL: Final[Literal["rlm_official"]] = "rlm_official"
 """The paper authors' reference implementation (``rlms``) run as an engine."""
 
 ExecutionMode: TypeAlias = Literal["direct", "rlm", "rag", "rlm_official"]

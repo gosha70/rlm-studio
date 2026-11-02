@@ -267,10 +267,7 @@ def test_cheaper_tiers_actually_cost_less() -> None:
     def total(name: str) -> float:
         rates = price_per_1k(name)
         assert rates is not None
-        # Declared type keeps mypy honest: the package ships no py.typed, so
-        # cross-module values resolve to Any.
-        cost: float = rates[0] + rates[1]
-        return cost
+        return sum(rates)
 
     cheap = total(by_tier[ModelTier.CHEAP])
     balanced = total(by_tier[ModelTier.BALANCED])

@@ -237,8 +237,5 @@ class ClaudeClient(BaseLLMProvider):
             )
             return 0.0
 
-        # Annotated because the package ships no py.typed (#98), so a
-        # cross-module import resolves to Any and warn_return_any fires.
         input_per_1k, output_per_1k = prices
-        total: float = (input_tokens / 1000) * input_per_1k + (output_tokens / 1000) * output_per_1k
-        return total
+        return (input_tokens / 1000) * input_per_1k + (output_tokens / 1000) * output_per_1k

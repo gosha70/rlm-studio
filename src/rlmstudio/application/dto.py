@@ -7,7 +7,7 @@ creating coupling to domain entities or infrastructure types.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
 
 from rlmstudio.application.sandbox_vars import (
     MODE_AUTO,
@@ -160,6 +160,20 @@ class RunConfigDTO:
     max_spill_bytes: int = RLM_DEFAULT_MAX_SPILL_BYTES
     verbose: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+class RegistryConfigKwargs(TypedDict, total=False):
+    """Result-registry limits, shaped for ``RunConfigDTO(**...)``.
+
+    A plain ``dict[str, int]`` unpacked with ``**`` makes mypy check every
+    parameter of the target against ``int`` and fail.  Every key is optional
+    because an unreadable config file falls back to the DTO's own defaults.
+    """
+
+    result_preview_chars: int
+    spill_result_above_bytes: int
+    max_registry_bytes: int
+    max_spill_bytes: int
 
 
 @dataclass

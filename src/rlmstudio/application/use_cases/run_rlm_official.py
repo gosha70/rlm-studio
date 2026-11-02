@@ -174,7 +174,8 @@ class RunRLMOfficialUseCase:
             raise _WallClockExceededError
         if "error" in box:
             raise box["error"]
-        return box["result"]
+        result: RunResultDTO = box["result"]
+        return result
 
     def _finalize(self, result: RunResultDTO, config: RunConfigDTO, start: float) -> RunResultDTO:
         """Stamp mode/engine metadata and apply the post-run token/cost caps."""
