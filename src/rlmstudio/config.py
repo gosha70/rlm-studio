@@ -24,6 +24,7 @@ from rlmstudio.branding import (
     env,
 )
 
+from .application.dto import RegistryConfigKwargs
 from .llm.config import LLMConfig
 
 
@@ -302,7 +303,7 @@ class ExecutionConfig:
             max_spill_bytes=int(data.get("max_spill_bytes", RLM_DEFAULT_MAX_SPILL_BYTES)),
         )
 
-    def registry_kwargs(self) -> dict[str, int]:
+    def registry_kwargs(self) -> RegistryConfigKwargs:
         """The result-registry fields, keyed as ``RunConfigDTO`` names them."""
         return {
             "result_preview_chars": self.result_preview_chars,

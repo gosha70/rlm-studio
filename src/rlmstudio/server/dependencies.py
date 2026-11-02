@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 if TYPE_CHECKING:
     from rlmstudio.application.services.provider_tester import ProviderTestResult
 
-from rlmstudio.application.dto import RunConfigDTO
+from rlmstudio.application.dto import RegistryConfigKwargs, RunConfigDTO
 from rlmstudio.application.ports.llm_port import LLMPort
 from rlmstudio.application.ports.rlm_engine_port import RLMEnginePort
 from rlmstudio.application.sandbox_vars import MODE_AUTO, MODE_DIRECT, MODE_RAG, MODE_RLM
@@ -1447,7 +1447,7 @@ class AppState:
         )
 
 
-def _registry_config_kwargs() -> dict[str, int]:
+def _registry_config_kwargs() -> RegistryConfigKwargs:
     """Result-registry limits from the library config (``execution:`` section).
 
     The Studio config file (``~/.rlm-studio/config.json``) has no UI for these
@@ -1457,7 +1457,7 @@ def _registry_config_kwargs() -> dict[str, int]:
     from rlmstudio.config import get_default_config
 
     try:
-        kwargs: dict[str, int] = get_default_config().execution.registry_kwargs()
+        kwargs: RegistryConfigKwargs = get_default_config().execution.registry_kwargs()
     except Exception:
         return {}
     return kwargs

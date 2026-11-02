@@ -148,7 +148,7 @@ rlm-studio = "rlmstudio.cli.main:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-rlmstudio = ["rlm_studio_config.default.yaml"]
+rlmstudio = ["rlm_studio_config.default.yaml", "py.typed"]
 "rlmstudio.prompts" = ["*.yaml", "*.yml", "*.json"]
 # Bundled Studio UI — populated at release time by the frontend static
 # export. The `_ui/__init__.py` placeholder is always present so the
@@ -212,6 +212,10 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 ignore_missing_imports = true
+# src-layout: resolve `rlmstudio` to src/rlmstudio, not to the installed
+# distribution.  Without this, adding the py.typed marker made mypy find the
+# same module under "src.rlmstudio.…" and "rlmstudio.…" and stop.
+mypy_path = "src"
 # Force CWD as the package-resolution base so that tests/test_api.py resolves
 # to "tests.test_api" (not "dev.repo.rlmkit.tests.test_api") even when a
 # parent directory happens to contain an __init__.py.

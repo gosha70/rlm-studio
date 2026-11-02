@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
+from rlmstudio.application.dto import RegistryConfigKwargs, RunConfigDTO, RunResultDTO
 from rlmstudio.application.sandbox_vars import MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL
 from rlmstudio.application.use_cases.run_comparison import (
     ComparisonResultDTO,
@@ -198,12 +198,12 @@ _PROVIDER_PREFIXES: dict[str, str] = {
 }
 
 
-def _registry_config_kwargs() -> dict[str, int]:
+def _registry_config_kwargs() -> RegistryConfigKwargs:
     """Result-registry limits from the library config (``execution:`` section)."""
     from rlmstudio.config import get_default_config
 
     try:
-        kwargs: dict[str, int] = get_default_config().execution.registry_kwargs()
+        kwargs: RegistryConfigKwargs = get_default_config().execution.registry_kwargs()
     except Exception:  # config unreadable — fall back to the DTO defaults
         return {}
     return kwargs

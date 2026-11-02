@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — `py.typed`: mypy now checks across module boundaries
+
+- The package ships a `py.typed` marker (both wheel and sdist), so a
+  consumer's mypy sees real types instead of `Any` for every `rlmstudio.*`
+  import. `[tool.mypy]` sets `mypy_path = "src"` so the source tree and the
+  installed distribution resolve to one module name.
+- Turning the check on surfaced 20 latent cross-module findings, all fixed:
+  the mode constants carry their exact literal types; the result-registry
+  kwargs are a `TypedDict` rather than `dict[str, int]`; `ScriptedLLM`
+  implements `LLMPort`'s async streaming members; the failure-category
+  response literal is mapped explicitly; and the official-engine result box
+  is typed.
+- The two annotations added in #95 only to work around the missing marker are
+  removed.
+
 ### Removed — retired model identifiers and a dead price table
 
 - The packaged default config no longer carries a `pricing:` block. Nothing
