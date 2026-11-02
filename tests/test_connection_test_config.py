@@ -706,9 +706,7 @@ def test_provider_tester_result_shape_matches_manual_route_consumer() -> None:
 # --------------------------------------------------------------------------
 
 _MODELS_FETCH = "rlmstudio.server.routes.providers._fetch_models_from_api"
-_DISCOVER_CONTEXT = (
-    "rlmstudio.server.routes.llm_providers._discover_context_window"
-)
+_DISCOVER_CONTEXT = "rlmstudio.server.routes.llm_providers._discover_context_window"
 
 
 def _model_infos(*names: str) -> list[ModelInfo]:
@@ -776,9 +774,7 @@ def test_create_flags_an_unavailable_model_with_alternatives(client: TestClient)
         ValueError("malformed JSON body"),
     ],
 )
-def test_create_survives_a_discovery_failure(
-    client: TestClient, exc: Exception
-) -> None:
+def test_create_survives_a_discovery_failure(client: TestClient, exc: Exception) -> None:
     """Timeout, auth rejection and malformed data are all "unknown", not a
     failed save and not a false "unavailable"."""
     with (

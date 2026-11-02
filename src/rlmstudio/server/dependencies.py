@@ -476,10 +476,15 @@ class AppState:
         interval_s = self._resolve_interval_seconds()
         if interval_s is None:
             return
-        # Fresh stop event per thread lifecycle.
-        self._connection_test_stop = threading.Event()
+        # Fresh stop event per thread lifecycle, captured by the loop itself:
+        # a restart replaces the attribute, and a loop whose join timed out
+        # must still follow the event it was started with — not the
+        # replacement — so it exits instead of running beside the new thread.
+        stop_event = threading.Event()
+        self._connection_test_stop = stop_event
         self._connection_test_thread = threading.Thread(
             target=self._connection_test_loop,
+            args=(stop_event,),
             name="rlmkit-connection-test",
             daemon=True,
         )
@@ -549,22 +554,25 @@ class AppState:
                     self._STARTUP_PROBE_DELAY_S,
                 )
 
+        # Capture the lifecycle event BEFORE spawning: a restart between
+        # start() and the target running would otherwise replace the
+        # attribute and the abandoned probe would use the new unset event.
+        stop_event = self._connection_test_stop
         self._startup_probe_thread = threading.Thread(
             target=self._run_startup_probe,
-            args=(delay,),
+            args=(delay, stop_event),
             name="rlmkit-startup-probe",
             daemon=True,
         )
         self._startup_probe_thread.start()
 
-    def _run_startup_probe(self, delay: float) -> None:
+    def _run_startup_probe(self, delay: float, stop_event: threading.Event) -> None:
         """Wait, then run one cycle and the account-list check.
 
-        Captures the stop event once: a restart replaces the attribute, and
-        this one-shot must not observe the replacement as "not stopped" and
-        apply results that were explicitly abandoned.
+        ``stop_event`` is the lifecycle event captured when the thread was
+        created; a restart replaces the attribute, and this one-shot must not
+        observe the replacement as "not stopped".
         """
-        stop_event = self._connection_test_stop
         if delay > 0 and stop_event.wait(timeout=delay):
             return
         try:
@@ -601,29 +609,29 @@ class AppState:
 
         asyncio.run(_run())
 
-    def _connection_test_loop(self) -> None:
+    def _connection_test_loop(self, stop_event: threading.Event) -> None:
         """Background cycle loop.  Sleeps first, then tests.
 
         Sleeps before the first cycle so a --reload restart in dev does not
-        hammer every provider on every code edit.  Uses the stop event's
+        hammer every provider on every code edit.  Uses ``stop_event``'s
         wait() as the sleep primitive so interval changes take effect
         immediately instead of waiting for the current sleep.
+
+        ``stop_event`` is the lifecycle token captured when this thread was
+        created.  It is used exclusively — never the mutable attribute — so a
+        restart that replaced the attribute cannot revive this loop.
         """
         log = self._connection_test_logger
-        while not self._connection_test_stop.is_set():
+        while not stop_event.is_set():
             interval_s = self._resolve_interval_seconds()
             if interval_s is None:
                 log.info("interval resolved to None mid-loop; exiting")
                 return
-            if self._connection_test_stop.wait(timeout=interval_s):
+            if stop_event.wait(timeout=interval_s):
                 break  # stop requested during sleep
             cycle_started = time.monotonic()
-            # Capture the event for this cycle: a restart replaces the
-            # attribute, and this cycle must still honour the stop it was
-            # started under.
-            cycle_event = self._connection_test_stop
             try:
-                self._run_test_cycle(cycle_event)
+                self._run_test_cycle(stop_event)
             except Exception:  # noqa: BLE001 — cycle must not kill the thread
                 log.exception("unhandled exception in connection test cycle")
             cycle_duration = time.monotonic() - cycle_started

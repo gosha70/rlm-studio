@@ -47,10 +47,20 @@ async def refresh_model_check(
     the saved key does not change the model, endpoint or backend, so without
     it an old-key discovery could overwrite the state the edit just cleared.
     """
-    lp = state.get_llm_provider(llm_provider_id)
-    if lp is None:
-        return
-    backend, model, endpoint, revision = lp.backend, lp.model, lp.endpoint, lp.updated_at
+    # Snapshot the provider AND resolve its credential under the same lock.
+    # Resolving them separately lets a concurrent endpoint/key update pair the
+    # old destination with the new secret — the same lock the update route
+    # writes both under.
+    with state._config_lock:
+        lp = state.get_llm_provider(llm_provider_id)
+        if lp is None:
+            return
+        snapshot = lp.model_copy(deep=True)
+        # Same credential boundary as the probe: an environment key is never
+        # sent to a custom endpoint.
+        api_key = resolve_provider_key(snapshot)
+    backend = snapshot.backend
+    model, endpoint, revision = snapshot.model, snapshot.endpoint, snapshot.updated_at
 
     names: list[str] = []
     try:
@@ -59,9 +69,7 @@ async def refresh_model_check(
         models = await _providers._fetch_models_from_api(
             backend,
             endpoint_override=endpoint,
-            # Same credential boundary as the probe: an environment key is
-            # never sent to a custom endpoint.
-            api_key_override=resolve_provider_key(lp),
+            api_key_override=api_key,
             timeout=MODEL_CHECK_TIMEOUT_S,
         )
         names = [m.name for m in models]
@@ -69,7 +77,7 @@ async def refresh_model_check(
         # Provider errors can echo authorization headers or response bodies.
         logger.debug(
             "Model check failed for provider %s: %s",
-            lp.name,
+            snapshot.name,
             redact_secrets(str(exc))[:_ERROR_MESSAGE_MAX_LEN],
         )
 

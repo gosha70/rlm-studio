@@ -22,6 +22,7 @@ import threading
 import time
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -833,3 +834,98 @@ def test_startup_populates_alternatives_from_the_account_list(
 
     assert lp.model_check_status == "unavailable"
     assert lp.model_check_alternatives == ["gpt-4o", "gpt-4o-mini"]
+
+
+class _RecordingThread:
+    """Captures a thread's target/args instead of starting it."""
+
+    instances: list[_RecordingThread] = []
+
+    def __init__(
+        self,
+        target: Any = None,
+        args: tuple[Any, ...] = (),
+        name: str | None = None,
+        daemon: bool | None = None,
+    ) -> None:
+        self.target = target
+        self.args = args
+        self.name = name
+        self.daemon = daemon
+        _RecordingThread.instances.append(self)
+
+    def start(self) -> None:
+        return None
+
+    def join(self, timeout: float | None = None) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return False
+
+
+def test_startup_probe_captures_its_event_before_spawning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restart between start() and execution must not revive the probe.
+
+    The target must use the event captured at scheduling time, not the
+    attribute a restart may have replaced.
+    """
+    state = _startup_state(monkeypatch)
+    _enable_startup_probe(monkeypatch, "1")
+    calls: list[int] = []
+    _RecordingThread.instances = []
+
+    with (
+        patch("rlmstudio.server.dependencies.threading.Thread", _RecordingThread),
+        patch.object(AppState, "_run_test_cycle", lambda self, event=None: calls.append(1)),
+    ):
+        state._start_startup_probe()
+        rec = _RecordingThread.instances[-1]
+        scheduled_event = rec.args[1]
+        assert scheduled_event is state._connection_test_stop
+
+        # Simulate a restart between start() and the target running.
+        state._connection_test_stop = threading.Event()
+        scheduled_event.set()
+        rec.target(*rec.args)
+
+    assert calls == []
+
+
+def test_connection_loop_uses_the_event_it_was_started_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A loop whose join timed out must exit, not follow the replacement event."""
+    state = _startup_state(monkeypatch)
+    monkeypatch.setenv("RLM_STUDIO_CONNECTION_TEST_INTERVAL_SECONDS_OVERRIDE", "5")
+    calls: list[int] = []
+    _RecordingThread.instances = []
+
+    with patch.object(AppState, "_run_test_cycle", lambda self, event=None: calls.append(1)):
+        # Scope the Thread patch to the spawn only: the worker below must be a
+        # real thread, or it would never run the loop.
+        with patch("rlmstudio.server.dependencies.threading.Thread", _RecordingThread):
+            state._start_connection_testing()
+            rec = _RecordingThread.instances[-1]
+            started_event = rec.args[0]
+            assert started_event is state._connection_test_stop
+
+            # Simulate a restart that replaced the attribute after a
+            # timed-out join.
+            replacement = threading.Event()
+            state._connection_test_stop = replacement  # unset replacement
+            started_event.set()  # the lifecycle this loop belongs to stopped
+
+        # Run the loop with a timeout: the fixed version exits immediately;
+        # a regression that follows the replacement would sleep instead, so
+        # unblock it after the timeout to keep the test failing, not hanging.
+        worker = threading.Thread(target=rec.target, args=rec.args, daemon=True)
+        worker.start()
+        worker.join(timeout=1.0)
+        still_running = worker.is_alive()
+        replacement.set()
+
+    assert not still_running
+    assert calls == []
