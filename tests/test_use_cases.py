@@ -5,7 +5,7 @@ sandbox execution is needed. This validates orchestration logic only.
 """
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from rlmstudio.application.dto import (
@@ -13,6 +13,12 @@ from rlmstudio.application.dto import (
     LLMResponseDTO,
     RunConfigDTO,
     RunResultDTO,
+    StreamChunk,
+)
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailureError,
+    ProviderFailureKind,
+    describe_provider_failure,
 )
 from rlmstudio.application.use_cases.run_comparison import (
     ComparisonResultDTO,
@@ -226,6 +232,36 @@ def _build_multi_file_content_for_rlm(records: list[tuple[str, str]]) -> str:
     return index_block + "\n\n" + separator.join(sections)
 
 
+class ProviderFailureLLM:
+    """LLMPort fake whose every call raises a classified provider failure."""
+
+    def __init__(self, kind: ProviderFailureKind = ProviderFailureKind.AUTH) -> None:
+        failure = describe_provider_failure(kind)
+        self.error = ProviderFailureError("classified failure", failure, "invalid x-api-key")
+
+    def complete(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
+        raise self.error
+
+    def complete_stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
+        raise self.error
+        yield ""  # pragma: no cover - keeps this a generator for the type checker
+
+    def count_tokens(self, text: str) -> int:
+        return 0
+
+    def get_pricing(self) -> dict[str, float]:
+        return {}
+
+    async def complete_async(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
+        raise self.error
+
+    async def complete_stream_async(
+        self, messages: list[dict[str, str]]
+    ) -> AsyncIterator[StreamChunk]:
+        raise self.error
+        yield StreamChunk(delta="")  # pragma: no cover - keeps this an async generator
+
+
 # ---------------------------------------------------------------------------
 # RunDirectUseCase tests
 # ---------------------------------------------------------------------------
@@ -274,6 +310,17 @@ class TestRunDirectUseCase:
         assert "Service down" in result.error
         assert result.mode_used == "direct"
 
+    def test_classified_failure_names_the_cause_and_the_fix(self):
+        """A rejected key must produce a card, not the provider traceback."""
+        result = RunDirectUseCase(ProviderFailureLLM()).execute("content", "question")
+
+        assert result.success is False
+        assert result.failure_kind == "auth"
+        assert "Authentication failed" in result.answer
+        assert "The API key was rejected." in result.answer
+        assert "update it in Settings" in result.answer
+        assert "invalid x-api-key" in result.answer
+
     def test_custom_config(self):
         llm = FakeLLM(["yes"])
         config = RunConfigDTO(mode="direct", verbose=True)
@@ -306,6 +353,16 @@ class TestRunRLMUseCase:
         assert result.mode_used == "rlm"
         assert result.answer == "The answer is 42."
         assert result.steps == 1
+
+    def test_classified_failure_sets_an_actionable_answer(self):
+        """RLM used to return an empty answer here, so the UI fell back to
+        "Error: Execution failed"."""
+        result = RunRLMUseCase(ProviderFailureLLM(), FakeSandbox()).execute("content", "question")
+
+        assert result.success is False
+        assert result.failure_kind == "auth"
+        assert "Authentication failed" in result.answer
+        assert "update it in Settings" in result.answer
 
     def test_code_then_final(self):
         llm = FakeLLM(
@@ -688,6 +745,16 @@ class TestRunRLMHelpers:
 # ---------------------------------------------------------------------------
 # RunRAGUseCase tests
 # ---------------------------------------------------------------------------
+
+
+def test_rag_warning_uses_the_provider_card_for_a_classified_failure():
+    """RAG's own heuristics must not wrap a classified failure in a traceback."""
+    from rlmstudio.application.use_cases.run_rag import _format_rag_warning
+
+    warning = _format_rag_warning(ProviderFailureLLM().error, "humanized")
+
+    assert "Authentication failed" in warning
+    assert "update it in Settings" in warning
 
 
 class TestRunRAGUseCase:
@@ -1788,7 +1855,11 @@ class TestCostAccounting:
             call_count[0] += 1
             if call_count[0] > 1 and config is not None:
                 child_configs.append(config)
-            return original_execute(self_inner, content, query, config=config)
+            # Declared type: patching the class method leaves the saved
+            # reference untyped, and the enclosing function returns
+            # RunResultDTO.
+            result: RunResultDTO = original_execute(self_inner, content, query, config=config)
+            return result
 
         with patch.object(RunRLMUseCase, "execute", tracking_execute):
             llm = SlowLLM(

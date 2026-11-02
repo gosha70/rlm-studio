@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
+from rlmstudio.application.services.provider_failure import ProviderFailureKind
 from rlmstudio.application.services.provider_tester import ProviderTestResult
 from rlmstudio.server.dependencies import AppState
 from rlmstudio.server.models import LLMProviderConfig
@@ -82,8 +84,20 @@ def _error_result() -> ProviderTestResult:
     )
 
 
+def _auth_failure_result() -> ProviderTestResult:
+    return ProviderTestResult(
+        status="offline",
+        tested_at=datetime.now(timezone.utc),
+        latency_ms=None,
+        error_message="invalid x-api-key",
+        failure_kind=ProviderFailureKind.AUTH,
+        failure_cause="The API key was rejected.",
+        failure_fix="Check the key has not been revoked or regenerated, then update it in Settings → Providers.",
+    )
+
+
 @pytest.fixture
-def state() -> AppState:
+def state() -> Iterator[AppState]:
     """Fresh state with save_config disabled (in-memory only)."""
     s = AppState(load_from_disk=False)
     s.save_config = lambda: None  # type: ignore[assignment]
@@ -188,6 +202,38 @@ def test_run_cycle_applies_connected_result(state: AppState) -> None:
     assert got.consecutive_failures == 0
     assert got.last_tested_by == "background"
     assert got.last_tested_at is not None
+
+
+def test_cycle_persists_the_failure_classification(state: AppState) -> None:
+    """Even below the offline threshold, the cause is recorded for the row."""
+    lp = _make_lp(status="connected", consecutive_failures=0)
+    state.config.llm_providers = [lp]
+
+    with patch.object(AppState, "_safe_test", lambda self, p: _auth_failure_result()):
+        state._run_test_cycle()
+
+    got = state.config.llm_providers[0]
+    assert got.status == "connected"  # below the N=2 threshold
+    assert got.last_failure_kind == "auth"
+    assert got.last_failure_cause is not None
+    assert "rejected" in got.last_failure_cause
+    assert got.last_failure_fix
+
+
+def test_cycle_success_clears_the_failure_classification(state: AppState) -> None:
+    lp = _make_lp(status="offline")
+    lp.last_failure_kind = "auth"
+    lp.last_failure_cause = "The API key was rejected."
+    lp.last_failure_fix = "Check the key."
+    state.config.llm_providers = [lp]
+
+    with patch.object(AppState, "_safe_test", lambda self, p: _connected_result()):
+        state._run_test_cycle()
+
+    got = state.config.llm_providers[0]
+    assert got.last_failure_kind is None
+    assert got.last_failure_cause is None
+    assert got.last_failure_fix is None
 
 
 def test_consecutive_failure_threshold(state: AppState) -> None:

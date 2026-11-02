@@ -563,6 +563,45 @@ describe("SettingsPage", () => {
     ).toBeInTheDocument();
   });
 
+  test("a provider row shows the persisted failure cause and fix", () => {
+    const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+    vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+      if (key === "config") return swrStub(MOCK_CONFIG);
+      if (key === "llm-providers")
+        return swrStub([
+          {
+            id: "lp-bad",
+            name: "Stale key",
+            backend: "anthropic",
+            model: "claude-sonnet-4-6",
+            endpoint: null,
+            runtime_settings: {
+              temperature: 0.7,
+              top_p: 1.0,
+              max_output_tokens: 4096,
+              timeout_seconds: 30,
+            },
+            status: "offline",
+            last_tested_at: "2026-11-01T13:05:58Z",
+            last_tested_by: "manual",
+            last_failure_kind: "auth",
+            last_failure_cause: "The API key was rejected.",
+            last_failure_fix:
+              "Check the key has not been revoked or regenerated, then update it in Settings → Providers.",
+            consecutive_failures: 1,
+          },
+        ]);
+      return swrStub(undefined);
+    }) as typeof useSWR);
+
+    render(<SettingsPage />);
+
+    expect(
+      screen.getByText(/Last failure: The API key was rejected\./),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/update it in Settings/)).toBeInTheDocument();
+  });
+
   test("editing a cloud gateway sends its saved endpoint to discovery", async () => {
     const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
     vi.mocked(useSWR).mockImplementation(((key: unknown) => {

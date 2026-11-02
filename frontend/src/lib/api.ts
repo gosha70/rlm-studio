@@ -320,6 +320,11 @@ export interface LLMProviderConfig {
   // test route and the background connection-test thread.
   last_tested_at?: string | null;  // ISO-8601 UTC
   last_tested_by?: "manual" | "background" | null;
+  // Classification of the most recent failed probe (#95); cleared by a
+  // successful probe or a change to the probed configuration.
+  last_failure_kind?: string | null;
+  last_failure_cause?: string | null;
+  last_failure_fix?: string | null;
   consecutive_failures?: number;
 }
 

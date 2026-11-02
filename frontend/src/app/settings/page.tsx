@@ -1085,6 +1085,19 @@ function SettingsPageInner() {
                               )}
                           </p>
                         )}
+                        {lp.last_failure_cause && (
+                          <p
+                            className={cn(
+                              "text-xs",
+                              lp.status === "connected"
+                                ? "text-amber-600 dark:text-amber-400"
+                                : "text-destructive",
+                            )}
+                          >
+                            Last failure: {lp.last_failure_cause}
+                            {lp.last_failure_fix && <> &middot; {lp.last_failure_fix}</>}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <Button

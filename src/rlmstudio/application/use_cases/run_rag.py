@@ -23,7 +23,10 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_STEP,
 )
-from rlmstudio.application.services.provider_failure import failure_kind_value
+from rlmstudio.application.services.provider_failure import (
+    failure_answer,
+    failure_kind_value,
+)
 from rlmstudio.prompts import get_mode_system_prompt
 
 
@@ -59,6 +62,13 @@ def _humanize_rag_error(exc: Exception) -> str:
 def _format_rag_warning(exc: Exception, human_msg: str) -> str:
     """Format a ⚠️ warning card for RAG errors."""
     from rlmstudio.infrastructure.llm.litellm_adapter import TIMEOUT_ERROR_PREFIX
+
+    # A classified provider failure (bad key, retired model, rate limit)
+    # already carries its cause and fix; the heuristics below cover the
+    # embedding-specific cases the classifier does not see.
+    classified = failure_answer(exc)
+    if classified is not None:
+        return classified
 
     exc_str = str(exc)
     exc_lower = exc_str.lower()

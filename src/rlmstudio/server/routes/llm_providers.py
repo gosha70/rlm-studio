@@ -304,6 +304,9 @@ async def update_llm_provider(
             lp.status = "configured"
             lp.last_tested_at = None
             lp.last_tested_by = None
+            lp.last_failure_kind = None
+            lp.last_failure_cause = None
+            lp.last_failure_fix = None
             lp.consecutive_failures = 0
             _status_cache.pop(lp.id, None)
 
@@ -314,6 +317,9 @@ async def update_llm_provider(
             lp.status = "configured"
             lp.last_tested_at = None
             lp.last_tested_by = None
+            lp.last_failure_kind = None
+            lp.last_failure_cause = None
+            lp.last_failure_fix = None
             lp.consecutive_failures = 0
             _status_cache.pop(lp.id, None)
 
@@ -582,7 +588,10 @@ async def test_llm_provider(
       ``consecutive_failures=1``.  The user is actively looking at the
       result and should see the flip immediately.
     """
-    from rlmstudio.application.services.provider_tester import test_provider
+    from rlmstudio.application.services.provider_tester import (
+        record_failure_classification,
+        test_provider,
+    )
 
     lp = state.get_llm_provider(llm_provider_id)
     if not lp:
@@ -609,6 +618,7 @@ async def test_llm_provider(
             lp.consecutive_failures = 1
         lp.last_tested_at = result.tested_at
         lp.last_tested_by = "manual"
+        record_failure_classification(lp, result)
         _status_cache[lp.id] = lp.status
         state.save_config()
 

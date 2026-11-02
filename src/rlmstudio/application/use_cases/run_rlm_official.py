@@ -33,6 +33,10 @@ from rlmstudio.application.sandbox_vars import (
     RESULT_KEY_COST_KNOWN,
     RESULT_KEY_ENGINE_VERSION,
 )
+from rlmstudio.application.services.provider_failure import (
+    failure_answer,
+    failure_kind_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +89,7 @@ class RunRLMOfficialUseCase:
         except _WallClockExceededError:
             return self._timeout_result(config, start)
         except Exception as exc:
-            return self._error_result(str(exc), start)
+            return self._error_result(exc, start)
 
         return self._finalize(result, config, start)
 
@@ -117,7 +121,7 @@ class RunRLMOfficialUseCase:
         except TimeoutError:
             return self._timeout_result(config, start)
         except Exception as exc:
-            return self._error_result(str(exc), start)
+            return self._error_result(exc, start)
 
         result = self._finalize(result, config, start)
 
@@ -245,12 +249,14 @@ class RunRLMOfficialUseCase:
             },
         )
 
-    def _error_result(self, error: str, start: float) -> RunResultDTO:
+    def _error_result(self, exc: Exception, start: float) -> RunResultDTO:
+        error = str(exc)
         return RunResultDTO(
-            answer=f"⚠️ **Execution error**.\n\n{error}",
+            answer=failure_answer(exc) or f"⚠️ **Execution error**.\n\n{error}",
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
             error=error,
+            failure_kind=failure_kind_value(exc),
             elapsed_time=time.time() - start,
             # The engine may have raised part-way through a run it had already
             # paid for, so the cost is unknown rather than zero.

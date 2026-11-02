@@ -347,3 +347,20 @@ def test_provider(
 # is a domain verb that tests import directly, mark it as non-test so pytest
 # skips it instead of treating it as a test case missing fixtures.
 test_provider.__test__ = False  # type: ignore[attr-defined]
+
+
+def record_failure_classification(provider: LLMProviderConfig, result: ProviderTestResult) -> None:
+    """Persist (or clear) the last failure classification on *provider*.
+
+    Called by the manual test route and the background cycle.  A successful
+    probe clears the fields; any failure stores the classifier's kind, cause
+    and fix, so a row can state them after the transient test banner is gone.
+    """
+    if result.status == "connected":
+        provider.last_failure_kind = None
+        provider.last_failure_cause = None
+        provider.last_failure_fix = None
+        return
+    provider.last_failure_kind = result.failure_kind.value if result.failure_kind else None
+    provider.last_failure_cause = result.failure_cause
+    provider.last_failure_fix = result.failure_fix

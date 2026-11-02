@@ -640,7 +640,10 @@ export default function ChatPage() {
             delete execMapRef.current[executionId];
             pendingCountRef.current = Math.max(0, pendingCountRef.current - 1);
 
-            const errorAnswer = trace.result?.answer || "Error: Execution failed";
+            const errorAnswer =
+              trace.result?.answer ||
+              trace.result?.error ||
+              "Error: Execution failed";
             setTurns((prev) =>
               prev.map((turn) =>
                 turn.id === turnId
