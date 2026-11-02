@@ -9,6 +9,7 @@ from datetime import datetime
 import pytest
 
 from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
+from rlmstudio.domain.model_catalog import DEFAULT_ANTHROPIC_MODEL
 from rlmstudio.ui.services import (
     ChatManager,
     ChatMessage,
@@ -307,7 +308,7 @@ class TestLLMConfigManager:
         # Valid Anthropic key format (sk-ant-...)
         success = manager.test_connection(
             provider="anthropic",
-            model="claude-3-opus",
+            model=DEFAULT_ANTHROPIC_MODEL,
             api_key="sk-ant-test-key",
         )
         assert success is True
@@ -318,7 +319,7 @@ class TestLLMConfigManager:
         # Invalid Anthropic key format
         success = manager.test_connection(
             provider="anthropic",
-            model="claude-3-opus",
+            model=DEFAULT_ANTHROPIC_MODEL,
             api_key="sk-test-key",  # OpenAI format, not Anthropic
         )
         assert success is False

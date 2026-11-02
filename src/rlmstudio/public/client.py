@@ -36,7 +36,7 @@ class RLMKitClient:
 
     By default, ``provider="litellm"`` routes all calls through LiteLLM,
     which supports 100+ providers via model-name prefixes (e.g.
-    ``"gpt-4o"``, ``"claude-3-opus-20240229"``, ``"ollama/llama3"``).
+    ``"gpt-4o"``, ``"claude-sonnet-4-6"``, ``"ollama/llama3"``).
     Set ``provider="mock"`` for testing.
 
     For the paper's two-model cost optimization, pass both

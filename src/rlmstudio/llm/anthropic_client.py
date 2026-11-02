@@ -24,7 +24,7 @@ class ClaudeClient(BaseLLMProvider):
         >>> import os
         >>> os.environ['ANTHROPIC_API_KEY'] = 'sk-ant-...'
         >>>
-        >>> client = ClaudeClient(model="claude-3-opus-20240229")
+        >>> client = ClaudeClient(model="claude-sonnet-4-6")
         >>> response = client.complete([
         ...     {"role": "user", "content": "Hello!"}
         ... ])
@@ -44,7 +44,7 @@ class ClaudeClient(BaseLLMProvider):
         Initialize Claude client.
 
         Args:
-            model: Model name (e.g., 'claude-3-opus-20240229', 'claude-3-sonnet-20240229')
+            model: Model name (e.g., 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001')
             api_key: Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
             base_url: Custom API base URL (optional)
             temperature: Sampling temperature (0.0-1.0)

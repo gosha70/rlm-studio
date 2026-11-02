@@ -172,6 +172,32 @@ def test_unknown_model_reports_no_cost_rather_than_a_guess() -> None:
     assert ClaudeClient.calculate_cost(client, 1_000_000, 1_000_000) == 0.0
 
 
+def test_packaged_default_config_names_no_retired_model_or_price_table() -> None:
+    """The default YAML is what users copy; it must not seed the problem.
+
+    It is package data rather than a code path, so nothing derived from the
+    catalog guards it. The pricing block it used to carry was read into a
+    field no code consumed — a table with no owner, guaranteed to go stale.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    import rlmstudio
+
+    path = Path(rlmstudio.__file__).parent / "rlm_studio_config.default.yaml"
+    text = path.read_text()
+
+    for retired in RETIRED_ANTHROPIC_MODELS:
+        assert retired not in text, f"default config still names retired {retired}"
+
+    data = yaml.safe_load(text)
+    assert "pricing" not in data.get("llm", {}), (
+        "the default config carries a pricing block nothing reads; delete it "
+        "rather than letting it drift"
+    )
+
+
 def test_ui_catalog_offers_exactly_the_domain_catalog() -> None:
     """The UI list derives from the domain one; pin that nothing is lost.
 
@@ -241,7 +267,10 @@ def test_cheaper_tiers_actually_cost_less() -> None:
     def total(name: str) -> float:
         rates = price_per_1k(name)
         assert rates is not None
-        return sum(rates)
+        # Declared type keeps mypy honest: the package ships no py.typed, so
+        # cross-module values resolve to Any.
+        cost: float = rates[0] + rates[1]
+        return cost
 
     cheap = total(by_tier[ModelTier.CHEAP])
     balanced = total(by_tier[ModelTier.BALANCED])

@@ -26,7 +26,7 @@ from .core import (  # noqa: I001 — .core must be imported before .api to avoi
 )
 from .config import ExecutionConfig, MonitoringConfig, RLMConfig, SecurityConfig
 from .llm import BaseLLMProvider, LLMResponse, MockLLMClient
-from .llm.config import LLMConfig, LLMProviderConfig, ModelPricing
+from .llm.config import LLMConfig, LLMProviderConfig
 from .prompts import format_system_prompt, get_default_system_prompt
 from .api import (
     InteractResult,
@@ -140,7 +140,6 @@ __all__ = [
     "MonitoringConfig",
     "LLMConfig",
     "LLMProviderConfig",
-    "ModelPricing",
     # Errors
     "RLMError",
     "BudgetExceeded",

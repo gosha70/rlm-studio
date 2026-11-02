@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed — retired model identifiers and a dead price table
+
+- The packaged default config no longer carries a `pricing:` block. Nothing
+  read it: `LLMConfig.pricing` had no consumers, and every cost path prices
+  through `domain/model_catalog.py`. The field, `LLMConfig.get_pricing` and
+  the `ModelPricing` export are removed — a pre-release API cleanup, since
+  the package is still `1.0.0rc1` and nothing consumed them. An older config
+  file that still contains the block loads unchanged and drops it on the next
+  save.
+- `ui/utils.PROVIDERS` — an unused table of retired OpenAI/Claude/local ids
+  with its own prices — is deleted. `LLMConfigManager.VALID_MODELS` now
+  derives from the domain catalog, so its offline validation accepts current
+  models instead of rejecting them.
+- Docstring examples name current models, and a guard test fails if the
+  packaged default config names a retired model or reintroduces a pricing
+  block.
+
 ### Fixed — LLM Provider configuration
 
 - **The Model field no longer offers browser-history values.** It is a plain

@@ -269,7 +269,7 @@ class LiteLLMAdapter:
     - Provider health checking
 
     Args:
-        model: Default model identifier (e.g. "gpt-4o", "claude-3-opus-20240229",
+        model: Default model identifier (e.g. "gpt-4o", "claude-sonnet-4-6",
             "ollama/llama3"). LiteLLM uses provider prefixes for routing.
         root_model: Model for root-level reasoning (overrides model for root calls).
         recursive_model: Cheaper model for recursive exploration subcalls.
