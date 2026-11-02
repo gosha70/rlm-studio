@@ -187,3 +187,96 @@ class TestTraceResponseShape:
         # Legacy tokens feed prompt/completion for back-compat.
         assert step["prompt_tokens"] == 5
         assert step["completion_tokens"] == 2
+
+    def test_in_memory_steps_carry_per_step_cost(self, client: TestClient) -> None:
+        """Issue #94: the live-execution builder prices each step."""
+        from rlmstudio.infrastructure.llm.pricing import completion_cost
+
+        _seed_execution(
+            execution_id="cost-exec-1",
+            steps=[
+                {
+                    "role": "assistant",
+                    "content": "ok",
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                    "model": "gpt-4o",
+                },
+                # No tokens of its own: a genuine zero, not "unavailable".
+                {
+                    "role": "execution",
+                    "content": "",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "model": "some-model-the-cost-map-has-never-heard-of",
+                },
+                # Token-bearing, but the model is not in the cost map.
+                {
+                    "role": "assistant",
+                    "content": "ok",
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                    "model": "some-model-the-cost-map-has-never-heard-of",
+                },
+            ],
+        )
+
+        steps = client.get("/api/traces/cost-exec-1").json()["steps"]
+
+        expected = completion_cost("gpt-4o", 1000, 500)
+        assert expected is not None
+        assert expected > 0
+        assert steps[0]["cost_usd"] == pytest.approx(expected)
+        assert steps[1]["cost_usd"] == 0.0
+        assert steps[2]["cost_usd"] is None
+
+    def test_persisted_steps_carry_per_step_cost(self, client: TestClient) -> None:
+        """Issue #94: the telemetry builder prices each step and falls back
+        to the run's model when the row has none."""
+        from rlmstudio.infrastructure.llm.pricing import completion_cost
+
+        state = get_state()
+        exec_id = "cost-persisted-1"
+        state.executions.pop(exec_id, None)
+
+        run_id = state.telemetry.record_run(
+            run_id=exec_id,
+            created_at=1_000.0,
+            mode="direct",
+            provider="openai",
+            model="gpt-4o",
+            query="q",
+            answer="ok",
+            input_tokens=1000,
+            output_tokens=500,
+            total_tokens=1500,
+            success=True,
+            steps_count=2,
+        )
+        state.telemetry.record_step(
+            run_id=run_id,
+            step_index=0,
+            action_type="final",
+            input_tokens=1000,
+            output_tokens=500,
+            prompt_tokens=1000,
+            completion_tokens=500,
+            # No model on the row: the run-level model prices it.
+        )
+        state.telemetry.record_step(
+            run_id=run_id,
+            step_index=1,
+            action_type="inspect",
+            input_tokens=0,
+            output_tokens=0,
+            model="some-model-the-cost-map-has-never-heard-of",
+        )
+
+        steps = client.get(f"/api/traces/{exec_id}").json()["steps"]
+
+        expected = completion_cost("gpt-4o", 1000, 500)
+        assert expected is not None
+        assert expected > 0
+        assert steps[0]["cost_usd"] == pytest.approx(expected)
+        assert steps[0]["model"] == "gpt-4o"
+        assert steps[1]["cost_usd"] == 0.0
