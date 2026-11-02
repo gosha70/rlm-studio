@@ -39,22 +39,29 @@ from rlmstudio.domain.entities import ExecutionTrace, TraceStep
 # export path) continue to work via a re-export on ``chat.py``.
 #
 # Contract is pinned: ``assistant → inspect``, ``execution → subcall``,
-# last step promotes to ``final`` **only** when ``success=True``.
+# ``compaction → compaction``, and the last step promotes to ``final``
+# **only** when ``success=True`` and it is not a compaction row.
 # Failed-terminal steps keep the role-mapped action_type (usually
 # ``inspect``); no ``error`` branch exists and this spec does not add
 # one (see v1.5 prose correction).
 
-_ACTION_TYPE_MAP = {"assistant": "inspect", "execution": "subcall"}
+_ACTION_TYPE_MAP = {
+    "assistant": "inspect",
+    "execution": "subcall",
+    "compaction": "compaction",
+}
 
 
 def _canonical_action_type(role: str | None, is_last: bool, success: bool) -> str:
     """Normalize a raw trace role into a canonical ExecutionTrace action type.
 
     Mirrors the normalization used by :func:`_save_trajectory` so telemetry
-    rows, JSONL exports, and in-memory traces all agree.
+    rows, JSONL exports, and in-memory traces all agree.  A compaction row is
+    never promoted to ``final``: it is a controller event, not the run's
+    terminal answer.
     """
     action_type = _ACTION_TYPE_MAP.get(role or "", "inspect")
-    if is_last and success:
+    if is_last and success and action_type != "compaction":
         action_type = "final"
     return action_type
 
@@ -74,8 +81,8 @@ def _translate_raw_trace_entry(
       role-mapped action_type (usually ``inspect``); no ``error``
       promotion exists and this spec does not add one.
     - ``content`` → ``output`` for execution-like roles
-      (``execution``, ``rag_retrieval``); → ``raw_response`` for
-      ``assistant``.
+      (``execution``, ``rag_retrieval``, ``compaction``); →
+      ``raw_response`` for ``assistant``.
     - ``input_tokens`` + ``output_tokens`` → ``prompt_tokens`` +
       ``completion_tokens``; their sum feeds the legacy
       ``tokens_used``.
@@ -91,7 +98,7 @@ def _translate_raw_trace_entry(
         index=int(d.get(TRACE_KEY_STEP, 0) or 0),
         action_type=action_type,  # type: ignore[arg-type]
         code=d.get(TRACE_KEY_CODE),
-        output=content if role in ("execution", "rag_retrieval") else None,
+        output=content if role in ("execution", "rag_retrieval", "compaction") else None,
         raw_response=content if role == "assistant" else None,
         tokens_used=input_tokens + output_tokens,
         duration=float(d.get(TRACE_KEY_ELAPSED_SECONDS, 0.0) or 0.0),

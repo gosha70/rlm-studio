@@ -27,8 +27,10 @@ from rlmstudio.application.sandbox_vars import (
     MODE_RLM,
     TRACE_KEY_CLAMP,
     TRACE_KEY_CODE,
+    TRACE_KEY_COMPACTION_REASON,
     TRACE_KEY_CONTENT,
     TRACE_KEY_ELAPSED_SECONDS,
+    TRACE_KEY_IDS_STUBBED,
     TRACE_KEY_INPUT_TOKENS,
     TRACE_KEY_MODEL,
     TRACE_KEY_OUTPUT_TOKENS,
@@ -38,6 +40,19 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_SEQ,
     TRACE_KEY_STEP,
+    TRACE_KEY_TOKENS_AFTER,
+    TRACE_KEY_TOKENS_BEFORE,
+    TRACE_ROLE_COMPACTION,
+)
+from rlmstudio.application.services.context_compaction import (
+    COMPACTION_REASON_OVERFLOW,
+    COMPACTION_REASON_THRESHOLD,
+    CompactionRecord,
+    MessageTokenCounter,
+    compact_messages,
+    estimate_tokens,
+    message_chars,
+    should_compact,
 )
 from rlmstudio.application.services.execution_preview import format_preview, truncation_marker
 from rlmstudio.application.services.inspect_dispatcher import dispatch_inspect, display_code
@@ -180,6 +195,10 @@ class RunRLMUseCase:
         hard_nudge_sent = False  # stronger convergence nudge near the end
         post_coverage_stall = 0  # no-progress turns after all files inspected
         input_cost_per_1m, output_cost_per_1m = self._get_pricing(self._llm)
+        # Fallback token estimate for adapters without count_tokens(messages=):
+        # the previous prompt's reported estimate plus appended chars/4.
+        prior_prompt_tokens: int | None = None
+        prior_prompt_chars = 0
 
         self._emit_runtime_fingerprint(
             trace=trace,
@@ -253,30 +272,69 @@ class RunRLMUseCase:
                     budget_config.max_steps is not None
                     and budget_state.steps >= budget_config.max_steps
                 )
-                call_messages = (
-                    messages
-                    + [
-                        {
-                            "role": "user",
-                            "content": get_rlm_message("force_final_nudge"),
-                        }
-                    ]
-                    if is_last_step
-                    else messages
+                messages, call_messages, compaction = self._compact_before_call(
+                    messages=messages,
+                    registry=registry,
+                    config=config,
+                    is_last_step=is_last_step,
+                    prior_prompt_tokens=prior_prompt_tokens,
+                    prior_prompt_chars=prior_prompt_chars,
                 )
+                if compaction is not None:
+                    trace_seq += 1
+                    trace.append(
+                        self._compaction_entry(compaction, step=budget_state.steps, seq=trace_seq)
+                    )
 
-                # Call LLM — break to synthesis/warning fallback on context window overflow
-                try:
-                    response: LLMResponseDTO = self._llm.complete(call_messages)
-                except Exception as llm_exc:
-                    if self._is_context_overflow(llm_exc):
-                        overflow_at_step = budget_state.steps
-                        logger.warning(
-                            "Context window exceeded at step %d; falling back to warning",
-                            budget_state.steps,
-                        )
+                # Call LLM. On a context-window overflow, compact once and
+                # retry the same step; a second overflow falls through to the
+                # synthesis / limit-warning fallback.
+                response: LLMResponseDTO | None = None
+                for attempt in range(2):
+                    try:
+                        response = self._llm.complete(call_messages)
                         break
-                    raise
+                    except Exception as llm_exc:
+                        if not self._is_context_overflow(llm_exc):
+                            raise
+                        if attempt == 1:
+                            overflow_at_step = budget_state.steps
+                            logger.warning(
+                                "Context window exceeded again at step %d; falling back to warning",
+                                budget_state.steps,
+                            )
+                            break
+                        messages, overflow_record = self._compact_for_overflow(
+                            messages=messages,
+                            registry=registry,
+                            config=config,
+                        )
+                        if not overflow_record.changed:
+                            overflow_at_step = budget_state.steps
+                            logger.warning(
+                                "Context window exceeded at step %d with no "
+                                "compactable history; falling back to warning",
+                                budget_state.steps,
+                            )
+                            break
+                        trace_seq += 1
+                        trace.append(
+                            self._compaction_entry(
+                                overflow_record,
+                                step=budget_state.steps,
+                                seq=trace_seq,
+                            )
+                        )
+                        call_messages = self._build_call_messages(messages, is_last_step)
+                if response is None:
+                    break
+
+                clamp_info = getattr(self._llm, "last_clamp_info", None) or {}
+                _estimated = clamp_info.get("estimated_prompt_tokens")
+                prior_prompt_tokens = (
+                    int(_estimated) if isinstance(_estimated, int | float) else None
+                )
+                prior_prompt_chars = message_chars(call_messages)
                 cumulative_input += response.input_tokens
                 cumulative_output += response.output_tokens
                 budget_state.input_tokens = cumulative_input
@@ -304,7 +362,6 @@ class RunRLMUseCase:
                     last_assistant_text = text.strip()
 
                 trace_seq += 1
-                clamp_info = getattr(self._llm, "last_clamp_info", None) or {}
                 trace_entry: dict[str, Any] = {
                     TRACE_KEY_STEP: budget_state.steps,
                     TRACE_KEY_SEQ: trace_seq,
@@ -492,6 +549,15 @@ class RunRLMUseCase:
                             "content": f"Execution result:\n{exec_content}",
                         }
                     )
+                    result_id = (
+                        result_ref.id
+                        if result_ref is not None
+                        else readback.ref.id
+                        if readback is not None
+                        else None
+                    )
+                    if result_id is not None:
+                        registry.note_message(len(messages) - 1, result_id)
                     # Append repeat-detection nudge AFTER the exec result so the
                     # model sees both the output (for learning) and the guidance.
                     if repeat_nudge is not None:
@@ -1010,6 +1076,8 @@ class RunRLMUseCase:
         hard_nudge_sent = False  # stronger convergence nudge near the end
         post_coverage_stall = 0  # no-progress turns after all files inspected
         input_cost_per_1m, output_cost_per_1m = self._get_pricing(self._llm)
+        prior_prompt_tokens: int | None = None
+        prior_prompt_chars = 0
 
         self._emit_runtime_fingerprint(
             trace=trace,
@@ -1078,70 +1146,112 @@ class RunRLMUseCase:
                     budget_config.max_steps is not None
                     and budget_state.steps >= budget_config.max_steps
                 )
-                call_messages = (
-                    messages
-                    + [
-                        {
-                            "role": "user",
-                            "content": get_rlm_message("force_final_nudge"),
-                        }
-                    ]
-                    if is_last_step
-                    else messages
+                messages, call_messages, compaction = self._compact_before_call(
+                    messages=messages,
+                    registry=registry,
+                    config=config,
+                    is_last_step=is_last_step,
+                    prior_prompt_tokens=prior_prompt_tokens,
+                    prior_prompt_chars=prior_prompt_chars,
                 )
+                if compaction is not None:
+                    trace_seq += 1
+                    compaction_entry = self._compaction_entry(
+                        compaction, step=budget_state.steps, seq=trace_seq
+                    )
+                    trace.append(compaction_entry)
+                    if event_emitter:
+                        await event_emitter.on_step(compaction_entry)
 
                 # Stream tokens if emitter and async streaming are available.
-                # Break to synthesis fallback on context window overflow.
-                try:
-                    if event_emitter and hasattr(self._llm, "complete_stream_async"):
-                        collected: list[str] = []
-                        final_dto: LLMResponseDTO | None = None
-                        async for chunk in self._llm.complete_stream_async(call_messages):
-                            if chunk.is_final:
-                                final_dto = chunk.response
-                                continue
-                            if chunk.delta:
-                                collected.append(chunk.delta)
-                                await event_emitter.on_token(chunk.delta)
-                        if final_dto is not None:
-                            response = final_dto
-                            # `content` is authoritative on the final DTO;
-                            # the collected deltas are echoed to the WS for
-                            # UX but do not feed token accounting.
+                # On a context-window overflow, compact once and retry the same
+                # step; a second overflow falls through to synthesis.
+                response: LLMResponseDTO | None = None
+                for attempt in range(2):
+                    try:
+                        if event_emitter and hasattr(self._llm, "complete_stream_async"):
+                            collected: list[str] = []
+                            final_dto: LLMResponseDTO | None = None
+                            async for chunk in self._llm.complete_stream_async(call_messages):
+                                if chunk.is_final:
+                                    final_dto = chunk.response
+                                    continue
+                                if chunk.delta:
+                                    collected.append(chunk.delta)
+                                    await event_emitter.on_token(chunk.delta)
+                            if final_dto is not None:
+                                response = final_dto
+                                # `content` is authoritative on the final DTO;
+                                # the collected deltas are echoed to the WS for
+                                # UX but do not feed token accounting.
+                            else:
+                                # Defensive fallback: adapter did not emit a
+                                # terminal chunk. Preserve the pre-Phase-1
+                                # synthesis so the use case still produces a
+                                # DTO, and log the contract violation.
+                                logger.warning(
+                                    "complete_stream_async did not yield a terminal "
+                                    "StreamChunk; falling back to token-length heuristic"
+                                )
+                                text = "".join(collected)
+                                approx_input = max(
+                                    1, sum(len(m["content"]) for m in call_messages) // 4
+                                )
+                                approx_output = max(1, len(text) // 4)
+                                response = LLMResponseDTO(
+                                    content=text,
+                                    model=getattr(self._llm, "active_model", ""),
+                                    input_tokens=approx_input,
+                                    output_tokens=approx_output,
+                                )
+                        elif hasattr(self._llm, "complete_async"):
+                            response = await self._llm.complete_async(call_messages)
                         else:
-                            # Defensive fallback: adapter did not emit a
-                            # terminal chunk. Preserve the pre-Phase-1
-                            # synthesis so the use case still produces a
-                            # DTO, and log the contract violation.
-                            logger.warning(
-                                "complete_stream_async did not yield a terminal "
-                                "StreamChunk; falling back to token-length heuristic"
-                            )
-                            text = "".join(collected)
-                            approx_input = max(
-                                1, sum(len(m["content"]) for m in call_messages) // 4
-                            )
-                            approx_output = max(1, len(text) // 4)
-                            response = LLMResponseDTO(
-                                content=text,
-                                model=getattr(self._llm, "active_model", ""),
-                                input_tokens=approx_input,
-                                output_tokens=approx_output,
-                            )
-                    elif hasattr(self._llm, "complete_async"):
-                        response = await self._llm.complete_async(call_messages)
-                    else:
-                        response = await asyncio.to_thread(self._llm.complete, call_messages)
-                except Exception as llm_exc:
-                    if self._is_context_overflow(llm_exc):
-                        overflow_at_step = budget_state.steps
-                        logger.warning(
-                            "Context window exceeded at step %d; attempting synthesis fallback",
-                            budget_state.steps,
-                        )
+                            response = await asyncio.to_thread(self._llm.complete, call_messages)
                         break
-                    raise
+                    except Exception as llm_exc:
+                        if not self._is_context_overflow(llm_exc):
+                            raise
+                        if attempt == 1:
+                            overflow_at_step = budget_state.steps
+                            logger.warning(
+                                "Context window exceeded again at step %d; "
+                                "falling back to synthesis",
+                                budget_state.steps,
+                            )
+                            break
+                        messages, overflow_record = self._compact_for_overflow(
+                            messages=messages,
+                            registry=registry,
+                            config=config,
+                        )
+                        if not overflow_record.changed:
+                            overflow_at_step = budget_state.steps
+                            logger.warning(
+                                "Context window exceeded at step %d with no "
+                                "compactable history; falling back to synthesis",
+                                budget_state.steps,
+                            )
+                            break
+                        trace_seq += 1
+                        overflow_entry = self._compaction_entry(
+                            overflow_record,
+                            step=budget_state.steps,
+                            seq=trace_seq,
+                        )
+                        trace.append(overflow_entry)
+                        if event_emitter:
+                            await event_emitter.on_step(overflow_entry)
+                        call_messages = self._build_call_messages(messages, is_last_step)
+                if response is None:
+                    break
 
+                clamp_info = getattr(self._llm, "last_clamp_info", None) or {}
+                _estimated = clamp_info.get("estimated_prompt_tokens")
+                prior_prompt_tokens = (
+                    int(_estimated) if isinstance(_estimated, int | float) else None
+                )
+                prior_prompt_chars = message_chars(call_messages)
                 cumulative_input += response.input_tokens
                 cumulative_output += response.output_tokens
                 budget_state.input_tokens = cumulative_input
@@ -1166,7 +1276,6 @@ class RunRLMUseCase:
                     last_assistant_text = text.strip()
 
                 trace_seq += 1
-                clamp_info = getattr(self._llm, "last_clamp_info", None) or {}
                 step_entry: dict[str, Any] = {
                     TRACE_KEY_STEP: budget_state.steps,
                     TRACE_KEY_SEQ: trace_seq,
@@ -1361,6 +1470,15 @@ class RunRLMUseCase:
                             "content": f"Execution result:\n{exec_content}",
                         }
                     )
+                    result_id = (
+                        result_ref.id
+                        if result_ref is not None
+                        else readback.ref.id
+                        if readback is not None
+                        else None
+                    )
+                    if result_id is not None:
+                        registry.note_message(len(messages) - 1, result_id)
                     # Append repeat-detection nudge AFTER the exec result so the
                     # model sees both the output (for learning) and the guidance.
                     if repeat_nudge is not None:
@@ -2176,6 +2294,8 @@ class RunRLMUseCase:
             formatted, exec_result_limit, result_ref, config.result_preview_chars
         )
         messages.append({"role": "user", "content": f"Execution result:\n{exec_content}"})
+        if result_ref is not None:
+            registry.note_message(len(messages) - 1, result_ref.id)
         messages.append(
             {
                 "role": "user",
@@ -2464,6 +2584,113 @@ class RunRLMUseCase:
         if not parts:
             parts.append("Code executed successfully (no output)")
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _build_call_messages(
+        messages: list[dict[str, str]], is_last_step: bool
+    ) -> list[dict[str, str]]:
+        """Messages sent for this step, including the last-step final nudge."""
+        if not is_last_step:
+            return messages
+        return messages + [{"role": "user", "content": get_rlm_message("force_final_nudge")}]
+
+    def _context_window(self) -> int | None:
+        """The adapter's context window in tokens, when it exposes one."""
+        try:
+            value = getattr(self._llm, "context_window", None)
+            return int(value) if value else None
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _message_counter(self) -> MessageTokenCounter | None:
+        """The adapter's full-message counter, when it supports one."""
+        counter = getattr(self._llm, "count_tokens", None)
+        if not callable(counter):
+            return None
+
+        def count(*, messages: list[dict[str, str]]) -> int:
+            return int(counter(messages=messages))
+
+        return count
+
+    def _compact_before_call(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        registry: ResultRegistry,
+        config: RunConfigDTO,
+        is_last_step: bool,
+        prior_prompt_tokens: int | None,
+        prior_prompt_chars: int,
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]], CompactionRecord | None]:
+        """Compact older history when the pending prompt approaches the window.
+
+        Returns ``(messages, call_messages, record)``.  ``record`` is ``None``
+        when no compaction ran or it changed nothing.
+        """
+        call_messages = self._build_call_messages(messages, is_last_step)
+        estimate = estimate_tokens(
+            self._llm,
+            call_messages,
+            prior_prompt_tokens=prior_prompt_tokens,
+            prior_prompt_chars=prior_prompt_chars,
+        )
+        if not should_compact(
+            estimate,
+            self._context_window(),
+            config.compaction_reserve_tokens,
+        ):
+            return messages, call_messages, None
+        compacted, record = compact_messages(
+            messages,
+            registry,
+            keep_last=config.compaction_keep_last,
+            reason=COMPACTION_REASON_THRESHOLD,
+            counter=self._message_counter(),
+        )
+        if not record.changed:
+            return messages, call_messages, None
+        return compacted, self._build_call_messages(compacted, is_last_step), record
+
+    def _compact_for_overflow(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        registry: ResultRegistry,
+        config: RunConfigDTO,
+    ) -> tuple[list[dict[str, str]], CompactionRecord]:
+        """Compact after a context overflow; the caller retries the same step once."""
+        return compact_messages(
+            messages,
+            registry,
+            keep_last=config.compaction_keep_last,
+            reason=COMPACTION_REASON_OVERFLOW,
+            counter=self._message_counter(),
+        )
+
+    @staticmethod
+    def _compaction_entry(
+        record: CompactionRecord,
+        *,
+        step: int,
+        seq: int,
+    ) -> dict[str, Any]:
+        """The raw trace row for one compaction."""
+        return {
+            TRACE_KEY_STEP: step,
+            TRACE_KEY_SEQ: seq,
+            TRACE_KEY_ROLE: TRACE_ROLE_COMPACTION,
+            TRACE_KEY_CONTENT: (
+                f"Compacted older context ({record.reason}): "
+                f"{len(record.ids_stubbed)} result(s) stubbed, "
+                f"{record.actions_compacted} action(s) shortened; "
+                f"~{record.tokens_before:,} → ~{record.tokens_after:,} tokens."
+            ),
+            TRACE_KEY_IDS_STUBBED: list(record.ids_stubbed),
+            TRACE_KEY_TOKENS_BEFORE: record.tokens_before,
+            TRACE_KEY_TOKENS_AFTER: record.tokens_after,
+            TRACE_KEY_COMPACTION_REASON: record.reason,
+        }
 
     @staticmethod
     def _new_registry(config: RunConfigDTO) -> ResultRegistry:

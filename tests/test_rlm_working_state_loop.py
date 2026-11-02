@@ -18,15 +18,21 @@ import pytest
 from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
 from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_CODE,
+    TRACE_KEY_COMPACTION_REASON,
     TRACE_KEY_CONTENT,
+    TRACE_KEY_IDS_STUBBED,
     TRACE_KEY_RESULT_CHARS,
     TRACE_KEY_RESULT_ID,
     TRACE_KEY_ROLE,
     TRACE_KEY_SEQ,
     TRACE_KEY_STEP,
+    TRACE_KEY_TOKENS_AFTER,
+    TRACE_KEY_TOKENS_BEFORE,
+    TRACE_ROLE_COMPACTION,
 )
 from rlmstudio.application.services.result_registry import ResultRef, ResultRegistry
 from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
+from rlmstudio.prompts import get_rlm_message
 from rlmstudio.tools import grep
 from tests.test_use_cases import CapturingLLM, FakeLLM, FakeSandbox
 
@@ -302,3 +308,269 @@ class TestBoundExecContent:
         formatted = "Output:\n" + preview
         out = RunRLMUseCase._bound_exec_content(formatted, 120, self._ref(300), 100)
         assert out == formatted
+
+
+# ---------------------------------------------------------------------------
+# Compaction — AC-4 / AC-4a / AC-5
+# ---------------------------------------------------------------------------
+
+
+class CompactableLLM(CapturingLLM):
+    """A scripted adapter that exposes a context window and can overflow."""
+
+    def __init__(
+        self,
+        responses: list[str],
+        *,
+        context_window: int | None,
+        message_counter: bool = True,
+        overflow_at: int | None = None,
+        overflow_times: int = 0,
+    ) -> None:
+        super().__init__(responses)
+        self.context_window = context_window
+        self._message_counter = message_counter
+        self._overflow_at = overflow_at
+        self._overflow_remaining = overflow_times
+        self.last_clamp_info: dict[str, Any] = {}
+        self.counted_messages: list[list[dict[str, str]]] = []
+
+    def count_tokens(
+        self,
+        text: str | None = None,
+        *,
+        messages: list[dict[str, str]] | None = None,
+    ) -> int:
+        if messages is not None:
+            if not self._message_counter:
+                raise TypeError("this adapter only counts text")
+            self.counted_messages.append(list(messages))
+            estimate = max(1, sum(len(m.get("content", "")) for m in messages) // 4 + 10)
+            self.last_clamp_info = {"estimated_prompt_tokens": estimate}
+            return estimate
+        return max(1, len(text or "") // 4)
+
+    def complete(self, messages: list[dict[str, str]]) -> Any:
+        if (
+            self._overflow_at is not None
+            and self._idx == self._overflow_at
+            and self._overflow_remaining > 0
+        ):
+            self._overflow_remaining -= 1
+            self.call_messages.append(list(messages))
+            raise RuntimeError("maximum context length exceeded")
+        return super().complete(messages)
+
+
+class RecordingEmitter:
+    def __init__(self) -> None:
+        self.steps: list[dict[str, Any]] = []
+
+    async def on_token(self, delta: str) -> None:
+        pass
+
+    async def on_step(self, step: dict[str, Any]) -> None:
+        self.steps.append(step)
+
+    async def on_metrics(self, metrics: dict[str, Any]) -> None:
+        pass
+
+
+def _compaction_rows(result: RunResultDTO) -> list[dict[str, Any]]:
+    return [t for t in result.trace if t.get(TRACE_KEY_ROLE) == TRACE_ROLE_COMPACTION]
+
+
+class TestCompactionLoop:
+    def test_threshold_compaction_stubs_older_results(self) -> None:
+        llm = CompactableLLM(
+            [
+                _inspect("peek", start=0, end=20),
+                _inspect("peek", start=20, end=40),
+                _inspect("peek", start=40, end=60),
+                _final("done"),
+            ],
+            context_window=100,
+        )
+        config = RunConfigDTO(
+            mode="rlm",
+            max_steps=4,
+            compaction_keep_last=1,
+            compaction_reserve_tokens=0,
+        )
+        result = RunRLMUseCase(llm, FakeSandbox()).execute(BIG_CONTENT, "q", config)
+
+        assert result.success
+        rows = _compaction_rows(result)
+        assert rows
+        assert rows[0][TRACE_KEY_IDS_STUBBED] == ["r1"]
+        assert rows[0][TRACE_KEY_COMPACTION_REASON] == "threshold"
+        assert rows[0][TRACE_KEY_TOKENS_BEFORE] > rows[0][TRACE_KEY_TOKENS_AFTER] >= 0
+
+        # The step after the first compaction was sent stubs, not full previews.
+        third_call = llm.call_messages[2]
+        contents = [m["content"] for m in third_call]
+        assert any(c.startswith("[result r1:") for c in contents)
+        # The newest result stays verbatim; only older pairs are stubbed.
+        last_call = llm.call_messages[-1]
+        last_contents = [m["content"] for m in last_call]
+        assert any(c.startswith("[result r2:") for c in last_contents)
+        assert not any(c.startswith("[result r3:") for c in last_contents)
+
+    def test_no_compaction_when_headroom_suffices(self) -> None:
+        llm = CompactableLLM(
+            [
+                _inspect("peek", start=0, end=20),
+                _inspect("peek", start=20, end=40),
+                _final("done"),
+            ],
+            context_window=1_000_000,
+        )
+        result = RunRLMUseCase(llm, FakeSandbox()).execute(
+            BIG_CONTENT, "q", RunConfigDTO(mode="rlm", max_steps=4)
+        )
+        assert result.success
+        assert _compaction_rows(result) == []
+
+    def test_fallback_estimate_compacts_without_message_counter(self) -> None:
+        llm = CapturingLLM(
+            [
+                _inspect("peek", start=0, end=20),
+                _inspect("peek", start=20, end=40),
+                _final("done"),
+            ]
+        )
+        llm.context_window = 100
+        result = RunRLMUseCase(llm, FakeSandbox()).execute(
+            BIG_CONTENT,
+            "q",
+            RunConfigDTO(mode="rlm", max_steps=4, compaction_keep_last=1),
+        )
+        assert result.success
+        rows = _compaction_rows(result)
+        assert rows
+        assert rows[0][TRACE_KEY_COMPACTION_REASON] == "threshold"
+
+    def test_candidate_estimate_includes_force_final_nudge(self) -> None:
+        llm = CompactableLLM([_final("done")], context_window=100)
+        registry = ResultRegistry()
+        messages = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "question"},
+        ]
+        ref = registry.register("payload", kind="inspect", step=1)
+        messages.append({"role": "assistant", "content": _inspect("peek", start=0, end=1)})
+        messages.append({"role": "user", "content": "Execution result:\npreview"})
+        registry.note_message(3, ref.id)
+        uc = RunRLMUseCase(llm, FakeSandbox())
+        _, call_messages, record = uc._compact_before_call(
+            messages=messages,
+            registry=registry,
+            config=RunConfigDTO(mode="rlm", compaction_keep_last=0),
+            is_last_step=True,
+            prior_prompt_tokens=None,
+            prior_prompt_chars=0,
+        )
+        assert llm.counted_messages
+        # The first count is the candidate-prompt estimate (before compaction);
+        # later counts measure the compacted list.
+        assert llm.counted_messages[0][-1]["content"] == get_rlm_message("force_final_nudge")
+        assert call_messages[-1]["content"] == get_rlm_message("force_final_nudge")
+        assert record is not None
+
+    def test_overflow_once_compacts_and_retries_the_same_step(self) -> None:
+        llm = CompactableLLM(
+            [
+                _inspect("peek", start=0, end=20),
+                _inspect("peek", start=20, end=40),
+                _final("after retry"),
+            ],
+            context_window=1_000_000,
+            overflow_at=2,
+            overflow_times=1,
+        )
+        result = RunRLMUseCase(llm, FakeSandbox()).execute(
+            BIG_CONTENT,
+            "q",
+            RunConfigDTO(mode="rlm", max_steps=5, compaction_keep_last=1),
+        )
+        assert result.success
+        assert result.answer == "after retry"
+        rows = _compaction_rows(result)
+        assert rows
+        assert rows[0][TRACE_KEY_COMPACTION_REASON] == "overflow_retry"
+        assert rows[0][TRACE_KEY_IDS_STUBBED] == ["r1"]
+        # The retry stayed on step 3: the step counter did not advance.
+        assert result.steps == 3
+
+    def test_overflow_twice_falls_back_with_the_step_recorded(self) -> None:
+        llm = CompactableLLM(
+            [
+                _inspect("peek", start=0, end=20),
+                _inspect("peek", start=20, end=40),
+                _final("never"),
+            ],
+            context_window=1_000_000,
+            overflow_at=2,
+            overflow_times=2,
+        )
+        result = RunRLMUseCase(llm, FakeSandbox()).execute(
+            BIG_CONTENT,
+            "q",
+            RunConfigDTO(mode="rlm", max_steps=5, compaction_keep_last=1),
+        )
+        assert result.success
+        assert "Context window exceeded" in result.answer
+        assert "step 3" in result.answer
+        assert len(_compaction_rows(result)) == 1
+
+    def test_async_emits_compaction_on_step_and_matches_sync(self) -> None:
+        script = [
+            _inspect("peek", start=0, end=20),
+            _inspect("peek", start=20, end=40),
+            _final("done"),
+        ]
+        config = RunConfigDTO(
+            mode="rlm", max_steps=4, compaction_keep_last=1, compaction_reserve_tokens=0
+        )
+        sync_result = RunRLMUseCase(
+            CompactableLLM(list(script), context_window=100), FakeSandbox()
+        ).execute(BIG_CONTENT, "q", config)
+
+        emitter = RecordingEmitter()
+        async_result = asyncio.run(
+            RunRLMUseCase(
+                CompactableLLM(list(script), context_window=100), FakeSandbox()
+            ).execute_async(BIG_CONTENT, "q", config, event_emitter=emitter)
+        )
+
+        assert sync_result.answer == async_result.answer == "done"
+        assert _semantic(sync_result.trace) == _semantic(async_result.trace)
+        assert any(step.get(TRACE_KEY_ROLE) == TRACE_ROLE_COMPACTION for step in emitter.steps)
+
+
+class TestCompactionCanonicalisation:
+    def test_compaction_is_never_promoted_to_final(self) -> None:
+        from rlmstudio.server.routes._helpers import (
+            _canonical_action_type,
+            _translate_raw_trace_entry,
+        )
+
+        assert _canonical_action_type("compaction", is_last=True, success=True) == "compaction"
+        step = _translate_raw_trace_entry(
+            {
+                TRACE_KEY_ROLE: TRACE_ROLE_COMPACTION,
+                TRACE_KEY_STEP: 7,
+                TRACE_KEY_CONTENT: "Compacted older context (threshold): 2 result(s) stubbed.",
+                TRACE_KEY_IDS_STUBBED: ["r1", "r2"],
+            },
+            is_last=True,
+            run_success=True,
+        )
+        assert step.action_type == "compaction"
+        assert "Compacted" in (step.output or "")
+
+    def test_domain_trace_step_round_trips_compaction(self) -> None:
+        from rlmstudio.domain.entities import TraceStep
+
+        step = TraceStep.from_dict({"index": 3, "action_type": "compaction"})
+        assert step.action_type == "compaction"

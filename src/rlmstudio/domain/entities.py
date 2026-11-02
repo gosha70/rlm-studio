@@ -54,7 +54,8 @@ class TraceStep:
 
     Attributes:
         index: Step number (0-indexed).
-        action_type: Type of action taken (inspect, subcall, final, error).
+        action_type: Type of action taken
+            (inspect, subcall, compaction, final, error).
         code: Python code executed, if any.
         output: Result of code execution, if any.
         tokens_used: Number of tokens consumed in this step (legacy sum;
@@ -77,7 +78,7 @@ class TraceStep:
     """
 
     index: int
-    action_type: Literal["inspect", "subcall", "final", "error"]
+    action_type: Literal["inspect", "subcall", "compaction", "final", "error"]
     code: str | None = None
     output: str | None = None
     tokens_used: int = 0
@@ -128,7 +129,7 @@ class TraceStep:
         at the route layer (`_translate_raw_trace_entry`).
         """
         action_type = d.get("action_type", "inspect")
-        if action_type not in ("inspect", "subcall", "final", "error"):
+        if action_type not in ("inspect", "subcall", "compaction", "final", "error"):
             action_type = "inspect"
         return cls(
             index=d.get("index", 0),

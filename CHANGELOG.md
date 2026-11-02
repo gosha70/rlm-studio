@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — lossless in-run compaction (#77 item 2)
+
+- The RLM loop now estimates the exact pending prompt before every call
+  (nudges and the last-step final nudge included) through
+  `count_tokens(messages=...)`, with a `last_clamp_info` + chars/4 fallback
+  for adapters that only count text. When it would leave less than
+  `compaction_reserve_tokens` (default 4,096) below the model's context
+  window, older execution previews are replaced with
+  `[result rK: N chars; read_result('rK', ...)]` stubs and older assistant
+  actions with their one-line action; the most recent
+  `compaction_keep_last` (default 4) pairs stay verbatim. The full payloads
+  remain in the result registry, so the transform is lossless and
+  `read_result` still returns them byte-for-byte.
+- A provider context-window exception now compacts (`overflow_retry`) and
+  retries the same step once before the existing synthesis/limit-warning
+  fallback; a second overflow on that step falls through with the step
+  recorded.
+- Compaction is a first-class canonical action: a raw `compaction` trace row
+  (trigger, token estimates, stubbed ids), its own timeline colour, a
+  `decision` replay step, and no promotion to `final`. New `execution:`
+  settings `compaction_reserve_tokens` and `compaction_keep_last`.
+
 ### Fixed — per-step cost in execution traces (issue #94)
 
 - Every step in a trace now carries its own `cost_usd`, priced from the

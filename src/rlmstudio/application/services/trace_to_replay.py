@@ -66,8 +66,8 @@ def trace_to_replay(trace: TraceResponse) -> LearnReplay:
     """Convert a canonical :class:`TraceResponse` to a :class:`LearnReplay`.
 
     Caller contract: ``trace.steps[*].action_type`` MUST already be
-    canonical (``inspect | subcall | final | error``). Raw roles
-    like ``assistant`` / ``execution`` are a bug in the caller, not
+    canonical (``inspect | subcall | compaction | final | error``). Raw
+    roles like ``assistant`` / ``execution`` are a bug in the caller, not
     this function — see :func:`rlmstudio.server.routes.traces.load_canonical_trace`
     for the one source of canonicalization.
     """
@@ -216,6 +216,9 @@ def _find_terminal_step(steps: list[TraceStep]) -> TraceStep | None:
 
 def _last_nonempty_output(steps: list[TraceStep]) -> str | None:
     for s in reversed(steps):
+        if s.action_type == "compaction":
+            # A compaction row is controller bookkeeping, not model evidence.
+            continue
         output: str | None = s.output
         if output:
             return output
@@ -245,7 +248,7 @@ class _Group:
     For trace-sourced replays this is either a 2-step
     ``code + result`` pair (from an adjacent ``inspect`` + ``subcall``
     in the raw trace) or a 1-step group (standalone ``inspect`` /
-    ``subcall``).
+    ``subcall`` / ``compaction``).
     """
 
     steps: list[LearnReplayStep] = field(default_factory=list)
@@ -259,6 +262,10 @@ def _build_groups(steps: list[TraceStep]) -> list[_Group]:
         s = steps[i]
         if s.action_type in ("final", "error"):
             # Folds into the synthetic answer; never a group member.
+            i += 1
+            continue
+        if s.action_type == "compaction":
+            groups.append(_Group(steps=[_step_from_compaction(s)]))
             i += 1
             continue
         if s.action_type == "inspect":
@@ -318,6 +325,17 @@ def _step_from_subcall(s: TraceStep) -> LearnReplayStep:
         id=f"result-{s.index}",
         kind="result",
         title="Sandbox executed",
+        summary=_summary_for_output(s.output),
+        details=LearnReplayStepDetails(output=s.output) if s.output else None,
+        metrics=_metrics_from_step(s),
+    )
+
+
+def _step_from_compaction(s: TraceStep) -> LearnReplayStep:
+    return LearnReplayStep(
+        id=f"compaction-{s.index}",
+        kind="decision",
+        title="Context compacted",
         summary=_summary_for_output(s.output),
         details=LearnReplayStepDetails(output=s.output) if s.output else None,
         metrics=_metrics_from_step(s),

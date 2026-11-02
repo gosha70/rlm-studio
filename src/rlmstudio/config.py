@@ -11,6 +11,8 @@ from typing import Any
 import yaml
 
 from rlmstudio.application.sandbox_vars import (
+    RLM_DEFAULT_COMPACTION_KEEP_LAST,
+    RLM_DEFAULT_COMPACTION_RESERVE_TOKENS,
     RLM_DEFAULT_MAX_REGISTRY_BYTES,
     RLM_DEFAULT_MAX_SPILL_BYTES,
     RLM_DEFAULT_RESULT_PREVIEW_CHARS,
@@ -267,6 +269,9 @@ class ExecutionConfig:
     spill_result_above_bytes: int = RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES
     max_registry_bytes: int = RLM_DEFAULT_MAX_REGISTRY_BYTES
     max_spill_bytes: int = RLM_DEFAULT_MAX_SPILL_BYTES
+    # Deterministic in-run compaction (specs/rlm-working-state item 2).
+    compaction_reserve_tokens: int = RLM_DEFAULT_COMPACTION_RESERVE_TOKENS
+    compaction_keep_last: int = RLM_DEFAULT_COMPACTION_KEEP_LAST
 
     def to_dict(self) -> dict[str, Any]:
         """Convert config to dictionary."""
@@ -281,6 +286,8 @@ class ExecutionConfig:
             "spill_result_above_bytes": self.spill_result_above_bytes,
             "max_registry_bytes": self.max_registry_bytes,
             "max_spill_bytes": self.max_spill_bytes,
+            "compaction_reserve_tokens": self.compaction_reserve_tokens,
+            "compaction_keep_last": self.compaction_keep_last,
         }
 
     @classmethod
@@ -301,15 +308,23 @@ class ExecutionConfig:
             ),
             max_registry_bytes=int(data.get("max_registry_bytes", RLM_DEFAULT_MAX_REGISTRY_BYTES)),
             max_spill_bytes=int(data.get("max_spill_bytes", RLM_DEFAULT_MAX_SPILL_BYTES)),
+            compaction_reserve_tokens=int(
+                data.get("compaction_reserve_tokens", RLM_DEFAULT_COMPACTION_RESERVE_TOKENS)
+            ),
+            compaction_keep_last=int(
+                data.get("compaction_keep_last", RLM_DEFAULT_COMPACTION_KEEP_LAST)
+            ),
         )
 
     def registry_kwargs(self) -> RegistryConfigKwargs:
-        """The result-registry fields, keyed as ``RunConfigDTO`` names them."""
+        """Result-registry and compaction fields, keyed as ``RunConfigDTO`` names them."""
         return {
             "result_preview_chars": self.result_preview_chars,
             "spill_result_above_bytes": self.spill_result_above_bytes,
             "max_registry_bytes": self.max_registry_bytes,
             "max_spill_bytes": self.max_spill_bytes,
+            "compaction_reserve_tokens": self.compaction_reserve_tokens,
+            "compaction_keep_last": self.compaction_keep_last,
         }
 
 

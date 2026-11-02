@@ -253,6 +253,10 @@ Two things differ by construction and are surfaced rather than hidden: the refer
 
 Two more differences are translated rather than surfaced. The projects count recursion from different ends: Studio counts levels of sub-RLM while the engine counts the depth at which a node degrades to a plain model call, and its root already occupies one level, so Studio asks for one level more than the budget says. And because the in-process environment redirects the whole process's streams and working directory while a code cell runs, official runs and their sub-calls are serialised — a comparison that wants official cells running in parallel needs the Docker sandbox.
 
+### 9.10 Lossless Context Compaction
+
+RLM's premise is that the document lives outside the model's context, but the conversation itself still grows: every inspect preview and every action accumulates in the message list. Before each call, Studio estimates the exact pending prompt. If it would cross the context window minus a reserve, older execution previews are replaced by references to the run's result registry — `[result r4: 31,842 chars; read_result('r4', ...)]` — and older actions by their one-line form. The most recent few pairs stay verbatim. This is compaction without summarization: the full payload is still in the registry, so `read_result` can read any stubbed result back byte-for-byte. If the provider overflows anyway, Studio compacts and retries the same step once before falling back to synthesis.
+
 ---
 
 ## 10. Limitations and Open Work

@@ -158,6 +158,10 @@ class ResultRegistry:
         self._last_id: str | None = None
         self._in_memory_bytes = 0
         self._spilled_bytes = 0
+        # Message-list position → registered id, maintained by the loop as it
+        # appends execution messages.  Compaction uses it to keep the full
+        # payload reachable after an execution message becomes a stub.
+        self._message_index: dict[int, str] = {}
         self._closed = False
 
     # -- introspection -------------------------------------------------------
@@ -186,6 +190,16 @@ class ResultRegistry:
         with self._lock:
             entry = self._resolve(name)
             return entry.ref if entry is not None else None
+
+    def note_message(self, message_index: int, result_id: str) -> None:
+        """Record that ``messages[message_index]`` previews ``result_id``."""
+        with self._lock:
+            self._message_index[message_index] = result_id
+
+    def message_index(self) -> dict[int, str]:
+        """A copy of the message-position → result-id index."""
+        with self._lock:
+            return dict(self._message_index)
 
     # -- registration --------------------------------------------------------
 
@@ -290,6 +304,7 @@ class ResultRegistry:
                 return
             self._closed = True
             self._entries.clear()
+            self._message_index.clear()
             self._in_memory_bytes = 0
             self._spilled_bytes = 0
             if self._scratch is not None and self._owns_scratch:
