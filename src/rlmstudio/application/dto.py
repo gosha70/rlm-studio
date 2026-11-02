@@ -11,6 +11,8 @@ from typing import Any, TypedDict
 
 from rlmstudio.application.sandbox_vars import (
     MODE_AUTO,
+    RLM_DEFAULT_COMPACTION_KEEP_LAST,
+    RLM_DEFAULT_COMPACTION_RESERVE_TOKENS,
     RLM_DEFAULT_MAX_REGISTRY_BYTES,
     RLM_DEFAULT_MAX_SPILL_BYTES,
     RLM_DEFAULT_MAX_STEPS,
@@ -158,6 +160,8 @@ class RunConfigDTO:
     spill_result_above_bytes: int = RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES
     max_registry_bytes: int = RLM_DEFAULT_MAX_REGISTRY_BYTES
     max_spill_bytes: int = RLM_DEFAULT_MAX_SPILL_BYTES
+    compaction_reserve_tokens: int = RLM_DEFAULT_COMPACTION_RESERVE_TOKENS
+    compaction_keep_last: int = RLM_DEFAULT_COMPACTION_KEEP_LAST
     verbose: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -174,6 +178,8 @@ class RegistryConfigKwargs(TypedDict, total=False):
     spill_result_above_bytes: int
     max_registry_bytes: int
     max_spill_bytes: int
+    compaction_reserve_tokens: int
+    compaction_keep_last: int
 
 
 @dataclass

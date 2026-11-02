@@ -13,6 +13,7 @@ interface TimelineProps {
 const actionColors: Record<string, string> = {
   inspect: "bg-blue-500",
   subcall: "bg-violet-500",
+  compaction: "bg-amber-500",
   final: "bg-emerald-500",
   error: "bg-red-500",
 };

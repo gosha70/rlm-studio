@@ -248,11 +248,29 @@ When max\_steps is exhausted without a final answer but inspection results exist
 
 *Reference: run\_rlm.py:411–476, :1305–1319 (\_build\_synthesis\_messages)*
 
-## **5.7 Context Window Overflow**
+## **5.7 Context Window Overflow and Lossless Compaction**
 
-If the LLM raises a context-window-exceeded exception, the loop breaks to the synthesis fallback path rather than erroring out. The overflow step is recorded and included in the limit warning message.
+Before each LLM call the loop estimates the *pending* prompt — nudges and the
+last-step `force_final_nudge` included — through the adapter's
+`count_tokens(messages=...)` capability, or through the previous prompt's
+`last_clamp_info` estimate plus a chars/4 estimate of everything appended
+since. When the estimate would leave less than `compaction_reserve_tokens`
+(default 4,096) below the model's context window, older execution previews
+are replaced with `[result rK: N chars; read_result('rK', ...)]` stubs and
+older assistant actions with their one-line action. The most recent
+`compaction_keep_last` (default 4) result pairs stay verbatim. Nothing is
+lost: every stubbed preview names a result that still owns its full payload
+in the run's registry (§4.5), so the model can read it back with
+`read_result`. A `compaction` trace row records the trigger
+(`threshold`), the token estimates and the stubbed ids.
 
-*Reference: run\_rlm.py:175–182*
+If the provider nevertheless raises a context-window-exceeded exception, the
+loop compacts with reason `overflow_retry` and retries the same step once.
+A second overflow on that step breaks to the synthesis/limit-warning fallback
+rather than erroring out; the overflow step is recorded and included in the
+limit warning message.
+
+*Reference: application/services/context\_compaction.py, run\_rlm.py*
 
 # **6\. Sandbox Security Model**
 
@@ -386,7 +404,12 @@ The repeat detector hashes only the first 500 characters of execution output. If
 
 ## **9.6 Synthesis Fallback Limitations**
 
-The synthesis fallback truncates the last inspection output to 3000 characters. For large inspection results (e.g., grep across a whole book), this loses most of the retrieved data. The synthesis model also receives no conversation history — only the truncated output and the original query.
+Compaction (§5.7) is the primary safety valve for prompt growth; the synthesis
+fallback remains the last resort when the model exhausts its step budget
+without a final answer. It truncates the last inspection output to 3000
+characters. For large inspection results (e.g., grep across a whole book),
+this loses most of the retrieved data. The synthesis model also receives no
+conversation history — only the truncated output and the original query.
 
 ## **9.7 Token Counting Heuristic**
 

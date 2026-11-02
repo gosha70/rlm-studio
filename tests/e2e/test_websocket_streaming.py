@@ -152,6 +152,74 @@ class TestWebSocketQuery:
 # ---------------------------------------------------------------------------
 
 
+class TestWebSocketCompaction:
+    def test_compaction_step_is_streamed(
+        self, client: TestClient, seeded_session: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A compaction row reaches the client as an ordinary ``step`` event."""
+        from rlmstudio.application.sandbox_vars import (
+            TRACE_KEY_ROLE,
+            TRACE_ROLE_COMPACTION,
+        )
+        from tests.test_rlm_working_state_loop import CompactableLLM
+        from tests.test_use_cases import FakeSandbox
+
+        def inspect_peek(start: int) -> str:
+            import json
+
+            return json.dumps(
+                {
+                    "type": "inspect",
+                    "tool": "peek",
+                    "args": {"start": start, "end": start + 20},
+                }
+            )
+
+        import json
+
+        llm = CompactableLLM(
+            [
+                inspect_peek(0),
+                inspect_peek(20),
+                json.dumps({"type": "final", "answer": "done"}),
+            ],
+            context_window=100,
+        )
+        import rlmstudio.server.dependencies as deps
+
+        monkeypatch.setattr(
+            deps,
+            "_registry_config_kwargs",
+            lambda: {"compaction_keep_last": 0, "compaction_reserve_tokens": 0},
+        )
+        state = get_state()
+        monkeypatch.setattr(state, "create_llm_adapter", lambda *a, **k: llm)
+        monkeypatch.setattr(state, "create_sandbox", lambda *a, **k: FakeSandbox())
+
+        with client.websocket_connect(f"/ws/chat/{seeded_session}") as ws:
+            assert ws.receive_json()["type"] == "connected"
+            ws.send_json(
+                {
+                    "type": "query",
+                    "id": "q-compact",
+                    "query": "what is here?",
+                    "content": "alpha beta gamma delta epsilon zeta eta theta",
+                    "mode": "rlm",
+                }
+            )
+            seen: list[dict[str, Any]] = []
+            while True:
+                message = receive_non_ping(ws, timeout=10)
+                seen.append(message)
+                if message["type"] in ("complete", "error"):
+                    break
+
+        assert any(
+            m["type"] == "step" and m["data"].get(TRACE_KEY_ROLE) == TRACE_ROLE_COMPACTION
+            for m in seen
+        )
+
+
 class TestWebSocketCancel:
     def test_cancel_nonexistent(self, client: TestClient, seeded_session: str) -> None:
         """Cancelling an unknown id is silently ignored — no crash or error frame."""

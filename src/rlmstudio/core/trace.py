@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-ActionType = Literal["inspect", "subcall", "final", "error"]
+ActionType = Literal["inspect", "subcall", "compaction", "final", "error"]
 
 
 @dataclass

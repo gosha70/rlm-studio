@@ -640,3 +640,31 @@ class TestReplayMetricsTelemetryZeros:
 
         step = TraceStep(index=0, action_type="inspect")
         assert _metrics_from_step(step) is None
+
+
+class TestCompactionReplayStep:
+    def test_compaction_renders_as_its_own_step(self) -> None:
+        compaction = TraceStep(
+            index=2,
+            action_type="compaction",
+            output="Compacted older context (threshold): 2 result(s) stubbed.",
+        )
+        replay = trace_to_replay(_trace([_inspect(1), compaction, _final(3)]))
+        step = next(s for s in replay.steps if s.id == "compaction-2")
+        assert step.kind == "decision"
+        assert step.title == "Context compacted"
+        assert "Compacted older context" in step.summary
+        assert step.details is not None
+        assert "2 result(s) stubbed" in (step.details.output or "")
+
+    def test_failed_run_does_not_use_compaction_as_the_failure_payload(self) -> None:
+        compaction = TraceStep(
+            index=1,
+            action_type="compaction",
+            output="Compacted older context (threshold): 1 result(s) stubbed.",
+        )
+        replay = trace_to_replay(
+            _trace([compaction], success=False, error="provider down", answer="")
+        )
+        answer = next(s for s in replay.steps if s.kind == "answer")
+        assert answer.details is None

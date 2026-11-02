@@ -126,12 +126,20 @@ class TestExecutionConfig:
 
     def test_to_from_dict(self):
         """Test dict conversion roundtrip."""
-        config1 = ExecutionConfig(default_timeout=3.0, max_output_chars=5000)
+        config1 = ExecutionConfig(
+            default_timeout=3.0,
+            max_output_chars=5000,
+            compaction_reserve_tokens=2048,
+            compaction_keep_last=2,
+        )
         data = config1.to_dict()
         config2 = ExecutionConfig.from_dict(data)
 
         assert config2.default_timeout == 3.0
         assert config2.max_output_chars == 5000
+        assert config2.compaction_reserve_tokens == 2048
+        assert config2.compaction_keep_last == 2
+        assert config2.registry_kwargs()["compaction_reserve_tokens"] == 2048
 
 
 class TestMonitoringConfig:

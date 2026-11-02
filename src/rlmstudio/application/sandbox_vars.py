@@ -123,6 +123,12 @@ RLM_DEFAULT_MAX_SPILL_BYTES = 256 * 1024 * 1024
 """On-disk total for spilled results of one run; beyond it the oldest spilled
 results are evicted (never the most recent one)."""
 
+# Deterministic, lossless in-run compaction (specs/rlm-working-state item 2).
+RLM_DEFAULT_COMPACTION_RESERVE_TOKENS = 4096
+"""Headroom kept below the model's context window before compaction fires."""
+RLM_DEFAULT_COMPACTION_KEEP_LAST = 4
+"""Most recent assistant/execution pairs kept verbatim during compaction."""
+
 RUNTIME_DEFAULT_TEMPERATURE = 0.7
 RUNTIME_DEFAULT_TOP_P = 1.0
 RUNTIME_DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -152,6 +158,15 @@ TRACE_KEY_RESULT_CHARS = "result_chars"
 """Full character length of that registered result (the row shows a preview)."""
 TRACE_KEY_READBACK_OF = "readback_of"
 """On a ``read_result`` execution row: the id of the result that was read."""
+
+TRACE_ROLE_COMPACTION = "compaction"
+"""Raw trace role of a deterministic in-run compaction row."""
+TRACE_KEY_TOKENS_BEFORE = "tokens_before"
+TRACE_KEY_TOKENS_AFTER = "tokens_after"
+TRACE_KEY_IDS_STUBBED = "ids_stubbed"
+"""Result ids whose execution messages compaction replaced with stubs."""
+TRACE_KEY_COMPACTION_REASON = "reason"
+"""Compaction trigger: ``threshold`` or ``overflow_retry``."""
 
 TRACE_KEY_RECURSION_DEPTH = "recursion_depth"
 """Depth of a nested sub-call entry (``1`` = a child query spawned from the root REPL)."""

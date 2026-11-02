@@ -215,6 +215,14 @@ execution:
   max_registry_bytes: 67108864         # 64 MiB
   max_spill_bytes: 268435456           # 256 MiB
 
+  # Deterministic, lossless in-run compaction. Before each LLM call the
+  # pending prompt is estimated; when it would leave less than
+  # compaction_reserve_tokens below the model's context window, older
+  # actions and execution previews are replaced with read_result references,
+  # keeping the most recent compaction_keep_last pairs verbatim.
+  compaction_reserve_tokens: 4096
+  compaction_keep_last: 4
+
 # Monitoring Configuration
 monitoring:
   # Enable telemetry collection
