@@ -212,12 +212,16 @@ async def export_refinements(
     profile_id: str,
     state: AppState = Depends(get_state),
 ) -> Response:
-    """One JSON line per refinement of the profile, records verbatim (FR-15)."""
-    _get_profile(state, profile_id)
-    lines = [
-        json.dumps(asdict(record), sort_keys=True)
-        for record in state.telemetry.list_refinements(profile_id)
-    ]
+    """One JSON line per refinement of the profile, records verbatim (FR-15).
+
+    Works for a deleted profile too: its refinement rows stay in the
+    database and remain exportable (spec §6); 404 only when there is
+    neither a profile nor any refinement for the id.
+    """
+    records = state.telemetry.list_refinements(profile_id)
+    if not records:
+        _get_profile(state, profile_id)
+    lines = [json.dumps(asdict(record), sort_keys=True) for record in records]
     body = "".join(f"{line}\n" for line in lines)
     return Response(
         content=body,

@@ -83,6 +83,9 @@ only to keep the codebase conventions or ship the feature.
 - D1-D3: decisions live in `server/refinement_decisions.py` as synchronous functions holding `_config_lock` from the status check through the decision write; the routes run them with `asyncio.to_thread` so a held lock never blocks the event loop. Errors carry their HTTP status (400 / 404 / 409 / 500).
 - D1-D3 (found in Phase D): `PUT` and `DELETE /api/profiles/{id}` changed the profile without `_config_lock`, so the lock did not serialize an edit against an accept or rollback; both now mutate and save under it.
 - D1-D3: the decision record is one typed `DecisionRecord` (decision, time, reason, regression, acknowledgement); a rollback adds a `RollbackRecord` to the accepted decision instead of replacing it.
+- D1-D3 (review fix): `update_profile` and `delete_profile` are plain `def` handlers, so their wait on `_config_lock` runs in FastAPI's thread pool instead of blocking the event loop while an accept or rollback holds the lock across a disk write. Tested with an unrelated `/health` request during a blocked edit.
+- D4 (review fix): export serves a deleted profile's refinement rows (spec §6) and returns 404 only when there is neither a profile nor any refinement.
+- D5 (review fix): the full-flow test runs real `/api/chat` RLM requests after accept and after rollback and checks the system prompt the model received.
 - D4: `GET …/refinements/export.jsonl` serves `application/x-ndjson` with one `RefinementRecord` per line, newest first.
 - A7: `afd2db3` (2026-04-07) removed per-mode prompt editors in favour of prompt groups. FR-14 re-adds one RLM textarea; the old "no per-mode textareas" test now asserts only RLM is editable. Owner decision 2026-11-03: keep the single RLM textarea.
 

@@ -132,12 +132,17 @@ async def create_profile(
 
 
 @router.put("/api/profiles/{profile_id}")
-async def update_profile(
+def update_profile(
     profile_id: str,
     req: RunProfileUpdate,
     state: AppState = Depends(get_state),
 ) -> RunProfile:
-    """Update a user profile. Cannot modify builtins."""
+    """Update a user profile. Cannot modify builtins.
+
+    A plain ``def`` on purpose: it waits on ``_config_lock``, which an
+    accept or rollback can hold across a disk write, so FastAPI must run it
+    in its thread pool rather than on the event loop.
+    """
     # Check builtins
     for bp in BUILTIN_PROFILES:
         if bp.id == profile_id:
@@ -184,11 +189,14 @@ async def update_profile(
 
 
 @router.delete("/api/profiles/{profile_id}", status_code=204)
-async def delete_profile(
+def delete_profile(
     profile_id: str,
     state: AppState = Depends(get_state),
 ) -> None:
-    """Delete a user profile. Cannot delete builtins or profiles in use."""
+    """Delete a user profile. Cannot delete builtins or profiles in use.
+
+    A plain ``def`` for the same reason as :func:`update_profile`.
+    """
     for bp in BUILTIN_PROFILES:
         if bp.id == profile_id:
             raise HTTPException(status_code=400, detail="Cannot delete built-in profiles")

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -538,10 +538,18 @@ cases:
 
 @dataclass
 class FlowLLM:
-    """Proposer when it sees the evidence block, otherwise a correct RLM arm."""
+    """Proposer when it sees the evidence block, otherwise a correct RLM arm.
+
+    Records the system prompt of every non-proposal call, so a test can see
+    which supplement a run actually sent to the model.
+    """
+
+    system_prompts: list[str] = field(default_factory=list)
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
         text = "\n".join(m["content"] for m in messages)
+        if "<<<EVIDENCE" not in text:
+            self.system_prompts.append(messages[0]["content"])
         if "<<<EVIDENCE" in text:
             reply = json.dumps({"candidate": CANDIDATE, "rationale": "Runs skipped the index."})
         else:
@@ -561,11 +569,46 @@ class FlowLLM:
         return 0.0
 
 
+def _chat_system_prompt(state: AppState, flow: FlowLLM, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run a real RLM chat through cp-1 and return the system prompt it sent.
+
+    /api/chat runs the execution as a background task on the request's event
+    loop.  A plain TestClient shuts that loop down after the response, which
+    cancels a slow run, so this uses a context-managed client whose loop
+    lives until the run finishes.  Its lifespan would copy a legacy state
+    directory under the user's home, so that step is stubbed.
+    """
+    from rlmstudio.server import app as app_module
+
+    monkeypatch.setattr(app_module, "migrate_legacy_state", lambda: None)
+    before = len(flow.system_prompts)
+    with TestClient(app_module.app) as persistent:
+        resp = persistent.post(
+            "/api/chat",
+            json={
+                "query": "What is the launch platform?",
+                "content": "Notes. The launch platform is Harbour.",
+                "chat_provider_id": "cp-1",
+            },
+        )
+        assert resp.status_code in (200, 202), resp.text
+        session_id = resp.json()["session_id"]
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            session = state.sessions.get(session_id)
+            if session and any(m["role"] == "assistant" for m in session.messages):
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("chat run did not finish")
+    assert len(flow.system_prompts) > before
+    return flow.system_prompts[before]
+
+
 def test_full_flow_from_proposal_to_rollback(
     client: TestClient, env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from rlmstudio.prompts import templates as prompt_templates
-    from rlmstudio.server.routes.compare_matrix import _build_slot_run_config
 
     base_prompt_file = Path(prompt_templates.__file__).parent / "system_prompt_v2_0.yaml"
     base_prompt_bytes = base_prompt_file.read_bytes()
@@ -583,7 +626,8 @@ def test_full_flow_from_proposal_to_rollback(
         execution_mode="rlm",
     )
     state.config.chat_providers.append(cp)
-    monkeypatch.setattr(state, "create_llm_adapter_for_chat_provider", lambda *_a, **_k: FlowLLM())
+    flow = FlowLLM()
+    monkeypatch.setattr(state, "create_llm_adapter_for_chat_provider", lambda *_a, **_k: flow)
     state.telemetry.record_run(
         run_id="src",
         created_at=1.0,
@@ -612,12 +656,14 @@ def test_full_flow_from_proposal_to_rollback(
     assert env.saves == []  # AC-1: nothing written before accept
 
     assert client.post(f"{base}/{rid}/accept", json={}).status_code == 200
-    resolved_cp = state.resolve_chat_provider(cp)
-    assert _build_slot_run_config(state, resolved_cp, MODE_RLM).system_prompt_extra == CANDIDATE
+    accepted_prompt = _chat_system_prompt(state, flow, monkeypatch)
+    assert CANDIDATE in accepted_prompt
+    assert TEMPLATE_RLM not in accepted_prompt
 
     assert client.post(f"{base}/{rid}/rollback", json={}).status_code == 200
-    after = _build_slot_run_config(state, resolved_cp, MODE_RLM).system_prompt_extra
-    assert after == TEMPLATE_RLM
+    restored_prompt = _chat_system_prompt(state, flow, monkeypatch)
+    assert TEMPLATE_RLM in restored_prompt
+    assert CANDIDATE not in restored_prompt
 
     history = client.get(base).json()
     assert [r["status"] for r in history] == [REFINEMENT_STATUS_ROLLED_BACK]
@@ -635,3 +681,55 @@ def test_rollback_with_an_unreadable_decision_record_is_409(client: TestClient, 
     assert resp.status_code == 409
     assert "unreadable" in resp.json()["error"]["message"]
     assert _profile_rlm(env) == CANDIDATE
+
+
+def test_deleted_profile_history_is_still_exportable(client: TestClient, env: Env) -> None:
+    """Spec §6: deleting a profile leaves its refinement rows exportable."""
+    rid = _seed(env, status=REFINEMENT_STATUS_PROPOSAL_READY)
+    assert client.delete(f"/api/profiles/{env.profile_id}").status_code == 204
+    assert env.state.find_profile(env.profile_id) is None
+    resp = client.get(PATH.format(pid=env.profile_id) + "/export.jsonl")
+    assert resp.status_code == 200
+    assert [json.loads(line)["id"] for line in resp.text.splitlines()] == [rid]
+    assert client.get(PATH.format(pid="never-existed") + "/export.jsonl").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_unrelated_requests_stay_responsive_while_a_profile_edit_waits(env: Env) -> None:
+    """A profile edit waiting on the config lock must not block the event loop."""
+    import asyncio
+
+    import httpx
+
+    from rlmstudio.server.app import app
+
+    held, release = threading.Event(), threading.Event()
+
+    def hold_lock() -> None:
+        with env.state._config_lock:
+            held.set()
+            release.wait(5)  # bounded, so a regression fails instead of hanging
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert held.wait(5)
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            edit = asyncio.create_task(
+                ac.put(f"/api/profiles/{env.profile_id}", json={"description": "edited"})
+            )
+            await asyncio.sleep(0.2)
+            started = time.monotonic()
+            health = await ac.get("/health")
+            elapsed = time.monotonic() - started
+            assert health.status_code == 200
+            # A blocked event loop shows up as ~5 s (the holder's bound); 3 s leaves
+            # room for a loaded CI machine without hiding the regression.
+            assert elapsed < 3.0, f"/health waited {elapsed:.2f}s behind the profile edit"
+            assert not edit.done(), "the edit should still be waiting for the lock"
+            release.set()
+            assert (await asyncio.wait_for(edit, 10)).status_code == 200
+    finally:
+        release.set()
+        holder.join(10)
