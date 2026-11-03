@@ -218,12 +218,14 @@ def rollback(state: AppState, profile_id: str, refinement_id: str) -> Refinement
             raise DecisionConflictError(
                 f"Only an accepted refinement can be rolled back; this one is {record.status}"
             )
-        if record.decision is None:
-            raise DecisionConflictError("The accepted refinement has no decision record")
-        accepted = DecisionRecord.from_dict(record.decision)
+        try:
+            accepted = DecisionRecord.from_dict(record.decision or {})
+        except (KeyError, TypeError) as exc:
+            raise DecisionConflictError(
+                f"The accepted refinement's decision record is unreadable: {exc}"
+            ) from exc
         proposal = ProposalRecord.from_dict(record.proposal)
-        current = profile.system_prompts.get(MODE_RLM)
-        if current is None or supplement_sha256(current) != supplement_sha256(proposal.candidate):
+        if profile.system_prompts.get(MODE_RLM) != proposal.candidate:
             raise DecisionConflictError(
                 "The profile's RLM prompt changed after the accept; edit the profile instead"
             )

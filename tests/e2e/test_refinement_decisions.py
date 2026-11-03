@@ -622,3 +622,16 @@ def test_full_flow_from_proposal_to_rollback(
     history = client.get(base).json()
     assert [r["status"] for r in history] == [REFINEMENT_STATUS_ROLLED_BACK]
     assert base_prompt_file.read_bytes() == base_prompt_bytes  # AC-9
+
+
+def test_rollback_with_an_unreadable_decision_record_is_409(client: TestClient, env: Env) -> None:
+    rid = _seed(env)
+    assert _post(client, env, rid, "accept").status_code == 200
+    with env.state.telemetry._lock:
+        conn = env.state.telemetry._connect()
+        conn.execute("UPDATE refinements SET decision_json = '{}' WHERE id = ?", (rid,))
+        conn.commit()
+    resp = _post(client, env, rid, "rollback")
+    assert resp.status_code == 409
+    assert "unreadable" in resp.json()["error"]["message"]
+    assert _profile_rlm(env) == CANDIDATE
