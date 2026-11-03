@@ -5,7 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from rlmstudio.application.sandbox_vars import TRACE_KEY_COST
 from rlmstudio.infrastructure.llm.pricing import completion_cost
 from rlmstudio.server.dependencies import AppState, ExecutionRecord, get_state
 from rlmstudio.server.models import (
@@ -193,12 +192,6 @@ def _trace_from_execution_record(execution: ExecutionRecord, state: AppState) ->
         prompt_tokens = step_data.get("prompt_tokens", input_tokens)
         completion_tokens = step_data.get("completion_tokens", output_tokens)
         model = step_data.get("model")
-        raw_step_cost = step_data.get(TRACE_KEY_COST)
-        step_cost = (
-            float(raw_step_cost)
-            if raw_step_cost is not None and action_type == "subcall"
-            else completion_cost(model, prompt_tokens, completion_tokens)
-        )
         steps.append(
             TraceStep(
                 index=i,
@@ -207,9 +200,11 @@ def _trace_from_execution_record(execution: ExecutionRecord, state: AppState) ->
                 output=step_data.get("content", ""),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                # Controller-dispatched subcalls carry their aggregate child
-                # cost; other steps are priced from their own tokens (#94).
-                cost_usd=step_cost,
+                # Price the step from its own model and tokens (#94).  A
+                # subcall row carries the aggregate child tokens and the
+                # child model, so an unpriced model stays "Unavailable"
+                # rather than becoming a false $0.00.
+                cost_usd=completion_cost(model, prompt_tokens, completion_tokens),
                 duration_seconds=step_data.get("elapsed_seconds", 0.0),
                 model=model,
                 prompt_tokens=prompt_tokens,
@@ -266,24 +261,18 @@ def _trace_from_telemetry(
         completion_tokens = step.get("completion_tokens", output_tokens)
         # A persisted step without its own model falls back to the run's.
         model = step.get("model") or detail.model
-        action_type = step.get("action_type", "inspect")
-        stored_cost = step.get("cost")
-        step_cost = (
-            float(stored_cost)
-            if stored_cost is not None and action_type == "subcall"
-            else completion_cost(model, prompt_tokens, completion_tokens)
-        )
         steps.append(
             TraceStep(
                 index=step.get("step_index", 0),
-                action_type=action_type,
+                action_type=step.get("action_type", "inspect"),
                 code=step.get("code"),
                 output=step.get("output", ""),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                # Subcall rows carry aggregate child cost; other steps are
-                # priced from their own tokens (#94).
-                cost_usd=step_cost,
+                # Price the step from its own model and tokens (#94).  A
+                # subcall row persists the aggregate child tokens and model,
+                # so an unpriced model remains "Unavailable".
+                cost_usd=completion_cost(model, prompt_tokens, completion_tokens),
                 duration_seconds=step.get("duration", 0.0),
                 model=model,
                 prompt_tokens=prompt_tokens,

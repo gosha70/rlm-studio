@@ -51,6 +51,10 @@ class ChildUsage:
     output_tokens: int = 0
     total_cost: float = 0.0
     steps: int = 0
+    model: str | None = None
+    """The child adapter's active model, when it is known and consistent."""
+    cost_known: bool = True
+    """Whether ``total_cost`` is a measurement rather than zero by ignorance."""
 
 
 class SubcallLedger:
@@ -90,6 +94,20 @@ class SubcallLedger:
     @property
     def spent_steps(self) -> int:
         return self._spent_steps
+
+    @property
+    def over_budget(self) -> bool:
+        """Whether actual spend has crossed a parent limit.
+
+        Mirrors ``BudgetState.is_within``: tokens and cost are exhausted at
+        equality; steps only once they exceed the limit.
+        """
+        with self._lock:
+            if self._max_cost is not None and self._spent_cost >= self._max_cost:
+                return True
+            if self._max_tokens is not None and self._spent_tokens >= self._max_tokens:
+                return True
+            return self._max_steps is not None and self._spent_steps > self._max_steps
 
     def reserve(self, n_children: int) -> list[ChildAllowance]:
         """Reserve an equal partition of the remaining budget for *n_children*.

@@ -130,8 +130,10 @@ cost, tokens and controller steps for each child and folds actual usage back
 in on completion. A child does not start a call whose estimated initial
 prompt cannot fit its share. Provider usage is known only after a response,
 so a single in-flight call can overshoot its share; the aggregate child
-tokens and cost are recorded on the subcall row and the run stops with a
-budget warning rather than continuing to a normal final. Wall-clock time is
+tokens and (when pricing is known) cost are recorded on the subcall row, a
+shared stop flag prevents still-queued children from starting, and the run
+stops with a budget warning rather than continuing to a normal final.
+Wall-clock time is
 not divided: every child gets the same absolute deadline and simply has less
 time if it starts later. Concurrency is capped by the provider kind (2 for
 local Ollama/LM Studio/vLLM, 4 for cloud) and never by the model's requested

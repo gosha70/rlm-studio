@@ -15,6 +15,7 @@ from typing import Any
 
 from rlmstudio.application.dto import LLMResponseDTO, RunConfigDTO, RunResultDTO
 from rlmstudio.application.sandbox_vars import (
+    TRACE_KEY_COST,
     TRACE_KEY_IDS_STUBBED,
     TRACE_KEY_INPUT_TOKENS,
     TRACE_KEY_OUTPUT_TOKENS,
@@ -435,7 +436,7 @@ class TestSubcallBudgets:
     def test_oversized_child_response_is_recorded_and_stops_the_run(self) -> None:
         llm = BatchRoutingLLM(
             [_batch("child-0", "child-1", "child-2", "child-3"), _final("done")],
-            delay=0.0,
+            delay=0.05,
             child_input_tokens=60,
             child_output_tokens=40,
             count_tokens_override=1,
@@ -457,12 +458,48 @@ class TestSubcallBudgets:
         subcall_row = _execution_rows(result)[0]
         assert subcall_row[TRACE_KEY_INPUT_TOKENS] == 240
         assert subcall_row[TRACE_KEY_OUTPUT_TOKENS] == 160
+        # The fake has no active model, so cost is unknown and omitted.
+        assert TRACE_KEY_COST not in subcall_row
         assert (
             sum(row.get(TRACE_KEY_INPUT_TOKENS, 0) for row in result.trace) == result.input_tokens
         )
         assert (
             sum(row.get(TRACE_KEY_OUTPUT_TOKENS, 0) for row in result.trace) == result.output_tokens
         )
+
+    def test_queued_children_stop_after_an_overage(self) -> None:
+        llm = BatchRoutingLLM(
+            [
+                _batch(
+                    "child-0",
+                    "child-1",
+                    "child-2",
+                    "child-3",
+                    "child-4",
+                    "child-5",
+                ),
+                _final("done"),
+            ],
+            delay=0.03,
+            child_input_tokens=60,
+            child_output_tokens=40,
+            count_tokens_override=1,
+        )
+        config = RunConfigDTO(
+            mode="rlm",
+            max_steps=10,
+            max_tokens=100,
+            max_recursion_depth=1,
+            subcall_max_concurrency=2,
+        )
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("doc", "batch them", config)
+
+        # Only the parent and the two in-flight children call the provider;
+        # the four queued children see the stop flag and never start.
+        assert llm.calls == 3
+        content = _execution_rows(result)[0]["content"]
+        assert content.count("parent budget exhausted after an earlier child") == 4
+        assert result.answer != "done"
 
     def test_trace_rows_reconcile_with_run_totals(self) -> None:
         llm = BatchRoutingLLM([_batch("child-0", "child-1"), _final("done")], delay=0.0)

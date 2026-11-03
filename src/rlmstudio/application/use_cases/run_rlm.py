@@ -11,6 +11,7 @@ import asyncio
 import copy
 import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
@@ -27,6 +28,7 @@ from rlmstudio.application.ports.llm_port import LLMPort
 from rlmstudio.application.ports.sandbox_port import SandboxPort
 from rlmstudio.application.sandbox_vars import (
     MODE_RLM,
+    RESULT_KEY_COST_KNOWN,
     TRACE_KEY_CLAMP,
     TRACE_KEY_CODE,
     TRACE_KEY_COMPACTION_REASON,
@@ -525,10 +527,15 @@ class RunRLMUseCase:
                         exec_entry[TRACE_KEY_READBACK_OF] = readback.ref.id
                     if subcall_total is not None:
                         # Child usage belongs to this row so trace and
-                        # telemetry totals reconcile with RunResultDTO.
+                        # telemetry totals reconcile with RunResultDTO.  The
+                        # model lets read-time pricing apply #94's known vs
+                        # unknown distinction to the aggregate tokens.
                         exec_entry[TRACE_KEY_INPUT_TOKENS] = subcall_total.input_tokens
                         exec_entry[TRACE_KEY_OUTPUT_TOKENS] = subcall_total.output_tokens
-                        exec_entry[TRACE_KEY_COST] = subcall_total.total_cost
+                        if subcall_total.cost_known:
+                            exec_entry[TRACE_KEY_COST] = subcall_total.total_cost
+                        if subcall_total.model:
+                            exec_entry[TRACE_KEY_MODEL] = subcall_total.model
                     trace.append(exec_entry)
                     budget_state.elapsed_seconds = time.time() - start
                     if subcall_total is not None and not budget_state.is_within(budget_config):
@@ -1482,10 +1489,15 @@ class RunRLMUseCase:
                         exec_entry[TRACE_KEY_READBACK_OF] = readback.ref.id
                     if subcall_total is not None:
                         # Child usage belongs to this row so trace and
-                        # telemetry totals reconcile with RunResultDTO.
+                        # telemetry totals reconcile with RunResultDTO.  The
+                        # model lets read-time pricing apply #94's known vs
+                        # unknown distinction to the aggregate tokens.
                         exec_entry[TRACE_KEY_INPUT_TOKENS] = subcall_total.input_tokens
                         exec_entry[TRACE_KEY_OUTPUT_TOKENS] = subcall_total.output_tokens
-                        exec_entry[TRACE_KEY_COST] = subcall_total.total_cost
+                        if subcall_total.cost_known:
+                            exec_entry[TRACE_KEY_COST] = subcall_total.total_cost
+                        if subcall_total.model:
+                            exec_entry[TRACE_KEY_MODEL] = subcall_total.model
                     trace.append(exec_entry)
                     budget_state.elapsed_seconds = time.time() - start
                     if subcall_total is not None and not budget_state.is_within(budget_config):
@@ -2823,8 +2835,15 @@ class RunRLMUseCase:
         allowances = ledger.reserve(len(calls))
         answers: list[str | None] = [None] * len(calls)
         usages: list[ChildUsage] = [ChildUsage()] * len(calls)
+        stop_event = threading.Event()
+        if ledger.over_budget:
+            stop_event.set()
 
         def run_one(index: int, call: Any, allowance: ChildAllowance) -> None:
+            if stop_event.is_set():
+                ledger.release(allowance, ChildUsage())
+                answers[index] = "Error in subcall: parent budget exhausted after an earlier child"
+                return
             if allowance.max_steps <= 0:
                 ledger.release(allowance, ChildUsage())
                 answers[index] = "Error in subcall: parent budget exhausted"
@@ -2868,7 +2887,16 @@ class RunRLMUseCase:
                 max_recursion_depth=config.max_recursion_depth - 1,
                 extra={},
             )
+            if stop_event.is_set():
+                ledger.release(allowance, ChildUsage())
+                answers[index] = "Error in subcall: parent budget exhausted after an earlier child"
+                return
+
             usage = ChildUsage()
+            # Capture the model before the child switches between root and
+            # recursive models; the child prices the whole run with the model
+            # active at its start.
+            model = getattr(child_llm, "active_model", None)
             try:
                 child = RunRLMUseCase(child_llm, child_sandbox)
                 result = child.execute(call.prompt, call.query, child_config)
@@ -2877,6 +2905,8 @@ class RunRLMUseCase:
                     output_tokens=result.output_tokens,
                     total_cost=result.total_cost,
                     steps=result.steps,
+                    model=model,
+                    cost_known=self._child_cost_known(result, model),
                 )
                 answers[index] = (
                     result.answer
@@ -2889,6 +2919,9 @@ class RunRLMUseCase:
             finally:
                 usages[index] = usage
                 ledger.release(allowance, usage)
+                if ledger.over_budget:
+                    # Stop queued children before they start a provider call.
+                    stop_event.set()
 
         if workers == 1:
             for index, call in enumerate(calls):
@@ -2906,16 +2939,21 @@ class RunRLMUseCase:
                     if exc is not None:
                         index = futures[future]
                         ledger.release(allowances[index], ChildUsage())
+                        if ledger.over_budget:
+                            stop_event.set()
                         answers[index] = f"Error in subcall: {exc}"
 
         ordered = [
             answer if answer is not None else "Error in subcall: no result" for answer in answers
         ]
+        models = {u.model for u in usages if u.model}
         total = ChildUsage(
             input_tokens=sum(u.input_tokens for u in usages),
             output_tokens=sum(u.output_tokens for u in usages),
             total_cost=sum(u.total_cost for u in usages),
             steps=sum(u.steps for u in usages),
+            model=models.pop() if len(models) == 1 else None,
+            cost_known=all(u.cost_known for u in usages),
         )
         ref = registry.register(ordered, kind="subcall", step=step)
         preview = format_preview(registry, ref, cap=config.result_preview_chars)
@@ -2962,6 +3000,25 @@ class RunRLMUseCase:
             if estimate * input_cost_per_1m / 1_000_000 >= allowance.max_cost:
                 return False
         return True
+
+    @staticmethod
+    def _child_cost_known(result: RunResultDTO, model: str | None) -> bool:
+        """Whether a child's ``total_cost`` is known rather than zero by ignorance."""
+        declared = result.metadata.get(RESULT_KEY_COST_KNOWN)
+        if declared is not None:
+            return bool(declared)
+        if result.input_tokens + result.output_tokens <= 0:
+            return True
+        if not model:
+            return False
+        # Read-time pricing uses the same helper; keep the run row and the
+        # trace's known/unknown decision on one implementation.
+        from rlmstudio.infrastructure.llm.pricing import completion_cost
+
+        try:
+            return completion_cost(model, result.input_tokens, result.output_tokens) is not None
+        except Exception:
+            return False
 
     @staticmethod
     def _run_inspect_action(
