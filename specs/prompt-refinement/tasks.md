@@ -25,10 +25,10 @@ only to keep the codebase conventions or ship the feature.
 
 ## Phase B — proposal (Runtime + API)
 
-- [ ] B1 `prompts/refine_supplement.yaml` v1.0 with version read explicitly (pattern: `benchmark/scoring.py:138`); README entry documents the FR-17 redaction policy. FR-3, FR-17.
-- [ ] B2 `application/services/refinement.py`: `build_evidence_digest` with `redact_secrets()` plus the FR-17 name × separator line-drop rule, mutation tests per plan §3.4; `propose_supplement`, JSON parsing, validation, `difflib` diff. FR-3, FR-4, FR-17, KG residual leakage. Unit tests with a fake `LLMPort`.
-- [ ] B3 Pydantic models in `server/models.py`: source run row, create request, refinement response, evaluate/accept/reject requests, holdout case row. FR-2, FR-3, FR-16 (CLAUDE.md: DTOs validated at the boundary).
-- [ ] B4 Routes: `source-runs`, `POST /refinements` (sync, `asyncio.to_thread`), list, get. Built-in profile → 400. Register in `app.py`. FR-2, FR-3, FR-4, AC-1. `TestClient` tests; `tests/e2e/test_api_endpoints.py` mirror.
+- [x] B1 `prompts/refine_supplement.yaml` v1.0 with version read explicitly (pattern: `benchmark/scoring.py:138`); README entry documents the FR-17 redaction policy. FR-3, FR-17.
+- [x] B2 `application/services/refinement.py`: `build_evidence_digest` with `redact_secrets()` plus the FR-17 name × separator line-drop rule, mutation tests per plan §3.4; `propose_supplement`, JSON parsing, validation, `difflib` diff. FR-3, FR-4, FR-17, KG residual leakage. Unit tests with a fake `LLMPort`.
+- [x] B3 Pydantic models in `server/models.py`: source run row, create request, refinement response, evaluate/accept/reject requests, holdout case row. FR-2, FR-3, FR-16 (CLAUDE.md: DTOs validated at the boundary).
+- [x] B4 Routes: `source-runs`, `POST /refinements` (sync, `asyncio.to_thread`), list, get. Built-in profile → 400. Register in `app.py`. FR-2, FR-3, FR-4, AC-1. `TestClient` tests; `tests/e2e/test_api_endpoints.py` mirror.
 
 ## Phase C — evaluation (Runtime + API + QA)
 
@@ -65,6 +65,12 @@ only to keep the codebase conventions or ship the feature.
 - A1: each migration version runs in one explicit transaction with its `user_version` bump, because Python's sqlite3 does not open a transaction before DDL. Regression test fails migration 4 after its first statement and checks rollback plus a clean retry.
 - A3: statuses live in `application/refinement_constants.py`; the telemetry store imports them (outer → inner, allowed).
 - A4: `_record_telemetry` takes `profile_id`/`content` as optional keywords so the seven existing direct test calls stay valid; both production callers pass them.
+- A6 (found in Phase B): `reset_state()` stubbed `save_config` but not `save_config_checked`, so a test reaching the checked save through the test state would write the user's real config. Stubbed in Phase B.
+- B2: the FR-17 line rule matches any identifier *ending* in a listed name (`aws_secret_key=`), which is stricter than the literal names; FR-17 wording updated.
+- B3: only the models Phase B routes use were added (source run row, create request, refinement response). The evaluate, accept, reject and holdout-case models land with their routes in C and D, so nothing unused ships.
+- B2 (review fix): each evidence field is redacted whole and then clipped; clipping first cut a key straddling the limit into a fragment the patterns could not match.
+- B4 (spec change, owner 2026-11-03): source runs are `mode = rlm` only, in both the list and proposal creation; FR-2 updated.
+- B4: a failed or unusable proposal returns 502 and stores nothing; recorded as a known gap in spec §6.
 - A7: `afd2db3` (2026-04-07) removed per-mode prompt editors in favour of prompt groups. FR-14 re-adds one RLM textarea; the old "no per-mode textareas" test now asserts only RLM is editable. Owner decision 2026-11-03: keep the single RLM textarea.
 
 ## Owner tasks (human)

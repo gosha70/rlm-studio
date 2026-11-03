@@ -40,6 +40,15 @@ _MIN_PREFILL_STEPS = 2
 _DEGRADED_WARNING_PREFIX = "\u26a0\ufe0f"
 
 
+def is_degraded_answer(success: bool, answer: str) -> bool:
+    """True when a run reported success but its answer carries the warning prefix.
+
+    Such runs are stored as successes, so a caller selecting problem runs
+    (prompt refinement's source list) must check the answer as well.
+    """
+    return success and answer.startswith(_DEGRADED_WARNING_PREFIX)
+
+
 @dataclass(frozen=True)
 class ExecutionOutcome:
     """Result of classifying an execution."""
@@ -80,7 +89,7 @@ def classify_execution_outcome(
         return _classify_hard_failure(error, trace=trace)
 
     # success=True but answer may be a degraded warning
-    if answer.startswith(_DEGRADED_WARNING_PREFIX):
+    if is_degraded_answer(success, answer):
         return _classify_degraded(answer)
 
     return ExecutionOutcome(OutcomeCategory.SUCCESS, is_usable=True)

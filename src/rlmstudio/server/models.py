@@ -7,6 +7,7 @@ from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from rlmstudio.application.refinement_constants import REFINEMENT_MAX_SOURCE_RUNS, RefinementStatus
 from rlmstudio.application.sandbox_vars import (
     MODE_AUTO,
     MODE_DIRECT,
@@ -1019,3 +1020,47 @@ class WSErrorEvent(BaseModel):
     type: str = "error"
     id: str
     data: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Prompt refinement (#78)
+# ---------------------------------------------------------------------------
+
+
+class RefinementSourceRun(BaseModel):
+    """A run of a profile offered as refinement evidence (spec FR-2)."""
+
+    id: str
+    created_at: float
+    mode: str
+    query: str
+    success: bool
+    outcome_category: str | None = None
+    degraded: bool = False
+    chat_provider_id: str | None = None
+    chat_provider_name: str | None = None
+    total_cost: float = 0.0
+    total_tokens: int = 0
+    steps_count: int = 0
+    content_sha256: str
+
+
+class RefinementCreateRequest(BaseModel):
+    """Body of ``POST /api/profiles/{id}/refinements`` (spec FR-3)."""
+
+    source_run_ids: list[str] = Field(min_length=1, max_length=REFINEMENT_MAX_SOURCE_RUNS)
+    proposal_chat_provider_id: str | None = None
+
+
+class RefinementResponse(BaseModel):
+    """One stored refinement with its proposal, evaluation and decision records."""
+
+    id: str
+    profile_id: str
+    status: RefinementStatus
+    created_at: float
+    updated_at: float
+    proposal: dict[str, Any]
+    evaluation: dict[str, Any] | None = None
+    decision: dict[str, Any] | None = None
+    error: str | None = None

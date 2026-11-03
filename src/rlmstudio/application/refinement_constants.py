@@ -45,3 +45,28 @@ RefinementStatus: TypeAlias = Literal[
 
 REFINEMENT_INTERRUPTED_ON_STARTUP_ERROR = "server restarted during evaluation"
 """``error`` text written when startup marks a running evaluation interrupted."""
+
+# ---------------------------------------------------------------------------
+# Proposal limits (spec FR-3, FR-17)
+# ---------------------------------------------------------------------------
+
+REFINEMENT_MAX_SOURCE_RUNS = 50
+"""Most source runs one proposal request may name."""
+
+REFINEMENT_EVIDENCE_MAX_TRACES = 12
+"""Most source runs rendered into the evidence digest; newer runs win."""
+
+REFINEMENT_EVIDENCE_MAX_CHARS = 24_000
+"""Character budget of the whole evidence digest."""
+
+REFINEMENT_EVIDENCE_QUERY_MAX_CHARS = 2_000
+"""Per-run cap on the query text in the digest."""
+
+REFINEMENT_EVIDENCE_ANSWER_MAX_CHARS = 3_000
+"""Per-run cap on the answer text in the digest."""
+
+REFINEMENT_EVIDENCE_ERROR_MAX_CHARS = 1_000
+"""Per-run cap on the error text in the digest."""
+
+REFINEMENT_CANDIDATE_MAX_CHARS = 8_000
+"""Longest candidate supplement a proposal may return."""

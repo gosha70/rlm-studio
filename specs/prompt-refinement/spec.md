@@ -107,7 +107,7 @@ follow-up issue:
 | ID | Requirement |
 |----|-------------|
 | FR-1 | Every telemetry run writer records `profile_id` (from the Chat Provider) and `content_sha256` of the resolved document. Writers: `server/routes/chat.py:575`, `server/routes/compare_matrix.py:858`. |
-| FR-2 | `GET /api/profiles/{id}/refinements/source-runs` returns only runs with `profile_id = id` and non-null `content_sha256`, newest first, with `outcome_category`, `degraded` (answer starts with the warning prefix), `chat_provider_id`, cost, tokens, created_at. |
+| FR-2 | `GET /api/profiles/{id}/refinements/source-runs` returns only runs with `profile_id = id`, `mode = rlm` and non-null `content_sha256`, newest first, with `outcome_category`, `degraded` (answer starts with the warning prefix), `chat_provider_id`, cost, tokens, created_at. Proposal creation rejects any source run that fails the same filter. Spec change 2026-11-03 (owner): RLM runs only, because the supplement changes nothing else and an `auto` or `compare` run may not have run the RLM loop; an opt-in for other modes can come later. |
 | FR-3 | Proposal uses one `LLMPort.complete()` call with the versioned `prompts/refine_supplement.yaml`. Input: evidence digest (capped at 12 traces and 24,000 chars, redacted per FR-17, evidence framed as data not instructions), current resolved supplement, base prompt version. Output JSON `{candidate, rationale}`; the server computes the unified diff with `difflib`. Candidate must be non-empty, differ from the current supplement, and be at most 8,000 chars. |
 | FR-4 | The proposal record stores: source run ids, the exact digest sent and its sha256, truncation info, proposal Chat Provider id, provider, model, prompt version, usage, base supplement resolved text and sha256, whether `system_prompts["rlm"]` existed and its exact prior value, template name, base prompt version. |
 | FR-5 | Evaluation runs baseline and candidate as two slots per case × rep through `RunMatrixComparisonUseCase`, same Chat Provider, separate adapter instances, temperature 0, configs differing only in `system_prompt_extra`. Each arm is recorded as a normal telemetry run (reusing the compare route's slot recorder) and its run id is stored. |
@@ -124,7 +124,7 @@ follow-up issue:
 | FR-14 | ProfileCard save, clone and export preserve `system_prompts`; the card gets a textarea for the custom RLM prompt. |
 | FR-15 | `GET /api/profiles/{id}/refinements/export.jsonl` returns one JSON line per refinement of that profile with the stored proposal, evaluation and decision records verbatim. |
 | FR-16 | `GET /api/profiles/{id}/refinements/holdout-cases` returns, for each case in `benchmarks/longdoc-v1.yaml`, its id, tags, size bucket, whether it has an `expected_answer`, and whether it materialises offline; cases tagged `holdout` are the default selection. |
-| FR-17 | Evidence redaction policy: the digest passes each query, answer and error through `redact_secrets()` (API-key and bearer-token shapes) and additionally drops any line that matches, case-insensitively and with optional whitespace around the separator, one of the names `key`, `api_key`, `apikey`, `token`, `password`, `passwd`, `secret`, `authorization` followed by `=`, `:`, or a JSON-style `":`. The policy is documented in the proposal prompt's README entry and covered by mutation tests. It does not claim to catch arbitrary secrets (see §6, residual evidence leakage). |
+| FR-17 | Evidence redaction policy: the digest passes each query, answer and error through `redact_secrets()` (API-key and bearer-token shapes) and additionally drops any line in which an identifier ending in one of the names (so `aws_secret_key=` is caught too) is matched, case-insensitively and with optional whitespace around the separator; the names are `key`, `api_key`, `apikey`, `token`, `password`, `passwd`, `secret`, `authorization` followed by `=`, `:`, or a JSON-style `":`. The policy is documented in the proposal prompt's README entry and covered by mutation tests. It does not claim to catch arbitrary secrets (see §6, residual evidence leakage). |
 | FR-18 | Settings → Profiles exposes the refinement flow for user profiles: source-run selection, proposal provider choice, diff and rationale, holdout selection with run count, progress, per-case results with the regression flag defaulting to Reject, accept acknowledgement, history with rollback, and the current resolved supplement shown next to the candidate. |
 
 ## 5. Acceptance criteria (hard)
@@ -190,6 +190,10 @@ here before the phase closes.
   source runs and the proposal provider, and the digest is stored verbatim
   in the proposal record, so what was sent is auditable. Stronger structured
   redaction goes to the follow-up issue.
+- **Failed proposals leave no record.** A proposal call that fails at the
+  provider or returns an unusable reply returns 502 and stores no
+  refinement row, so that paid call and the digest it sent appear only in
+  the server log. Found in Phase B.
 - **Selection is not bound to the request.** The run count and case list the
   UI shows before evaluation are computed client-side from
   `holdout-cases`; the evaluate request carries its own case ids and reps and

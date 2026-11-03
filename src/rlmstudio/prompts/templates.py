@@ -163,6 +163,31 @@ def get_mode_system_prompt(mode: str, template_name: str = "Default") -> str:
     return str(prompt)
 
 
+REFINE_SUPPLEMENT_PROMPT_FILE = "refine_supplement.yaml"
+"""Proposal prompt for evidence-gated prompt refinement (#78)."""
+
+
+def get_refine_supplement_prompt() -> tuple[str, str]:
+    """Return ``(template, version)`` of the prompt-refinement proposal prompt.
+
+    Unlike :func:`load_prompt_from_file`, this keeps the YAML ``version`` so
+    every proposal can record which prompt revision produced it.
+
+    Raises:
+        KeyError: The YAML lacks a ``template`` or ``version`` key.
+    """
+    if REFINE_SUPPLEMENT_PROMPT_FILE not in _yaml_doc_cache:
+        import importlib.resources as pkg_resources
+
+        import yaml
+
+        pkg = pkg_resources.files("rlmstudio.prompts")
+        raw = (pkg / REFINE_SUPPLEMENT_PROMPT_FILE).read_text(encoding="utf-8")
+        _yaml_doc_cache[REFINE_SUPPLEMENT_PROMPT_FILE] = yaml.safe_load(raw)
+    doc = _yaml_doc_cache[REFINE_SUPPLEMENT_PROMPT_FILE]
+    return str(doc["template"]), str(doc["version"])
+
+
 def get_rlm_message(key: str) -> str:
     """Get a named operational message from ``rlm_messages.yaml``.
 

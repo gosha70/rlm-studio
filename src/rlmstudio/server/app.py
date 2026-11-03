@@ -34,6 +34,7 @@ from rlmstudio.server.routes import (
     profiles,
     prompts,
     providers,
+    refinements,
     replays,
     sessions,
     traces,
@@ -160,6 +161,7 @@ def create_app() -> FastAPI:
     app.include_router(traces.router)
     app.include_router(providers.router)
     app.include_router(profiles.router)
+    app.include_router(refinements.router)
     app.include_router(prompts.router)
     app.include_router(config.router)
     app.include_router(llm_providers.router)
