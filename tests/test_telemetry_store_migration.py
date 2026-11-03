@@ -188,9 +188,19 @@ class TestMigrationAtomicity:
         failing = dict(store_module._MIGRATIONS)
         failing[4] = [real_v4[0], "ALTER TABLE no_such_table ADD COLUMN boom TEXT"]
         monkeypatch.setattr(store_module, "_MIGRATIONS", failing)
+        closed: list[bool] = []
+        real_close = TelemetryStore.close
+
+        def tracking_close(self: TelemetryStore) -> None:
+            closed.append(True)
+            real_close(self)
+
+        monkeypatch.setattr(TelemetryStore, "close", tracking_close)
 
         with pytest.raises(sqlite3.OperationalError, match="no_such_table"):
             TelemetryStore(db_path=db_path)
+        # The failed constructor does not leave its connection open.
+        assert closed == [True]
 
         raw = sqlite3.connect(db_path)
         try:

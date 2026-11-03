@@ -211,10 +211,10 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             for stmt in _MIGRATIONS[target_version]:
                 conn.execute(stmt)
             conn.execute(f"PRAGMA user_version = {target_version}")
+            conn.commit()
         except BaseException:
             conn.rollback()
             raise
-        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -331,9 +331,15 @@ class TelemetryStore:
     def _init_schema(self) -> None:
         with self._lock:
             conn = self._connect()
-            conn.executescript(_SCHEMA_SQL)
-            conn.commit()
-            _run_migrations(conn)
+            try:
+                conn.executescript(_SCHEMA_SQL)
+                conn.commit()
+                _run_migrations(conn)
+            except BaseException:
+                # The constructor is about to raise; do not leave the
+                # connection open behind an unreachable store.
+                self.close()
+                raise
 
     def close(self) -> None:
         """Close the database connection."""
@@ -905,15 +911,18 @@ class TelemetryStore:
             conn = self._connect()
             try:
                 cursor = conn.execute(sql, tuple(params))
+                # Read inside the same transaction so the returned record
+                # is exactly what commits; a failed read rolls back and is
+                # never reported as a landed write.
+                row = conn.execute(
+                    "SELECT * FROM refinements WHERE id = ?", (refinement_id,)
+                ).fetchone()
                 if cursor.rowcount != 1:
                     conn.rollback()
-                    current = conn.execute(
-                        "SELECT status FROM refinements WHERE id = ?", (refinement_id,)
-                    ).fetchone()
-                    if current is None:
+                    if row is None:
                         raise RefinementConflictError(f"Refinement {refinement_id} not found")
                     raise RefinementConflictError(
-                        f"Refinement {refinement_id} is {current['status']!r},"
+                        f"Refinement {refinement_id} is {row['status']!r},"
                         f" expected one of {expected!r}"
                     )
                 conn.commit()
@@ -922,9 +931,6 @@ class TelemetryStore:
                 raise RefinementStoreError(
                     f"Failed to update refinement {refinement_id}: {exc}"
                 ) from exc
-            row = conn.execute(
-                "SELECT * FROM refinements WHERE id = ?", (refinement_id,)
-            ).fetchone()
         return self._row_to_refinement(row)
 
     def get_refinement(self, refinement_id: str) -> RefinementRecord | None:
@@ -971,13 +977,14 @@ class TelemetryStore:
                         REFINEMENT_STATUS_EVALUATING,
                     ),
                 )
+                count = int(cursor.rowcount)
                 conn.commit()
             except sqlite3.Error as exc:
                 conn.rollback()
                 raise RefinementStoreError(
                     f"Failed to mark interrupted refinements: {exc}"
                 ) from exc
-        return int(cursor.rowcount)
+        return count
 
     # ------------------------------------------------------------------
     # Cleanup
