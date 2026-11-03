@@ -231,6 +231,42 @@ def test_adapter_preserves_the_timeout_prefix() -> None:
     assert str(err).startswith(TIMEOUT_ERROR_PREFIX)
 
 
+def test_adapter_classifies_timeouts_and_connection_errors_without_rewording() -> None:
+    """Timeouts and connection failures carry their kind (#78: refinement
+    evaluation must not score a provider failure as a wrong answer) while
+    keeping the exact message the use cases match on."""
+    litellm = pytest.importorskip("litellm")
+
+    from rlmstudio.application.services.provider_failure import (
+        ProviderFailureError,
+        failure_kind_of,
+    )
+    from rlmstudio.infrastructure.llm.litellm_adapter import (
+        TIMEOUT_ERROR_PREFIX,
+        LiteLLMAdapter,
+        _connection_error_message,
+        _timeout_error_message,
+    )
+
+    adapter = LiteLLMAdapter(model="gpt-4o-mini", timeout=30.0)
+    raw_timeout = litellm.Timeout(
+        message="Request timed out", model="gpt-4o-mini", llm_provider="openai"
+    )
+    timeout = adapter._translate_exception(raw_timeout, "LiteLLM failed")
+    assert isinstance(timeout, ProviderFailureError)
+    assert failure_kind_of(timeout) is ProviderFailureKind.TIMEOUT
+    assert str(timeout) == _timeout_error_message(30.0, raw_timeout)
+    assert str(timeout).startswith(TIMEOUT_ERROR_PREFIX)
+
+    raw_conn = litellm.APIConnectionError(
+        message="Connection reset by peer", llm_provider="openai", model="gpt-4o-mini"
+    )
+    conn = adapter._translate_exception(raw_conn, "LiteLLM failed")
+    assert isinstance(conn, ProviderFailureError)
+    assert failure_kind_of(conn) is ProviderFailureKind.CONNECTION
+    assert str(conn) == _connection_error_message(None, raw_conn)
+
+
 def test_adapter_unknown_failure_keeps_the_default_prefix() -> None:
     """An unclassified failure keeps the caller's prefix and its detail,
     rather than being dressed up with a remedy that may not apply."""

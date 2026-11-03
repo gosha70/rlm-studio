@@ -891,7 +891,11 @@ class LiteLLMAdapter:
         Timeout and connection keep their existing message shapes: three use
         cases (``run_direct``, ``run_rag``, ``run_rlm``) detect timeouts by
         ``str(exc).startswith(TIMEOUT_ERROR_PREFIX)``, so changing that
-        prefix would silently break their classification.
+        prefix would silently break their classification.  They are still
+        raised as :class:`ProviderFailureError` with the ``timeout`` /
+        ``connection`` kind, so the result's ``failure_kind`` says a provider
+        failed; prompt-refinement evaluation must not score such an arm as a
+        wrong answer (#78).
 
         Everything else is classified through the shared classifier so the
         run path and the connection probe say the same thing (#95). The
@@ -899,9 +903,19 @@ class LiteLLMAdapter:
         can echo the rejected key.
         """
         if _is_timeout_error(exc):
-            return RuntimeError(_timeout_error_message(self._timeout, exc))
+            return ProviderFailureError(
+                _timeout_error_message(self._timeout, exc),
+                describe_provider_failure(
+                    ProviderFailureKind.TIMEOUT, model=self._model, api_base=self._api_base
+                ),
+            )
         if _is_connection_error(exc):
-            return RuntimeError(_connection_error_message(self._api_base, exc))
+            return ProviderFailureError(
+                _connection_error_message(self._api_base, exc),
+                describe_provider_failure(
+                    ProviderFailureKind.CONNECTION, model=self._model, api_base=self._api_base
+                ),
+            )
 
         kind = classify_provider_failure(exc)
         if kind is not ProviderFailureKind.UNKNOWN:
