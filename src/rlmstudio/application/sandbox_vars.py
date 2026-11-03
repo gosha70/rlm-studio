@@ -129,6 +129,11 @@ RLM_DEFAULT_COMPACTION_RESERVE_TOKENS = 4096
 RLM_DEFAULT_COMPACTION_KEEP_LAST = 4
 """Most recent assistant/execution pairs kept verbatim during compaction."""
 
+RLM_DEFAULT_SUBCALL_MAX_CONCURRENCY = 4
+"""Default cap on concurrently running child RLMs in a batched subcall."""
+RLM_LOCAL_SUBCALL_MAX_CONCURRENCY = 2
+"""Provider-kind cap for local backends (Ollama, LM Studio, vLLM)."""
+
 RUNTIME_DEFAULT_TEMPERATURE = 0.7
 RUNTIME_DEFAULT_TOP_P = 1.0
 RUNTIME_DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -148,6 +153,11 @@ TRACE_KEY_CODE = "code"
 TRACE_KEY_INPUT_TOKENS = "input_tokens"
 TRACE_KEY_OUTPUT_TOKENS = "output_tokens"
 TRACE_KEY_ELAPSED_SECONDS = "elapsed_seconds"
+TRACE_KEY_COST = "cost"
+"""Aggregated child cost on a controller-dispatched subcall row (USD)."""
+TRACE_KEY_COST_KNOWN = "cost_known"
+"""Whether that aggregate cost is known (``True``), unknown (``False``),
+or not applicable (key absent)."""
 TRACE_KEY_MODEL = "model"
 TRACE_KEY_MODE = "mode"
 TRACE_KEY_CLAMP = "clamp"

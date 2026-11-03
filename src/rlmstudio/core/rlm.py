@@ -353,7 +353,15 @@ class RLM:
             elif action_type == "subcall":
                 # Execute subcall via the bound function
                 subcall_func = self.env.env_globals.get("subcall") if self.env else None
-                if subcall_func and hasattr(action_obj, "query") and hasattr(action_obj, "prompt"):
+                if action_obj.calls:
+                    # The legacy REPL path runs a batched action serially; the
+                    # controller path in RunRLMUseCase runs it concurrently.
+                    code = "\n".join(
+                        f"print(subcall(content={call.prompt!r}, query={call.query!r}))"
+                        for call in action_obj.calls
+                    )
+                    return ParsedResponse(code=code, raw_text=response)
+                if subcall_func and action_obj.query is not None and action_obj.prompt is not None:
                     # Generate code representation for tracing
                     # Note: SubcallAction uses 'prompt' but subcall() function uses 'content'
                     code = f"subcall(content={repr(action_obj.prompt)}, query={repr(action_obj.query)})"
@@ -391,10 +399,16 @@ class RLM:
                             return ParsedResponse(code=code, raw_text=response)
                     elif action_type == "subcall":
                         subcall_func = self.env.env_globals.get("subcall") if self.env else None
+                        if action_obj.calls:
+                            code = "\n".join(
+                                f"print(subcall(content={call.prompt!r}, query={call.query!r}))"
+                                for call in action_obj.calls
+                            )
+                            return ParsedResponse(code=code, raw_text=response)
                         if (
                             subcall_func
-                            and hasattr(action_obj, "query")
-                            and hasattr(action_obj, "prompt")
+                            and action_obj.query is not None
+                            and action_obj.prompt is not None
                         ):
                             code = f"subcall(content={repr(action_obj.prompt)}, query={repr(action_obj.query)})"
                             try:

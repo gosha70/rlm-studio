@@ -185,16 +185,27 @@ Hard (deterministic fakes, run in CI):
 - AC-5 Fake adapter raising overflow once on step N → compaction + successful
   retry of N; raising twice on N → existing fallback with `overflow_at_step`
   recorded.
-- AC-6 Four concurrent children never exceed the parent's `max_cost` /
-  `max_tokens` / `max_steps`; two children may each consume most of the
-  same remaining wall-clock interval, and the ledger does not divide that
-  interval by child count; neither child starts a step after the parent's
-  deadline; a local-provider profile is capped at 2 regardless of the
-  requested `max_concurrency`.
+- AC-6 The sum of the children's *reservations* never exceeds the parent's
+  remaining `max_cost` / `max_tokens` / `max_steps`, and a child does not
+  start a call whose estimated initial prompt cannot fit its share. Token
+  and cost usage is known only after a provider response, so one in-flight
+  call can overshoot its share; when aggregate usage crosses a parent limit
+  the overage is recorded on the subcall row, a shared stop flag prevents
+  every still-queued child from starting, and the run terminates
+  immediately with a budget warning, never a normal final. Two children may
+  each consume most of the same remaining wall-clock interval, and the
+  ledger does not divide that interval by child count; neither child starts
+  a step after the parent's deadline; a local-provider profile is capped at
+  2 regardless of the requested `max_concurrency`.
 - AC-6a A single and a batched v2 `subcall` complete correctly with the
   subprocess sandbox configured (the sandbox is never invoked for them).
-- AC-7 Telemetry attributes each child's spend to the parent run; the batched
-  result is readable by `read_result` and stubbed by compaction.
+- AC-7 Telemetry attributes each child's spend to the parent run: the
+  subcall execution row carries aggregate child input/output tokens and,
+  when pricing is known, aggregate cost, so trace and persisted step totals
+  reconcile with `RunResultDTO`. An unpriced token-bearing subcall remains
+  "Unavailable", never a fabricated `$0.00`; an actual known zero stays
+  distinguishable. The batched result is readable by `read_result` and
+  stubbed by compaction.
 - AC-8 AC-1..7 pass on `execute` and `execute_async` (normalised semantic
   trace equality); the v1 free-form path keeps its existing sandbox tests
   on restricted and subprocess (docker as `integration`).

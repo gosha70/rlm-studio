@@ -30,6 +30,8 @@ from rlmstudio.application.sandbox_vars import (
     MODES_RLM_INTERNAL,
     TRACE_KEY_CODE,
     TRACE_KEY_CONTENT,
+    TRACE_KEY_COST,
+    TRACE_KEY_COST_KNOWN,
     TRACE_KEY_ELAPSED_SECONDS,
     TRACE_KEY_INPUT_TOKENS,
     TRACE_KEY_MODEL,
@@ -601,6 +603,8 @@ def _record_telemetry(
         )
         input_tokens = step_data.get(TRACE_KEY_INPUT_TOKENS, 0)
         output_tokens = step_data.get(TRACE_KEY_OUTPUT_TOKENS, 0)
+        raw_cost_known = step_data.get(TRACE_KEY_COST_KNOWN)
+        cost_known = bool(raw_cost_known) if raw_cost_known is not None else None
         state.telemetry.record_step(
             run_id=run_id,
             step_index=i,
@@ -609,6 +613,8 @@ def _record_telemetry(
             output=step_data.get(TRACE_KEY_CONTENT),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cost=float(step_data.get(TRACE_KEY_COST, 0.0) or 0.0),
+            cost_known=cost_known,
             duration=step_data.get(TRACE_KEY_ELAPSED_SECONDS, 0.0),
             model=step_data.get(TRACE_KEY_MODEL),
             # Prefill/decode telemetry (spec v1.7). The four plain-string
@@ -673,7 +679,7 @@ async def _run_execution(
         # Build run config, using Chat Provider settings if available.
         # Apply RLM-specific knobs for rlm, auto, and compare (all run RLM internally).
         if cp and mode in MODES_RLM_INTERNAL:
-            run_config = state.create_run_config(mode)
+            run_config = state.create_run_config(mode, telemetry_backend)
             run_config.max_steps = cp.rlm_max_steps
             run_config.max_time_seconds = float(cp.rlm_timeout_seconds)
             run_config.repeat_limit = cp.rlm_repeat_limit
@@ -692,7 +698,7 @@ async def _run_execution(
                             len(_extra),
                         )
         else:
-            run_config = state.create_run_config(mode)
+            run_config = state.create_run_config(mode, telemetry_backend)
 
         # Prepare conversation history via the budgeted helper
         full_query, extra_overlay, _history_info = _prepare_history_context(
@@ -1136,7 +1142,7 @@ async def websocket_chat(
                             type(llm).__name__,
                             q,
                         )
-                        cfg = state.create_run_config(m)
+                        cfg = state.create_run_config(m, ws_telemetry_backend)
                         # Thread Chat Provider RLM settings into run config
                         if ws_cp and m in MODES_RLM_INTERNAL:
                             cfg.max_steps = ws_cp.rlm_max_steps

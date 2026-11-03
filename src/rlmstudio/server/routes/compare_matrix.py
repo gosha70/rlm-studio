@@ -31,6 +31,8 @@ from rlmstudio.application.sandbox_vars import (
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
     RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS,
+    TRACE_KEY_COST,
+    TRACE_KEY_COST_KNOWN,
     ExecutionMode,
 )
 from rlmstudio.application.use_cases.run_matrix_comparison import (
@@ -887,6 +889,8 @@ def _record_slot_telemetry(
             )
             input_tokens = step_data.get("input_tokens", 0)
             output_tokens = step_data.get("output_tokens", 0)
+            raw_cost_known = step_data.get(TRACE_KEY_COST_KNOWN)
+            cost_known = bool(raw_cost_known) if raw_cost_known is not None else None
             state.telemetry.record_step(
                 run_id=meta.execution_id,
                 step_index=i,
@@ -895,6 +899,8 @@ def _record_slot_telemetry(
                 output=step_data.get("content"),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                cost=float(step_data.get(TRACE_KEY_COST, 0.0) or 0.0),
+                cost_known=cost_known,
                 duration=step_data.get("elapsed_seconds", 0.0),
                 model=step_data.get("model"),
                 # Prefill/decode telemetry — mirrors the chat route.
@@ -943,7 +949,9 @@ def _build_slot_run_config(
     """Build a per-slot :class:`RunConfigDTO` with the chat provider's profile
     settings applied (mirrors ``/api/chat`` for RLM) and optional RAG extras.
     """
-    run_config = state.create_run_config(mode=mode)
+    llm_provider = state.get_llm_provider(cp.llm_provider_id) if cp.llm_provider_id else None
+    provider_key = (llm_provider.backend if llm_provider else None) or cp.llm_provider
+    run_config = state.create_run_config(mode=mode, provider_key=provider_key)
 
     # Apply per-provider RLM knobs the same way /api/chat does.  The official
     # engine shares the step/time budgets but runs its own prompts, so the

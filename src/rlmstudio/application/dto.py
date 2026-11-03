@@ -22,6 +22,7 @@ from rlmstudio.application.sandbox_vars import (
     RLM_DEFAULT_RESULT_PREVIEW_CHARS,
     RLM_DEFAULT_SPILL_RESULT_ABOVE_BYTES,
     RLM_DEFAULT_STALL_LIMIT,
+    RLM_DEFAULT_SUBCALL_MAX_CONCURRENCY,
 )
 
 
@@ -162,6 +163,7 @@ class RunConfigDTO:
     max_spill_bytes: int = RLM_DEFAULT_MAX_SPILL_BYTES
     compaction_reserve_tokens: int = RLM_DEFAULT_COMPACTION_RESERVE_TOKENS
     compaction_keep_last: int = RLM_DEFAULT_COMPACTION_KEEP_LAST
+    subcall_max_concurrency: int = RLM_DEFAULT_SUBCALL_MAX_CONCURRENCY
     verbose: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 

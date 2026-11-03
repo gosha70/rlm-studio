@@ -24,6 +24,22 @@ from rlmstudio.application.use_cases.run_matrix_comparison import (
 # ---------------------------------------------------------------------------
 
 
+def test_copy_config_for_slot_preserves_subcall_concurrency() -> None:
+    from rlmstudio.application.use_cases.run_matrix_comparison import (
+        _copy_config_for_slot,
+    )
+
+    base = RunConfigDTO(mode="compare", subcall_max_concurrency=2)
+    base.extra["collection"] = "base"
+
+    slot = _copy_config_for_slot(base, "rlm")
+
+    assert slot.subcall_max_concurrency == 2
+    assert slot.mode == "rlm"
+    assert slot.extra == {"collection": "base"}
+    assert slot.extra is not base.extra
+
+
 class FakeLLM:
     """LLMPort-compliant fake with configurable cost and latency."""
 

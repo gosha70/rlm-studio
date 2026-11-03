@@ -106,19 +106,63 @@ class FinalAction:
 
 
 @dataclass
-class SubcallAction:
-    """Action to make a recursive subcall."""
+class SubcallCall:
+    """One prompt/query pair in a single or batched subcall action."""
 
     prompt: str
     query: str
-    note: str | None = None
 
     def validate(self) -> None:
-        """Validate the subcall action."""
+        """Validate one subcall pair."""
         if not self.prompt or not isinstance(self.prompt, str):
             raise ValueError("prompt must be a non-empty string")
         if not self.query or not isinstance(self.query, str):
             raise ValueError("query must be a non-empty string")
+
+
+@dataclass
+class SubcallAction:
+    """Action to make one recursive subcall, or a batch of them.
+
+    The single form keeps the original fields and positional order
+    (``prompt``, ``query``, ``note``).  The batched form uses ``calls``
+    plus an optional ``max_concurrency`` cap; the two forms are mutually
+    exclusive.
+    """
+
+    prompt: str | None = None
+    query: str | None = None
+    note: str | None = None
+    calls: list[SubcallCall] | None = None
+    max_concurrency: int | None = None
+
+    def validate(self) -> None:
+        """Validate the single or batched subcall action."""
+        if self.calls is not None:
+            if self.prompt is not None or self.query is not None:
+                raise ValueError("subcall must use either prompt+query or calls, not both")
+            if not self.calls:
+                raise ValueError("calls must contain at least one subcall")
+            for call in self.calls:
+                call.validate()
+        else:
+            if not self.prompt or not isinstance(self.prompt, str):
+                raise ValueError("prompt must be a non-empty string")
+            if not self.query or not isinstance(self.query, str):
+                raise ValueError("query must be a non-empty string")
+        if self.max_concurrency is not None and (
+            isinstance(self.max_concurrency, bool)
+            or not isinstance(self.max_concurrency, int)
+            or self.max_concurrency < 1
+        ):
+            raise ValueError("max_concurrency must be a positive integer")
+
+    @property
+    def batch(self) -> list[SubcallCall]:
+        """The calls in order; the single form is a one-element batch."""
+        if self.calls is not None:
+            return list(self.calls)
+        return [SubcallCall(prompt=self.prompt or "", query=self.query or "")]
 
 
 class ParseError(Exception):
@@ -343,18 +387,41 @@ def _parse_final_action(json_obj: dict[str, Any]) -> tuple[Literal["final"], Fin
 
 
 def _parse_subcall_action(json_obj: dict[str, Any]) -> tuple[Literal["subcall"], SubcallAction]:
-    """Parse subcall action from JSON."""
-    # Required fields
-    if "prompt" not in json_obj:
-        raise ParseError("subcall action missing required 'prompt' field")
-    if "query" not in json_obj:
-        raise ParseError("subcall action missing required 'query' field")
-
-    # Optional fields
+    """Parse a single or batched subcall action from JSON."""
     note = json_obj.get("note")
+    max_concurrency = json_obj.get("max_concurrency")
 
-    # Create and validate
-    action = SubcallAction(prompt=json_obj["prompt"], query=json_obj["query"], note=note)
+    if "calls" in json_obj:
+        if "prompt" in json_obj or "query" in json_obj:
+            raise ParseError("subcall action must use either prompt+query or calls, not both")
+        raw_calls = json_obj["calls"]
+        if not isinstance(raw_calls, list) or not raw_calls:
+            raise ParseError("subcall action 'calls' must be a non-empty list")
+        calls: list[SubcallCall] = []
+        for index, item in enumerate(raw_calls):
+            if not isinstance(item, dict):
+                raise ParseError(f"subcall call {index} must be an object")
+            if "prompt" not in item:
+                raise ParseError(f"subcall call {index} missing required 'prompt' field")
+            if "query" not in item:
+                raise ParseError(f"subcall call {index} missing required 'query' field")
+            calls.append(SubcallCall(prompt=item["prompt"], query=item["query"]))
+        action = SubcallAction(
+            calls=calls,
+            note=note,
+            max_concurrency=max_concurrency,
+        )
+    else:
+        if "prompt" not in json_obj:
+            raise ParseError("subcall action missing required 'prompt' field")
+        if "query" not in json_obj:
+            raise ParseError("subcall action missing required 'query' field")
+        action = SubcallAction(
+            prompt=json_obj["prompt"],
+            query=json_obj["query"],
+            note=note,
+            max_concurrency=max_concurrency,
+        )
 
     try:
         action.validate()

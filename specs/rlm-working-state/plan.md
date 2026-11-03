@@ -90,17 +90,23 @@ green by end of week 3; batching becomes a follow-up PR against the same spec.
 - **D6 — children are independent `RunRLMUseCase` runs** with a
   `copy.copy(llm)` and their own sandbox copy, launched by the controller
   (D2); the ledger replaces the `parent_budget_snapshot` / `subcall_usage`
-  pair, which is deleted. Cost, tokens and steps are pre-reserved (equal
-  split, unused headroom released). **Wall-clock time is not divided among
-  siblings:** every child gets the parent's common absolute deadline and
-  must not start another controller/LLM step after it; two parallel
-  children with 90 s remaining may each run up to that deadline.
-  Equal-splitting time would make batching weaker than today's serial
-  semantics. This is a between-steps guarantee only: `max_time_seconds` is
-  checked between actions, a copied adapter keeps its own request timeout,
-  and `ThreadPoolExecutor` cannot kill a running worker, so an in-flight
-  provider call may outlive the deadline. Clamping each child's provider
-  request timeout to the remaining headroom is out of scope for PR 3.
+  pair for v2 subcalls. (The v1 free-form `subcall()` binding is retained
+  for spec I6 compatibility; v2 actions never use it.) Cost, tokens and
+  steps are pre-reserved (equal split, unused headroom released), and a
+  child does not start a call whose estimated initial prompt cannot fit its
+  share. A provider response can still overshoot its share because usage is
+  known only after the call; the overage is recorded on the subcall row and
+  the parent aborts immediately with a budget warning. **Wall-clock time is
+  not divided among siblings:** every child gets the parent's common
+  absolute deadline and must not start another controller/LLM step after
+  it; two parallel children with 90 s remaining may each run up to that
+  deadline. Equal-splitting time would make batching weaker than today's
+  serial semantics. This is a between-steps guarantee only:
+  `max_time_seconds` is checked between actions, a copied adapter keeps its
+  own request timeout, and `ThreadPoolExecutor` cannot kill a running
+  worker, so an in-flight provider call may outlive the deadline. Clamping
+  each child's provider request timeout to the remaining headroom is out of
+  scope for PR 3.
 - **D7 — `compaction` is a canonical action type.** Today
   `domain/entities.py::TraceStep.action_type` is
   `Literal["inspect","subcall","final","error"]`,

@@ -723,6 +723,55 @@ class TestRecordTelemetryHelper:
         assert "anthropic" in keys
         assert "My Claude" not in keys
 
+    def test_subcall_row_tokens_and_cost_reconcile_with_run_totals(self) -> None:
+        from datetime import datetime, timezone
+
+        from rlmstudio.application.dto import RunResultDTO
+        from rlmstudio.server.dependencies import AppState, ExecutionRecord
+        from rlmstudio.server.routes.chat import _record_telemetry
+
+        state = AppState(load_from_disk=False)
+        execution = ExecutionRecord(
+            execution_id="exec-subcall-1",
+            session_id="sess-1",
+            query="batch them",
+            mode="rlm",
+            status="complete",
+            started_at=datetime.now(timezone.utc),
+        )
+        result = RunResultDTO(
+            answer="done",
+            mode_used="rlm",
+            success=True,
+            steps=3,
+            input_tokens=60,
+            output_tokens=30,
+            total_cost=0.002,
+            elapsed_time=0.2,
+            trace=[
+                {"role": "assistant", "input_tokens": 10, "output_tokens": 5, "model": "gpt-4o"},
+                {
+                    "role": "execution",
+                    "content": '["answer child-0", "answer child-1"]',
+                    "input_tokens": 40,
+                    "output_tokens": 20,
+                    "cost": 0.002,
+                    "cost_known": True,
+                },
+                {"role": "assistant", "input_tokens": 10, "output_tokens": 5, "model": "gpt-4o"},
+            ],
+        )
+
+        _record_telemetry(state, execution, result, provider="openai", model="gpt-4o")
+
+        detail = state.telemetry.get_run("exec-subcall-1")
+        assert detail is not None
+        assert sum(int(step.get("input_tokens", 0)) for step in detail.steps) == 60
+        assert sum(int(step.get("output_tokens", 0)) for step in detail.steps) == 30
+        subcall = next(step for step in detail.steps if step["action_type"] == "subcall")
+        assert float(subcall["cost"]) == 0.002
+        assert subcall["cost_known"] == 1
+
     def test_step_action_types_normalized(self) -> None:
         """Raw trace roles (assistant/execution) are normalized to canonical
         ExecutionTrace action types; the last successful step becomes 'final'."""

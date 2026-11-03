@@ -144,6 +144,26 @@ PROVIDERS: list[ProviderEntry] = [
 PROVIDERS_BY_KEY: dict[str, ProviderEntry] = {p.key: p for p in PROVIDERS}
 """Look up a ``ProviderEntry`` by its internal key."""
 
+LOCAL_PROVIDER_KEYS: frozenset[str] = frozenset({"ollama", "lmstudio", "vllm"})
+"""Providers whose inference runs on the user's own machine or LAN."""
+
+
+def subcall_concurrency_for(provider_key: str | None) -> int:
+    """Default concurrent-child cap for a provider kind.
+
+    Local backends get a lower cap so a batch cannot flood one GPU or
+    single-worker server; cloud providers use the larger default.
+    """
+    from rlmstudio.application.sandbox_vars import (
+        RLM_DEFAULT_SUBCALL_MAX_CONCURRENCY,
+        RLM_LOCAL_SUBCALL_MAX_CONCURRENCY,
+    )
+
+    if provider_key in LOCAL_PROVIDER_KEYS:
+        return RLM_LOCAL_SUBCALL_MAX_CONCURRENCY
+    return RLM_DEFAULT_SUBCALL_MAX_CONCURRENCY
+
+
 PROVIDER_OPTIONS: list[tuple[str, str]] = [(p.display_name, p.key) for p in PROVIDERS]
 """``(display_name, key)`` pairs for select-box widgets."""
 

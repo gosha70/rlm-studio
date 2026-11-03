@@ -35,7 +35,7 @@ from rlmstudio.server.models import (
     SystemPrompts,
 )
 from rlmstudio.telemetry.store import TelemetryStore
-from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY
+from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY, subcall_concurrency_for
 from rlmstudio.ui.services.secret_store import FileSecretStore, KeyringSecretStore
 
 logger = logging.getLogger(__name__)
@@ -1563,7 +1563,9 @@ class AppState:
             sandbox_type = "subprocess"
         return create_sandbox(sandbox_type=sandbox_type)
 
-    def create_run_config(self, mode: str = MODE_AUTO) -> RunConfigDTO:
+    def create_run_config(
+        self, mode: str = MODE_AUTO, provider_key: str | None = None
+    ) -> RunConfigDTO:
         b = self.config.budget
         return RunConfigDTO(
             mode=mode,
@@ -1574,6 +1576,7 @@ class AppState:
             max_recursion_depth=b.max_recursion_depth,
             repeat_limit=b.repeat_limit,
             nudge_at_fraction=b.nudge_at_fraction,
+            subcall_max_concurrency=subcall_concurrency_for(provider_key),
             **_registry_config_kwargs(),
         )
 

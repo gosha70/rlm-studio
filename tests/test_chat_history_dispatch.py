@@ -389,8 +389,8 @@ class TestSystemPromptContainsHistoryParagraph:
         # Must NOT contain the invalid v2 JSON form
         assert '"code": "print(history' not in prompt
 
-    def test_rlm_system_prompt_version_is_2_2(self) -> None:
-        """2.2 added ``read_result`` (specs/rlm-working-state); 2.1 added history."""
+    def test_rlm_system_prompt_version_is_2_3(self) -> None:
+        """2.3 added batched subcalls; 2.2 added ``read_result``; 2.1 history."""
         import importlib.resources as pkg_resources
 
         import yaml
@@ -398,7 +398,15 @@ class TestSystemPromptContainsHistoryParagraph:
         pkg = pkg_resources.files("rlmstudio.prompts")
         raw = (pkg / "system_prompt_v2_0.yaml").read_text(encoding="utf-8")
         data = yaml.safe_load(raw)
-        assert data["version"] == "2.2"
+        assert data["version"] == "2.3"
+
+    def test_rlm_system_prompt_documents_batched_subcalls(self) -> None:
+        from rlmstudio.prompts import format_system_prompt
+
+        prompt = format_system_prompt(prompt_length=1000)
+        assert '"calls"' in prompt
+        assert '"max_concurrency"' in prompt
+        assert "map-reduce" in prompt.lower()
 
     def test_history_paragraph_warns_against_tool_use(self) -> None:
         """The prompt must warn not to pass history to peek/grep/outline_file."""

@@ -82,6 +82,19 @@ This allows:
 - **Multi-hop reasoning** — follow entity references across sections
 - **Conditional branching** — search first, then dig deeper only into relevant sections
 
+Studio's v2 protocol expresses the map-reduce step directly: a `subcall` action
+accepts either one `prompt`/`query` pair or a `calls` list. The controller runs
+the batch concurrently (up to a provider-kind cap), returns the answers in
+input order as one registered result, and the parent can read that result back
+or reason over it in the next turn:
+
+```json
+{"type": "subcall",
+ "calls": [{"prompt": "<chunk 1>", "query": "What is the main claim?"},
+           {"prompt": "<chunk 2>", "query": "What is the main claim?"}],
+ "max_concurrency": 2}
+```
+
 ---
 
 ## 5. Budget Controls and Graceful Degradation
@@ -267,7 +280,7 @@ Items from the paper not yet addressed in RLM Studio, or areas for future develo
 |------|--------|
 | RAG mode | Available in v1.0.0 (lightweight in-memory: `LiteLLMEmbeddingAdapter` + `SQLiteStorageAdapter`); `rag-core` package integration planned for v1.1.0 |
 | Recursion depth > 1 in public API | Depth is configurable in core; not exposed in `interact()` |
-| Asynchronous / parallel sub-calls | Sequential only (paper limitation acknowledged) |
+| Asynchronous / parallel sub-calls | Batched `subcall` actions run concurrently, capped at 2 local / 4 cloud children; single calls remain one-element batches |
 | Fine-tuned RLM model support | Architecture is model-agnostic; fine-tuned model can be passed as `model=` |
 | Evaluation harness (recall@k, LLM-as-judge) | `eval/` directory scaffolded; harness not complete |
 

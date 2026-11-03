@@ -1,4 +1,4 @@
-version: "2.2"
+version: "2.3"
 description: >
   Deterministic JSON action protocol for RLM execution.
   The LLM outputs exactly one JSON object per turn (inspect / final / subcall).
@@ -100,11 +100,23 @@ template: |
   }}
 
   3. SUBCALL - Recursive call (expensive, use sparingly)
+  Single:
   {{
     "type": "subcall",
     "prompt": "content for subcall",
     "query": "question for subcall",
     "note": "optional: why subcall needed"
+  }}
+
+  Batched (map-reduce; answers return in the same order as the calls):
+  {{
+    "type": "subcall",
+    "calls": [
+      {{"prompt": "first piece of content", "query": "summarize this piece"}},
+      {{"prompt": "second piece of content", "query": "summarize this piece"}}
+    ],
+    "max_concurrency": 2,
+    "note": "optional"
   }}
 
   ═══════════════════════════════════════════════════════════════
@@ -190,6 +202,16 @@ template: |
       "end": 20000
     }}
   }}
+
+  Map-reduce a long section:
+  {{
+    "type": "inspect",
+    "tool": "chunk",
+    "args": {{"size": 4000}}
+  }}
+  → the result is a JSON list of chunks; send several chunks in one batched
+    subcall (each call's "prompt" is the chunk text, the "query" is the
+    same reduction question) and combine the answers.
 
   Check what the user asked in the previous turn (use Python code):
   ```python
