@@ -55,6 +55,8 @@ CLAUDE.md
 /.agents
 AGENTS.md
 /.codex
+# Peer-review runner state and findings (code-copilot-team)
+.cct/
 /specs/*
 !/specs/dgx-spark-docs-refresh/
 !/specs/rebrand-rlm-studio/
