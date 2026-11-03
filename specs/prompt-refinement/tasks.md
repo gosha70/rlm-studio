@@ -86,6 +86,8 @@ only to keep the codebase conventions or ship the feature.
 - D1-D3 (review fix): `update_profile` and `delete_profile` are plain `def` handlers, so their wait on `_config_lock` runs in FastAPI's thread pool instead of blocking the event loop while an accept or rollback holds the lock across a disk write. Tested with an unrelated `/health` request during a blocked edit.
 - D4 (review fix): export serves a deleted profile's refinement rows (spec §6) and returns 404 only when there is neither a profile nor any refinement.
 - D5 (review fix): the full-flow test runs real `/api/chat` RLM requests after accept and after rollback and checks the system prompt the model received.
+- D2 (review fix): reject returns 409 when the profile's RLM prompt already equals the candidate. After a split-brain accept the row stays `evaluated` while the candidate is live, and recording `rejected` would contradict the profile with no API path back.
+- E2 (carried from review): (a) progress can be `{done: 0, total: 0}` when every case is excluded, so never divide by `total`; (b) after an accept or rollback the panel must refresh or close the card's edit form, because a ProfileCard save sends the RLM prompt captured when editing started and would overwrite the decision's result.
 - D4: `GET …/refinements/export.jsonl` serves `application/x-ndjson` with one `RefinementRecord` per line, newest first.
 - A7: `afd2db3` (2026-04-07) removed per-mode prompt editors in favour of prompt groups. FR-14 re-adds one RLM textarea; the old "no per-mode textareas" test now asserts only RLM is editable. Owner decision 2026-11-03: keep the single RLM textarea.
 

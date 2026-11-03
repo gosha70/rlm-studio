@@ -733,3 +733,24 @@ async def test_unrelated_requests_stay_responsive_while_a_profile_edit_waits(env
     finally:
         release.set()
         holder.join(10)
+
+
+def test_reject_after_a_split_brain_accept_is_409(client: TestClient, env: Env) -> None:
+    """An accept saved the candidate but its status write failed; a reject must
+    not then record 'rejected' while the candidate is live."""
+    rid = _seed(env)
+    _abort_trigger(env.state.telemetry, "UPDATE")
+    assert _post(client, env, rid, "accept").status_code == 500
+    with env.state.telemetry._lock:
+        conn = env.state.telemetry._connect()
+        conn.execute("DROP TRIGGER inject_update")
+        conn.commit()
+    assert _status(env, rid) == REFINEMENT_STATUS_EVALUATED
+    assert _profile_rlm(env) == CANDIDATE
+
+    resp = _post(client, env, rid, "reject")
+    assert resp.status_code == 409
+    assert "already uses this candidate" in resp.json()["error"]["message"]
+    assert _status(env, rid) == REFINEMENT_STATUS_EVALUATED
+    assert _profile_rlm(env) == CANDIDATE
+    assert _disk_rlm(env) == CANDIDATE

@@ -183,11 +183,25 @@ def reject(
     *,
     reason: str | None,
 ) -> RefinementRecord:
-    """Record a reject; the profile is never written (FR-10)."""
+    """Record a reject; the profile is never written (FR-10).
+
+    Refused when the profile's RLM prompt already *is* the candidate: after a
+    split-brain accept (saved, status write failed) the row still says
+    ``evaluated`` while the candidate is live, and recording ``rejected``
+    would make the history say the opposite of the profile with no way back.
+    """
     with state._config_lock:
         record = _refinement(state, profile_id, refinement_id)
         if record.status not in REJECTABLE_STATUSES:
             raise DecisionConflictError(f"A refinement that is {record.status} cannot be rejected")
+        profile = next((p for p in state.user_profiles if p.id == profile_id), None)
+        candidate = ProposalRecord.from_dict(record.proposal).candidate
+        if profile is not None and profile.system_prompts.get(MODE_RLM) == candidate:
+            raise DecisionConflictError(
+                "The profile already uses this candidate as its RLM prompt, so an accept was"
+                " saved but not recorded. Rejecting would record the opposite of what is live;"
+                " change the profile's RLM prompt first if you want to undo it."
+            )
         regression = False
         if record.evaluation is not None:
             regression = EvaluationRecord.from_dict(record.evaluation).regression
