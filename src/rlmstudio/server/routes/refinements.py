@@ -1,8 +1,9 @@
-"""Prompt refinement routes (#78): source runs, proposals and history.
+"""Prompt refinement routes (#78): source runs, proposals, evaluation and history.
 
-Phase B surface.  Nothing here writes to a profile: a proposal is stored as
-a ``refinements`` row in ``proposal_ready`` and waits for evaluation and an
-explicit decision (later phases).  See ``specs/prompt-refinement/spec.md``.
+Nothing here writes to a profile: a proposal is stored as a ``refinements``
+row in ``proposal_ready``, an evaluation moves it through ``evaluating`` to
+``evaluated`` (or ``failed``), and an explicit decision comes later (phase D).
+See ``specs/prompt-refinement/spec.md``.
 """
 
 from __future__ import annotations
@@ -15,7 +16,10 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from rlmstudio.application.refinement_constants import REFINEMENT_STATUS_PROPOSAL_READY
+from rlmstudio.application.refinement_constants import (
+    REFINEMENT_STATUS_EVALUATING,
+    REFINEMENT_STATUS_PROPOSAL_READY,
+)
 from rlmstudio.application.sandbox_vars import MODE_RLM
 from rlmstudio.application.services.outcome_classifier import is_degraded_answer
 from rlmstudio.application.services.provider_failure import redact_secrets
@@ -35,12 +39,28 @@ from rlmstudio.prompts import (
 )
 from rlmstudio.server.dependencies import AppState, get_state
 from rlmstudio.server.models import (
+    HoldoutCaseRow,
     RefinementCreateRequest,
+    RefinementEvaluateRequest,
+    RefinementEvaluateResponse,
     RefinementResponse,
     RefinementSourceRun,
     RunProfile,
 )
-from rlmstudio.telemetry.store import RefinementRecord, RefinementStoreError, RunDetail
+from rlmstudio.server.refinement_eval import (
+    DatasetUnavailableError,
+    EvaluationRequest,
+    describe_cases,
+    load_evaluation_dataset,
+    select_cases,
+    start_evaluation,
+)
+from rlmstudio.telemetry.store import (
+    RefinementConflictError,
+    RefinementRecord,
+    RefinementStoreError,
+    RunDetail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +78,15 @@ def _get_profile(state: AppState, profile_id: str) -> RunProfile:
     return profile
 
 
-def _to_response(record: RefinementRecord) -> RefinementResponse:
-    return RefinementResponse(**asdict(record))
+def _to_response(state: AppState, record: RefinementRecord) -> RefinementResponse:
+    return RefinementResponse(**asdict(record), progress=state.get_refinement_progress(record.id))
+
+
+def _get_refinement(state: AppState, profile_id: str, refinement_id: str) -> RefinementRecord:
+    record = state.telemetry.get_refinement(refinement_id)
+    if record is None or record.profile_id != profile_id:
+        raise HTTPException(status_code=404, detail=f"Refinement not found: {refinement_id}")
+    return record
 
 
 def _evidence_run(run: RunDetail) -> EvidenceRun:
@@ -155,6 +182,21 @@ async def list_source_runs(
         for run in runs
         if run.content_sha256
     ]
+
+
+@router.get(f"{_REFINEMENTS_PATH}/holdout-cases")
+async def list_holdout_cases(
+    profile_id: str,
+    state: AppState = Depends(get_state),
+) -> list[HoldoutCaseRow]:
+    """Every evaluation dataset case, marked holdout / deterministic / runnable (FR-16)."""
+    _get_profile(state, profile_id)
+    try:
+        dataset, path = load_evaluation_dataset()
+    except DatasetUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    infos = await asyncio.to_thread(describe_cases, dataset, path)
+    return [HoldoutCaseRow(**asdict(info)) for info in infos]
 
 
 @router.post(_REFINEMENTS_PATH, status_code=201)
@@ -254,7 +296,7 @@ async def create_refinement(
         )
     except RefinementStoreError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return _to_response(stored)
+    return _to_response(state, stored)
 
 
 @router.get(_REFINEMENTS_PATH)
@@ -264,7 +306,7 @@ async def list_refinements(
 ) -> list[RefinementResponse]:
     """A profile's refinements, newest first."""
     _get_profile(state, profile_id)
-    return [_to_response(r) for r in state.telemetry.list_refinements(profile_id)]
+    return [_to_response(state, r) for r in state.telemetry.list_refinements(profile_id)]
 
 
 @router.get(f"{_REFINEMENTS_PATH}/{{refinement_id}}")
@@ -273,8 +315,91 @@ async def get_refinement(
     refinement_id: str,
     state: AppState = Depends(get_state),
 ) -> RefinementResponse:
-    """One refinement of this profile."""
-    record = state.telemetry.get_refinement(refinement_id)
-    if record is None or record.profile_id != profile_id:
-        raise HTTPException(status_code=404, detail=f"Refinement not found: {refinement_id}")
-    return _to_response(record)
+    """One refinement of this profile, with progress while it is being evaluated."""
+    return _to_response(state, _get_refinement(state, profile_id, refinement_id))
+
+
+@router.post(f"{_REFINEMENTS_PATH}/{{refinement_id}}/evaluate", status_code=202)
+async def evaluate_refinement(
+    profile_id: str,
+    refinement_id: str,
+    req: RefinementEvaluateRequest,
+    state: AppState = Depends(get_state),
+) -> RefinementEvaluateResponse:
+    """Start a held-out baseline-vs-candidate evaluation in the background (FR-5, FR-12).
+
+    Only a ``proposal_ready`` refinement can be evaluated, and one
+    evaluation runs per profile at a time.  The profile is not written.
+    """
+    _get_profile(state, profile_id)
+    record = _get_refinement(state, profile_id, refinement_id)
+    if record.status != REFINEMENT_STATUS_PROPOSAL_READY:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Only a proposal_ready refinement can be evaluated; this one is {record.status}",
+        )
+    proposal = ProposalRecord.from_dict(record.proposal)
+
+    try:
+        dataset, _path = load_evaluation_dataset()
+        cases = select_cases(dataset, req.case_ids)
+    except DatasetUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not cases:
+        raise HTTPException(status_code=400, detail="No evaluation cases selected")
+
+    cp_id = req.chat_provider_id or proposal.proposal_chat_provider_id
+    cp = state.get_chat_provider(cp_id)
+    if cp is None:
+        raise HTTPException(status_code=400, detail=f"Chat Provider not found: {cp_id}")
+    if cp.profile_id != profile_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chat Provider {cp_id} does not use this profile; pass chat_provider_id"
+            " of a Chat Provider that does",
+        )
+    judge_cp_id = req.judge_chat_provider_id or state.config.judge_chat_provider_id
+    if judge_cp_id and state.get_chat_provider(judge_cp_id) is None:
+        raise HTTPException(status_code=400, detail=f"Judge Chat Provider not found: {judge_cp_id}")
+
+    if not state.try_start_refinement_job(profile_id):
+        raise HTTPException(
+            status_code=409, detail="An evaluation is already running for this profile"
+        )
+    try:
+        state.telemetry.update_refinement(
+            refinement_id,
+            expected_status=REFINEMENT_STATUS_PROPOSAL_READY,
+            status=REFINEMENT_STATUS_EVALUATING,
+        )
+    except RefinementConflictError as exc:
+        state.finish_refinement_job(profile_id, refinement_id)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RefinementStoreError as exc:
+        state.finish_refinement_job(profile_id, refinement_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    case_ids = [case.id for case in cases]
+    start_evaluation(
+        state,
+        EvaluationRequest(
+            refinement_id=refinement_id,
+            profile_id=profile_id,
+            proposal=proposal,
+            case_ids=case_ids,
+            reps=req.reps,
+            chat_provider_id=cp_id,
+            judge_chat_provider_id=judge_cp_id,
+        ),
+    )
+    return RefinementEvaluateResponse(
+        refinement_id=refinement_id,
+        status=REFINEMENT_STATUS_EVALUATING,
+        case_ids=case_ids,
+        reps=req.reps,
+        run_count=len(case_ids) * req.reps * 2,
+        chat_provider_id=cp_id,
+        judge_chat_provider_id=judge_cp_id,
+    )

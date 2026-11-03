@@ -190,6 +190,10 @@ here before the phase closes.
   source runs and the proposal provider, and the digest is stored verbatim
   in the proposal record, so what was sent is auditable. Stronger structured
   redaction goes to the follow-up issue.
+- **Evaluation needs a source checkout.** The benchmark dataset and the
+  repo-docs case file are not in the wheel. An installed Studio without a
+  checkout gets 503 from the holdout and evaluate routes until
+  `RLM_STUDIO_REFINEMENT_DATASET` points at a dataset. Found in Phase C.
 - **Failed proposals leave no record.** A proposal call that fails at the
   provider or returns an unusable reply returns 502 and stores no
   refinement row, so that paid call and the digest it sent appear only in
