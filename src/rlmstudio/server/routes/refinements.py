@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 from rlmstudio.application.refinement_constants import (
     REFINEMENT_STATUS_EVALUATING,
@@ -38,12 +41,15 @@ from rlmstudio.prompts import (
     get_refine_supplement_prompt,
     get_system_prompt_version,
 )
+from rlmstudio.server import refinement_decisions
 from rlmstudio.server.dependencies import AppState, get_state
 from rlmstudio.server.models import (
     HoldoutCaseRow,
+    RefinementAcceptRequest,
     RefinementCreateRequest,
     RefinementEvaluateRequest,
     RefinementEvaluateResponse,
+    RefinementRejectRequest,
     RefinementResponse,
     RefinementSourceRun,
     RunProfile,
@@ -70,6 +76,7 @@ router = APIRouter()
 _REFINEMENTS_PATH = "/api/profiles/{profile_id}/refinements"
 SOURCE_RUNS_DEFAULT_LIMIT = 50
 SOURCE_RUNS_MAX_LIMIT = 200
+JSONL_MEDIA_TYPE = "application/x-ndjson"
 
 
 def _get_profile(state: AppState, profile_id: str) -> RunProfile:
@@ -198,6 +205,25 @@ async def list_holdout_cases(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     infos = await asyncio.to_thread(describe_cases, dataset, path)
     return [HoldoutCaseRow(**asdict(info)) for info in infos]
+
+
+@router.get(f"{_REFINEMENTS_PATH}/export.jsonl")
+async def export_refinements(
+    profile_id: str,
+    state: AppState = Depends(get_state),
+) -> Response:
+    """One JSON line per refinement of the profile, records verbatim (FR-15)."""
+    _get_profile(state, profile_id)
+    lines = [
+        json.dumps(asdict(record), sort_keys=True)
+        for record in state.telemetry.list_refinements(profile_id)
+    ]
+    body = "".join(f"{line}\n" for line in lines)
+    return Response(
+        content=body,
+        media_type=JSONL_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="refinements-{profile_id}.jsonl"'},
+    )
 
 
 @router.post(_REFINEMENTS_PATH, status_code=201)
@@ -418,4 +444,63 @@ async def evaluate_refinement(
         run_count=len(case_ids) * req.reps * 2,
         chat_provider_id=cp_id,
         judge_chat_provider_id=judge_cp_id,
+    )
+
+
+async def _decide(state: AppState, decide: Callable[[], RefinementRecord]) -> RefinementResponse:
+    """Run a locked decision off the event loop and map its errors to HTTP."""
+    try:
+        record = await asyncio.to_thread(decide)
+    except refinement_decisions.DecisionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return _to_response(state, record)
+
+
+@router.post(f"{_REFINEMENTS_PATH}/{{refinement_id}}/accept")
+async def accept_refinement(
+    profile_id: str,
+    refinement_id: str,
+    req: RefinementAcceptRequest,
+    state: AppState = Depends(get_state),
+) -> RefinementResponse:
+    """Write the candidate to the profile's RLM prompt (FR-9).
+
+    Needs a complete evaluation with at least one deterministic case, an
+    unchanged profile prompt, and ``acknowledge_regression`` when flagged.
+    """
+    return await _decide(
+        state,
+        lambda: refinement_decisions.accept(
+            state,
+            profile_id,
+            refinement_id,
+            acknowledge_regression=req.acknowledge_regression,
+            reason=req.reason,
+        ),
+    )
+
+
+@router.post(f"{_REFINEMENTS_PATH}/{{refinement_id}}/reject")
+async def reject_refinement(
+    profile_id: str,
+    refinement_id: str,
+    req: RefinementRejectRequest,
+    state: AppState = Depends(get_state),
+) -> RefinementResponse:
+    """Record a reject; the profile is not written (FR-10)."""
+    return await _decide(
+        state,
+        lambda: refinement_decisions.reject(state, profile_id, refinement_id, reason=req.reason),
+    )
+
+
+@router.post(f"{_REFINEMENTS_PATH}/{{refinement_id}}/rollback")
+async def rollback_refinement(
+    profile_id: str,
+    refinement_id: str,
+    state: AppState = Depends(get_state),
+) -> RefinementResponse:
+    """Restore the profile's RLM prompt to its state at proposal time (FR-11)."""
+    return await _decide(
+        state, lambda: refinement_decisions.rollback(state, profile_id, refinement_id)
     )

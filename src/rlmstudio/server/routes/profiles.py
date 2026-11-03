@@ -153,29 +153,32 @@ async def update_profile(
                     detail=f"Profile with name '{req.name}' already exists",
                 )
 
-    # Find user profile
-    for profile in state.user_profiles:
-        if profile.id == profile_id:
-            if req.name is not None:
-                profile.name = req.name
-            if req.description is not None:
-                profile.description = req.description
-            if req.strategy is not None:
-                profile.strategy = req.strategy
-            if req.default_provider is not None:
-                profile.default_provider = req.default_provider
-            if req.providers_enabled is not None:
-                profile.providers_enabled = req.providers_enabled
-            if req.runtime_settings is not None:
-                profile.runtime_settings = req.runtime_settings
-            if req.budget is not None:
-                profile.budget = req.budget
-            if req.system_prompts is not None:
-                profile.system_prompts = req.system_prompts
-            if req.prompt_template_name is not None:
-                profile.prompt_template_name = req.prompt_template_name
-            state.save_config()
-            return profile
+    # Find user profile.  Mutate and save under the config lock so an edit
+    # cannot interleave with a prompt-refinement accept or rollback (#78
+    # FR-9/FR-10a), which hold the same lock across their own check and save.
+    with state._config_lock:
+        for profile in state.user_profiles:
+            if profile.id == profile_id:
+                if req.name is not None:
+                    profile.name = req.name
+                if req.description is not None:
+                    profile.description = req.description
+                if req.strategy is not None:
+                    profile.strategy = req.strategy
+                if req.default_provider is not None:
+                    profile.default_provider = req.default_provider
+                if req.providers_enabled is not None:
+                    profile.providers_enabled = req.providers_enabled
+                if req.runtime_settings is not None:
+                    profile.runtime_settings = req.runtime_settings
+                if req.budget is not None:
+                    profile.budget = req.budget
+                if req.system_prompts is not None:
+                    profile.system_prompts = req.system_prompts
+                if req.prompt_template_name is not None:
+                    profile.prompt_template_name = req.prompt_template_name
+                state.save_config()
+                return profile
 
     raise HTTPException(status_code=404, detail=f"Profile not found: {profile_id}")
 
@@ -198,10 +201,11 @@ async def delete_profile(
             detail=f"Cannot delete: profile is used by Chat Providers: {names}",
         )
 
-    for i, profile in enumerate(state.user_profiles):
-        if profile.id == profile_id:
-            state.user_profiles.pop(i)
-            state.save_config()
-            return
+    with state._config_lock:
+        for i, profile in enumerate(state.user_profiles):
+            if profile.id == profile_id:
+                state.user_profiles.pop(i)
+                state.save_config()
+                return
 
     raise HTTPException(status_code=404, detail=f"Profile not found: {profile_id}")
