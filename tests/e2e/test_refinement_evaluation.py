@@ -414,3 +414,40 @@ def test_case_budget_overrides_only_the_keys_it_sets() -> None:
     assert config.max_steps == 3
     assert config.max_time_seconds == 99.0
     assert config.max_cost == 1.0
+
+
+def test_float_budget_values_are_accepted() -> None:
+    from rlmstudio.application.dto import RunConfigDTO
+
+    config = RunConfigDTO(max_steps=10)
+    refinement_eval._apply_case_budget(config, {"max_steps": 3.0, "max_recursion_depth": 2.0})
+    assert (config.max_steps, config.max_recursion_depth) == (3, 2)
+
+
+class TestEvaluateFailurePaths:
+    def test_worker_that_cannot_start_releases_the_slot(
+        self, client: TestClient, env: Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from rlmstudio.server.routes import refinements as routes
+
+        def no_thread(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(routes, "start_evaluation", no_thread)
+        resp = _evaluate(client, env)
+        assert resp.status_code == 500
+        record = env.state.telemetry.get_refinement(env.refinement_id)
+        assert record is not None
+        assert record.status == REFINEMENT_STATUS_FAILED
+        assert "did not start" in (record.error or "")
+        assert env.state.try_start_refinement_job(env.profile_id)
+
+    def test_malformed_dataset_is_503(
+        self, client: TestClient, env: Env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("cases: [unclosed\n", encoding="utf-8")
+        monkeypatch.setenv("RLM_STUDIO_REFINEMENT_DATASET", str(bad))
+        resp = _evaluate(client, env)
+        assert resp.status_code == 503
+        assert "unreadable" in resp.json()["error"]["message"]

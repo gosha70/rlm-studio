@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from rlmstudio.application.refinement_constants import (
     REFINEMENT_STATUS_EVALUATING,
+    REFINEMENT_STATUS_FAILED,
     REFINEMENT_STATUS_PROPOSAL_READY,
 )
 from rlmstudio.application.sandbox_vars import MODE_RLM
@@ -382,18 +383,33 @@ async def evaluate_refinement(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     case_ids = [case.id for case in cases]
-    start_evaluation(
-        state,
-        EvaluationRequest(
-            refinement_id=refinement_id,
-            profile_id=profile_id,
-            proposal=proposal,
-            case_ids=case_ids,
-            reps=req.reps,
-            chat_provider_id=cp_id,
-            judge_chat_provider_id=judge_cp_id,
-        ),
-    )
+    try:
+        start_evaluation(
+            state,
+            EvaluationRequest(
+                refinement_id=refinement_id,
+                profile_id=profile_id,
+                proposal=proposal,
+                case_ids=case_ids,
+                reps=req.reps,
+                chat_provider_id=cp_id,
+                judge_chat_provider_id=judge_cp_id,
+            ),
+        )
+    except RuntimeError as exc:
+        # The worker never started: release the slot and record why, so the
+        # row does not sit in "evaluating" with no thread behind it.
+        state.finish_refinement_job(profile_id, refinement_id)
+        try:
+            state.telemetry.update_refinement(
+                refinement_id,
+                expected_status=REFINEMENT_STATUS_EVALUATING,
+                status=REFINEMENT_STATUS_FAILED,
+                error=f"evaluation worker did not start: {exc}",
+            )
+        except RefinementStoreError:
+            logger.exception("Could not mark refinement %s failed", refinement_id)
+        raise HTTPException(status_code=500, detail=f"Evaluation did not start: {exc}") from exc
     return RefinementEvaluateResponse(
         refinement_id=refinement_id,
         status=REFINEMENT_STATUS_EVALUATING,

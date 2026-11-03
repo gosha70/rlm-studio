@@ -20,6 +20,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 import rlmstudio
 from rlmstudio.application.dto import RunConfigDTO
@@ -108,7 +111,7 @@ def load_evaluation_dataset() -> tuple[BenchmarkDataset, Path]:
         )
     try:
         return load_dataset(str(path)), path
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
         raise DatasetUnavailableError(f"Evaluation dataset at {path} is unreadable: {exc}") from exc
 
 
@@ -201,16 +204,16 @@ def _provider_and_model(state: AppState, cp: ChatProviderConfig) -> tuple[str, s
     return provider, model
 
 
-def _apply_case_budget(config: RunConfigDTO, budget: dict[str, object]) -> None:
+def _apply_case_budget(config: RunConfigDTO, budget: dict[str, Any]) -> None:
     """Apply the case's own budget keys; keys the case omits keep the CP's values."""
     if budget.get(BUDGET_KEY_MAX_STEPS) is not None:
-        config.max_steps = int(str(budget[BUDGET_KEY_MAX_STEPS]))
+        config.max_steps = int(budget[BUDGET_KEY_MAX_STEPS])
     if budget.get(BUDGET_KEY_MAX_TIME_SECONDS) is not None:
-        config.max_time_seconds = float(str(budget[BUDGET_KEY_MAX_TIME_SECONDS]))
+        config.max_time_seconds = float(budget[BUDGET_KEY_MAX_TIME_SECONDS])
     if budget.get(BUDGET_KEY_MAX_COST) is not None:
-        config.max_cost = float(str(budget[BUDGET_KEY_MAX_COST]))
+        config.max_cost = float(budget[BUDGET_KEY_MAX_COST])
     if budget.get(BUDGET_KEY_MAX_RECURSION_DEPTH) is not None:
-        config.max_recursion_depth = int(str(budget[BUDGET_KEY_MAX_RECURSION_DEPTH]))
+        config.max_recursion_depth = int(budget[BUDGET_KEY_MAX_RECURSION_DEPTH])
 
 
 def _arm_slot(
