@@ -34,6 +34,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_COMPACTION_REASON,
     TRACE_KEY_CONTENT,
     TRACE_KEY_COST,
+    TRACE_KEY_COST_KNOWN,
     TRACE_KEY_ELAPSED_SECONDS,
     TRACE_KEY_IDS_STUBBED,
     TRACE_KEY_INPUT_TOKENS,
@@ -532,6 +533,7 @@ class RunRLMUseCase:
                         # unknown distinction to the aggregate tokens.
                         exec_entry[TRACE_KEY_INPUT_TOKENS] = subcall_total.input_tokens
                         exec_entry[TRACE_KEY_OUTPUT_TOKENS] = subcall_total.output_tokens
+                        exec_entry[TRACE_KEY_COST_KNOWN] = subcall_total.cost_known
                         if subcall_total.cost_known:
                             exec_entry[TRACE_KEY_COST] = subcall_total.total_cost
                         if subcall_total.model:
@@ -1494,6 +1496,7 @@ class RunRLMUseCase:
                         # unknown distinction to the aggregate tokens.
                         exec_entry[TRACE_KEY_INPUT_TOKENS] = subcall_total.input_tokens
                         exec_entry[TRACE_KEY_OUTPUT_TOKENS] = subcall_total.output_tokens
+                        exec_entry[TRACE_KEY_COST_KNOWN] = subcall_total.cost_known
                         if subcall_total.cost_known:
                             exec_entry[TRACE_KEY_COST] = subcall_total.total_cost
                         if subcall_total.model:

@@ -32,6 +32,7 @@ from rlmstudio.application.sandbox_vars import (
     RLM_DEFAULT_REPEAT_LIMIT,
     RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS,
     TRACE_KEY_COST,
+    TRACE_KEY_COST_KNOWN,
     ExecutionMode,
 )
 from rlmstudio.application.use_cases.run_matrix_comparison import (
@@ -888,6 +889,8 @@ def _record_slot_telemetry(
             )
             input_tokens = step_data.get("input_tokens", 0)
             output_tokens = step_data.get("output_tokens", 0)
+            raw_cost_known = step_data.get(TRACE_KEY_COST_KNOWN)
+            cost_known = bool(raw_cost_known) if raw_cost_known is not None else None
             state.telemetry.record_step(
                 run_id=meta.execution_id,
                 step_index=i,
@@ -897,6 +900,7 @@ def _record_slot_telemetry(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost=float(step_data.get(TRACE_KEY_COST, 0.0) or 0.0),
+                cost_known=cost_known,
                 duration=step_data.get("elapsed_seconds", 0.0),
                 model=step_data.get("model"),
                 # Prefill/decode telemetry — mirrors the chat route.

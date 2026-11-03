@@ -31,6 +31,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_CODE,
     TRACE_KEY_CONTENT,
     TRACE_KEY_COST,
+    TRACE_KEY_COST_KNOWN,
     TRACE_KEY_ELAPSED_SECONDS,
     TRACE_KEY_INPUT_TOKENS,
     TRACE_KEY_MODEL,
@@ -602,6 +603,8 @@ def _record_telemetry(
         )
         input_tokens = step_data.get(TRACE_KEY_INPUT_TOKENS, 0)
         output_tokens = step_data.get(TRACE_KEY_OUTPUT_TOKENS, 0)
+        raw_cost_known = step_data.get(TRACE_KEY_COST_KNOWN)
+        cost_known = bool(raw_cost_known) if raw_cost_known is not None else None
         state.telemetry.record_step(
             run_id=run_id,
             step_index=i,
@@ -611,6 +614,7 @@ def _record_telemetry(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost=float(step_data.get(TRACE_KEY_COST, 0.0) or 0.0),
+            cost_known=cost_known,
             duration=step_data.get(TRACE_KEY_ELAPSED_SECONDS, 0.0),
             model=step_data.get(TRACE_KEY_MODEL),
             # Prefill/decode telemetry (spec v1.7). The four plain-string

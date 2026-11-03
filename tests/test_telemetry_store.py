@@ -756,6 +756,7 @@ class TestRecordTelemetryHelper:
                     "input_tokens": 40,
                     "output_tokens": 20,
                     "cost": 0.002,
+                    "cost_known": True,
                 },
                 {"role": "assistant", "input_tokens": 10, "output_tokens": 5, "model": "gpt-4o"},
             ],
@@ -769,6 +770,7 @@ class TestRecordTelemetryHelper:
         assert sum(int(step.get("output_tokens", 0)) for step in detail.steps) == 30
         subcall = next(step for step in detail.steps if step["action_type"] == "subcall")
         assert float(subcall["cost"]) == 0.002
+        assert subcall["cost_known"] == 1
 
     def test_step_action_types_normalized(self) -> None:
         """Raw trace roles (assistant/execution) are normalized to canonical

@@ -105,7 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_ratings_run ON ratings(run_id);
 # migration path via `_run_migrations()` using SQLite's `PRAGMA user_version`.
 # This keeps the bootstrap rule pinned: one code path, no branching.
 
-_CURRENT_SCHEMA_VERSION = 2
+_CURRENT_SCHEMA_VERSION = 3
 
 _MIGRATIONS: dict[int, list[str]] = {
     2: [
@@ -118,6 +118,12 @@ _MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE steps ADD COLUMN cache_write_tokens INTEGER DEFAULT 0",
         # Run-level outcome category (wired to writers in phase 4).
         "ALTER TABLE runs ADD COLUMN outcome_category TEXT",
+    ],
+    3: [
+        # Whether a step's stored cost is a measurement (1) or zero by
+        # ignorance (0).  NULL on legacy rows means "not recorded", so
+        # read-time pricing falls back to the LiteLLM map.
+        "ALTER TABLE steps ADD COLUMN cost_known INTEGER",
     ],
 }
 
@@ -357,6 +363,7 @@ class TelemetryStore:
         decode_ms: int = 0,
         cached_tokens: int = 0,
         cache_write_tokens: int = 0,
+        cost_known: bool | None = None,
     ) -> str:
         """Record a single step within a run. Returns the step ID.
 
@@ -365,6 +372,11 @@ class TelemetryStore:
         ``cached_tokens``, ``cache_write_tokens``) ship with safe
         defaults so older callers that don't pass them stay compatible.
         The underlying columns live on schema v2 (see ``_MIGRATIONS``).
+
+        ``cost_known`` is ``None`` for legacy/not-applicable rows, ``True``
+        when ``cost`` is a measurement (including a known zero), and
+        ``False`` when cost is zero by ignorance.  The column is added by
+        schema v3.
         """
         sid = uuid.uuid4().hex
         with self._lock:
@@ -376,8 +388,9 @@ class TelemetryStore:
                         tokens, cost, duration, model, recursion_depth,
                         input_tokens, output_tokens,
                         prompt_tokens, completion_tokens, ttft_ms,
-                        decode_ms, cached_tokens, cache_write_tokens)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        decode_ms, cached_tokens, cache_write_tokens,
+                        cost_known)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         sid,
                         run_id,
@@ -398,6 +411,7 @@ class TelemetryStore:
                         decode_ms,
                         cached_tokens,
                         cache_write_tokens,
+                        1 if cost_known is True else 0 if cost_known is False else None,
                     ),
                 )
                 conn.commit()

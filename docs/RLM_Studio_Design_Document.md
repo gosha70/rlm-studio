@@ -132,8 +132,9 @@ prompt cannot fit its share. Provider usage is known only after a response,
 so a single in-flight call can overshoot its share; the aggregate child
 tokens and (when pricing is known) cost are recorded on the subcall row, a
 shared stop flag prevents still-queued children from starting, and the run
-stops with a budget warning rather than continuing to a normal final.
-Wall-clock time is
+stops with a budget warning rather than continuing to a normal final. The
+step row persists a `cost_known` flag so a provider-reported zero survives
+and an unpriced token-bearing subcall stays “Unavailable”. Wall-clock time is
 not divided: every child gets the same absolute deadline and simply has less
 time if it starts later. Concurrency is capped by the provider kind (2 for
 local Ollama/LM Studio/vLLM, 4 for cloud) and never by the model's requested

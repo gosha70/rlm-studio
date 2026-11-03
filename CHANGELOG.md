@@ -27,9 +27,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   with `read_result` and stubbable by compaction. The subcall execution row
   carries aggregate child input/output tokens and, when pricing is known,
   aggregate cost, so trace and persisted telemetry totals reconcile with the
-  run totals. An unpriced token-bearing subcall remains "Unavailable" rather
-  than a fabricated `$0.00`. A failed child becomes an error string in its
-  slot instead of failing the batch.
+  run totals. The step row persists `cost_known`, so a known zero survives
+  and an unpriced token-bearing subcall remains "Unavailable" rather than a
+  fabricated `$0.00`. A failed child becomes an error string in its slot
+  instead of failing the batch.
 - Prompt 2.3 documents the batched form and the `chunk()` map-reduce workflow.
   The legacy `RLM` REPL path runs batched actions serially through its existing
   `subcall()` binding.
