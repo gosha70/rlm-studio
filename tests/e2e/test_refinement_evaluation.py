@@ -27,11 +27,6 @@ from rlmstudio.application.refinement_constants import (
     REFINEMENT_STATUS_INTERRUPTED,
     REFINEMENT_STATUS_PROPOSAL_READY,
 )
-from rlmstudio.application.services.provider_failure import (
-    ProviderFailure,
-    ProviderFailureError,
-    ProviderFailureKind,
-)
 from rlmstudio.application.services.refinement import (
     BaseSupplementState,
     ProposalRecord,
@@ -75,6 +70,12 @@ cases:
     query: "Please summarise the notes."
     content: "A long set of notes about nothing much."
     tags: [large, holdout]
+  - id: timed
+    query: "Name the launch platform, briefly."
+    content: "Plans. The launch platform is Harbour."
+    expected_answer: "Harbour"
+    tags: [small]
+    budget: {{max_time_seconds: 0.15}}
   - id: public
     query: "What does the text say?"
     source_url: "https://example.invalid/missing-text.txt"
@@ -87,19 +88,25 @@ class ArmLLM:
     """Answers correctly unless told to fail when the candidate marker is present."""
 
     fail_alpha_with_candidate: bool = True
-    rate_limited_arm: str | None = None
+    failing_arm: str | None = None
+    failure: Exception | None = None
+    stalling_arm: str | None = None
     system_prompts: list[str] = field(default_factory=list)
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
         system = messages[0]["content"]
         self.system_prompts.append(system)
         arm = REFINEMENT_ARM_CANDIDATE if CANDIDATE_MARKER in system else REFINEMENT_ARM_BASELINE
-        if arm == self.rate_limited_arm:
-            raise ProviderFailureError(
-                "429 Too Many Requests",
-                ProviderFailure(
-                    kind=ProviderFailureKind.RATE_LIMIT, cause="rate limited", fix="wait"
-                ),
+        if arm == self.failing_arm and self.failure is not None:
+            raise self.failure
+        if arm == self.stalling_arm:
+            # Never finalises, so the run ends on its own wall-clock budget.
+            time.sleep(0.05)
+            return LLMResponseDTO(
+                content='{"type": "inspect", "tool": "peek", "args": {"start": 0, "end": 10}}',
+                model="arm-model",
+                input_tokens=10,
+                output_tokens=3,
             )
         everything = "\n".join(m["content"] for m in messages).lower()
         answer = next((a for k, a in ANSWERS.items() if k in everything), "unknown")
@@ -241,7 +248,7 @@ class TestHoldoutCases:
         resp = client.get(PATH.format(pid=env.profile_id) + "/holdout-cases")
         assert resp.status_code == 200
         rows = {r["id"]: r for r in resp.json()}
-        assert set(rows) == {"alpha", "beta", "overlap", "judged", "public"}
+        assert set(rows) == {"alpha", "beta", "overlap", "judged", "timed", "public"}
         assert rows["alpha"]["holdout"] is True
         assert rows["alpha"]["deterministic"] is True
         assert rows["alpha"]["size"] == "small"
@@ -365,36 +372,79 @@ class TestEvaluation:
         assert env.state.try_start_refinement_job(env.profile_id)
 
 
+def _adapter_error(raw: Exception) -> Exception:
+    """The exception the real adapter raises for a raw litellm failure."""
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+    return LiteLLMAdapter(model="openai/gpt-4o")._translate_exception(
+        raw, "LiteLLM completion failed"
+    )
+
+
+def _failure(kind: str) -> Exception:
+    litellm = pytest.importorskip("litellm")
+    if kind == "rate_limit":
+        return _adapter_error(
+            litellm.RateLimitError("429 Too Many Requests", llm_provider="openai", model="gpt-4o")
+        )
+    if kind == "timeout":
+        return _adapter_error(
+            litellm.Timeout(message="Request timed out", model="gpt-4o", llm_provider="openai")
+        )
+    return _adapter_error(
+        litellm.APIConnectionError(
+            message="Connection reset by peer", llm_provider="openai", model="gpt-4o"
+        )
+    )
+
+
 class TestProviderFailures:
     """A provider failure is a missing arm, never a wrong answer."""
 
+    @pytest.mark.parametrize("kind", ["rate_limit", "timeout", "connection"])
     @pytest.mark.parametrize(
         ("arm", "candidate_breaks_alpha"),
         [
-            # Candidate rate-limited, baseline correct: scoring it as a fail
-            # would fake a regression.
+            # Candidate failed, baseline correct: scoring it as a fail would
+            # fake a regression.
             (REFINEMENT_ARM_CANDIDATE, False),
-            # Baseline rate-limited, candidate wrong: scoring it as a fail
-            # would hide the candidate's real regression.
+            # Baseline failed, candidate wrong: scoring it as a fail would
+            # hide the candidate's real regression.
             (REFINEMENT_ARM_BASELINE, True),
         ],
     )
-    def test_rate_limited_arm_makes_the_evaluation_incomplete(
-        self, client: TestClient, env: Env, arm: str, candidate_breaks_alpha: bool
+    def test_provider_failed_arm_makes_the_evaluation_incomplete(
+        self, client: TestClient, env: Env, kind: str, arm: str, candidate_breaks_alpha: bool
     ) -> None:
-        env.arm_llm.rate_limited_arm = arm
+        env.arm_llm.failing_arm = arm
+        env.arm_llm.failure = _failure(kind)
         env.arm_llm.fail_alpha_with_candidate = candidate_breaks_alpha
         assert _evaluate(client, env, case_ids=["alpha"]).status_code == 202
         record = EvaluationRecord.from_dict(_wait(client, env)["evaluation"])
         assert record.complete is False
         assert record.regression is False
         assert record.deltas is None
-        failures = [r for r in record.incomplete_reasons if "provider failure (rate_limit)" in r]
+        failures = [r for r in record.incomplete_reasons if f"provider failure ({kind})" in r]
         assert len(failures) == 2
         assert all("alpha rep" in r and arm in r for r in failures)
         (alpha,) = record.cases
         for rep in alpha.reps:
             assert getattr(rep, arm) is None
+
+    def test_run_out_of_its_own_time_budget_is_scored_not_missing(
+        self, client: TestClient, env: Env
+    ) -> None:
+        """Running out of the RLM's own ``max_time_seconds`` is the arm's
+        outcome, not a provider failure: it stays in the comparison."""
+        env.arm_llm.stalling_arm = REFINEMENT_ARM_CANDIDATE
+        assert _evaluate(client, env, case_ids=["timed"]).status_code == 202
+        record = EvaluationRecord.from_dict(_wait(client, env, timeout=60.0)["evaluation"])
+        assert record.complete, record.incomplete_reasons
+        (timed,) = record.cases
+        for rep in timed.reps:
+            assert rep.candidate is not None
+            assert rep.candidate.passed is False
+        assert record.regression_case_ids == ["timed"]
 
 
 class TestEvaluateGuards:
