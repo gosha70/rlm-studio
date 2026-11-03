@@ -78,6 +78,7 @@ only to keep the codebase conventions or ship the feature.
 - C4: the evaluation Chat Provider defaults to the proposal's and must use this profile (400 otherwise); the judge defaults to the configured judge Chat Provider, and none runs when neither is set.
 - C4: the dataset path is `RLM_STUDIO_REFINEMENT_DATASET`, else the checkout's `benchmarks/longdoc-v1.yaml`; known gap added to spec §6.
 - C1: the six holdout cases are provisional until owner task O2.
+- C3 (review fix): an arm whose run has `failure_kind` set (auth, model unavailable, connection, request timeout, rate limit) is a missing arm with a reason naming the kind and run id, so the evaluation is incomplete instead of scoring a provider failure as a wrong answer. A provider request timeout counts too, so a slow local model on the large case can leave an evaluation incomplete.
 - A7: `afd2db3` (2026-04-07) removed per-mode prompt editors in favour of prompt groups. FR-14 re-adds one RLM textarea; the old "no per-mode textareas" test now asserts only RLM is editable. Owner decision 2026-11-03: keep the single RLM textarea.
 
 ## Owner tasks (human)

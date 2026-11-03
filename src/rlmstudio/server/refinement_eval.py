@@ -294,7 +294,16 @@ def _run_rep(
     provider: str,
     model: str,
     judge: JudgeScorer | None,
+    provider_failures: list[str],
 ) -> RepResult:
+    """Run both arms of one repetition.
+
+    An arm that failed at the provider (``failure_kind`` set: auth, model
+    unavailable, connection, timeout, rate limit) says nothing about the
+    supplement, so it is left out as a *missing* arm, which makes the
+    evaluation incomplete; scoring it as a wrong answer could fake or hide
+    a regression.  The reason, with its run id, goes to ``provider_failures``.
+    """
     supplements = {
         REFINEMENT_ARM_BASELINE: request.proposal.base.resolved,
         REFINEMENT_ARM_CANDIDATE: request.proposal.candidate,
@@ -341,6 +350,12 @@ def _run_rep(
             created_at=created_at,
             content_sha256=case_hash,
         )
+        kind = slot_result.result.failure_kind
+        if kind:
+            provider_failures.append(
+                f"{case.id} rep {rep} {slot_result.slot_id}: provider failure ({kind}), run {run_id}"
+            )
+            continue
         arms[slot_result.slot_id] = _score_arm(slot_result, run_id, case, judge)
     return RepResult(
         rep=rep,
@@ -410,10 +425,24 @@ def run_evaluation(state: AppState, request: EvaluationRequest) -> EvaluationRec
     done = 0
     state.set_refinement_progress(request.refinement_id, done, total)
     case_runs: list[CaseRuns] = []
+    provider_failures: list[str] = []
     for case, case_hash in runnable:
         reps: list[RepResult] = []
         for rep in range(1, request.reps + 1):
-            reps.append(_run_rep(state, request, cp, case, case_hash, rep, provider, model, judge))
+            reps.append(
+                _run_rep(
+                    state,
+                    request,
+                    cp,
+                    case,
+                    case_hash,
+                    rep,
+                    provider,
+                    model,
+                    judge,
+                    provider_failures,
+                )
+            )
             done += 1
             state.set_refinement_progress(request.refinement_id, done, total)
         case_runs.append(
@@ -424,7 +453,9 @@ def run_evaluation(state: AppState, request: EvaluationRequest) -> EvaluationRec
                 reps=reps,
             )
         )
-    return summarise_evaluation(setup, case_runs, finished_at=time.time())
+    return summarise_evaluation(
+        setup, case_runs, finished_at=time.time(), extra_incomplete_reasons=provider_failures
+    )
 
 
 def start_evaluation(state: AppState, request: EvaluationRequest) -> threading.Thread:

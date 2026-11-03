@@ -18,12 +18,19 @@ from fastapi.testclient import TestClient
 
 from rlmstudio.application.dto import LLMResponseDTO
 from rlmstudio.application.refinement_constants import (
+    REFINEMENT_ARM_BASELINE,
+    REFINEMENT_ARM_CANDIDATE,
     REFINEMENT_EVALUATION_TEMPERATURE,
     REFINEMENT_STATUS_EVALUATED,
     REFINEMENT_STATUS_EVALUATING,
     REFINEMENT_STATUS_FAILED,
     REFINEMENT_STATUS_INTERRUPTED,
     REFINEMENT_STATUS_PROPOSAL_READY,
+)
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailure,
+    ProviderFailureError,
+    ProviderFailureKind,
 )
 from rlmstudio.application.services.refinement import (
     BaseSupplementState,
@@ -80,11 +87,20 @@ class ArmLLM:
     """Answers correctly unless told to fail when the candidate marker is present."""
 
     fail_alpha_with_candidate: bool = True
+    rate_limited_arm: str | None = None
     system_prompts: list[str] = field(default_factory=list)
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
         system = messages[0]["content"]
         self.system_prompts.append(system)
+        arm = REFINEMENT_ARM_CANDIDATE if CANDIDATE_MARKER in system else REFINEMENT_ARM_BASELINE
+        if arm == self.rate_limited_arm:
+            raise ProviderFailureError(
+                "429 Too Many Requests",
+                ProviderFailure(
+                    kind=ProviderFailureKind.RATE_LIMIT, cause="rate limited", fix="wait"
+                ),
+            )
         everything = "\n".join(m["content"] for m in messages).lower()
         answer = next((a for k, a in ANSWERS.items() if k in everything), "unknown")
         if self.fail_alpha_with_candidate and CANDIDATE_MARKER in system and answer == "Harbour":
@@ -347,6 +363,38 @@ class TestEvaluation:
         assert "dataset vanished" in body["error"]
         # The job slot is released: another refinement can start.
         assert env.state.try_start_refinement_job(env.profile_id)
+
+
+class TestProviderFailures:
+    """A provider failure is a missing arm, never a wrong answer."""
+
+    @pytest.mark.parametrize(
+        ("arm", "candidate_breaks_alpha"),
+        [
+            # Candidate rate-limited, baseline correct: scoring it as a fail
+            # would fake a regression.
+            (REFINEMENT_ARM_CANDIDATE, False),
+            # Baseline rate-limited, candidate wrong: scoring it as a fail
+            # would hide the candidate's real regression.
+            (REFINEMENT_ARM_BASELINE, True),
+        ],
+    )
+    def test_rate_limited_arm_makes_the_evaluation_incomplete(
+        self, client: TestClient, env: Env, arm: str, candidate_breaks_alpha: bool
+    ) -> None:
+        env.arm_llm.rate_limited_arm = arm
+        env.arm_llm.fail_alpha_with_candidate = candidate_breaks_alpha
+        assert _evaluate(client, env, case_ids=["alpha"]).status_code == 202
+        record = EvaluationRecord.from_dict(_wait(client, env)["evaluation"])
+        assert record.complete is False
+        assert record.regression is False
+        assert record.deltas is None
+        failures = [r for r in record.incomplete_reasons if "provider failure (rate_limit)" in r]
+        assert len(failures) == 2
+        assert all("alpha rep" in r and arm in r for r in failures)
+        (alpha,) = record.cases
+        for rep in alpha.reps:
+            assert getattr(rep, arm) is None
 
 
 class TestEvaluateGuards:
