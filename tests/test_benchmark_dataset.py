@@ -394,3 +394,22 @@ class TestLongdocV1:
             assert case.expected_answer is not None, case.id
             assert case.expected_answer.isdigit(), case.id
             assert int(case.expected_answer) == int((case.content_spec or {})["repeat"]["times"])
+
+    def test_holdout_split_is_deterministic_and_offline(self, tmp_path: Path) -> None:
+        """Prompt refinement (#78) evaluates on these by default; the gate needs
+        an expected answer and no network for every one of them."""
+        from rlmstudio.application.refinement_constants import REFINEMENT_HOLDOUT_TAG
+
+        ds = load_dataset(str(LONGDOC))
+        holdout = ds.filter_by_tag(REFINEMENT_HOLDOUT_TAG)
+        assert sorted(c.id for c in holdout) == [
+            "docs-operations-needle",
+            "synthetic-150k-needle",
+            "synthetic-50k-needle",
+            "synthetic-50k-refusal",
+            "synthetic-5k-needle",
+            "synthetic-5k-refusal",
+        ]
+        report = materialise(holdout, base_dir=LONGDOC.parent, corpus_dir=tmp_path / "corpus")
+        assert report.skipped == {}
+        assert all(c.expected_answer for c in holdout)

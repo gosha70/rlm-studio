@@ -7,7 +7,12 @@ from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from rlmstudio.application.refinement_constants import REFINEMENT_MAX_SOURCE_RUNS, RefinementStatus
+from rlmstudio.application.refinement_constants import (
+    REFINEMENT_MAX_REPS,
+    REFINEMENT_MAX_SOURCE_RUNS,
+    REFINEMENT_MIN_REPS,
+    RefinementStatus,
+)
 from rlmstudio.application.sandbox_vars import (
     MODE_AUTO,
     MODE_DIRECT,
@@ -1064,3 +1069,45 @@ class RefinementResponse(BaseModel):
     evaluation: dict[str, Any] | None = None
     decision: dict[str, Any] | None = None
     error: str | None = None
+    progress: dict[str, int] | None = None
+    """``{done, total}`` case × repetition pairs while an evaluation runs."""
+
+
+class HoldoutCaseRow(BaseModel):
+    """One evaluation dataset case and whether it can run (spec FR-16)."""
+
+    id: str
+    query: str
+    tags: list[str]
+    size: str | None = None
+    holdout: bool
+    deterministic: bool
+    materialisable: bool
+    skip_reason: str | None = None
+
+
+class RefinementEvaluateRequest(BaseModel):
+    """Body of ``POST …/refinements/{rid}/evaluate`` (spec FR-5).
+
+    ``case_ids`` defaults to the dataset's ``holdout``-tagged cases;
+    ``chat_provider_id`` defaults to the proposal's Chat Provider and must
+    use this profile; ``judge_chat_provider_id`` defaults to the configured
+    judge, and no judge runs when neither is set.
+    """
+
+    case_ids: list[str] | None = Field(default=None, min_length=1)
+    reps: int = Field(default=REFINEMENT_MIN_REPS, ge=REFINEMENT_MIN_REPS, le=REFINEMENT_MAX_REPS)
+    chat_provider_id: str | None = None
+    judge_chat_provider_id: str | None = None
+
+
+class RefinementEvaluateResponse(BaseModel):
+    """Accepted evaluation: what will run.  Poll the refinement for progress."""
+
+    refinement_id: str
+    status: RefinementStatus
+    case_ids: list[str]
+    reps: int
+    run_count: int
+    chat_provider_id: str
+    judge_chat_provider_id: str | None = None

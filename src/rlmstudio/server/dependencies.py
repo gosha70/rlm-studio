@@ -34,7 +34,7 @@ from rlmstudio.server.models import (
     RuntimeSettings,
     SystemPrompts,
 )
-from rlmstudio.telemetry.store import TelemetryStore
+from rlmstudio.telemetry.store import RefinementStoreError, TelemetryStore
 from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY, subcall_concurrency_for
 from rlmstudio.ui.services.secret_store import FileSecretStore, KeyringSecretStore
 
@@ -165,6 +165,21 @@ class AppState:
         # Persistent telemetry store (SQLite-backed).
         # In-memory ":memory:" for tests, on-disk for production.
         self.telemetry: TelemetryStore = TelemetryStore(":memory:" if not load_from_disk else None)
+        # Prompt-refinement evaluations run on in-process threads (#78
+        # FR-12).  The lock is a leaf: it guards only the two collections
+        # below and is never held while another lock is acquired.
+        self._refinement_jobs_lock: threading.Lock = threading.Lock()
+        self.refinement_active_profiles: set[str] = set()
+        self.refinement_progress: dict[str, dict[str, int]] = {}
+        # A row still "evaluating" at startup has no worker thread left.
+        try:
+            interrupted = self.telemetry.mark_evaluating_as_interrupted()
+            if interrupted:
+                logger.warning(
+                    "Marked %d running refinement evaluation(s) interrupted", interrupted
+                )
+        except RefinementStoreError:
+            logger.exception("Could not mark interrupted refinement evaluations")
         if load_from_disk:
             self._load_config()
             self._load_sessions()
@@ -1166,8 +1181,13 @@ class AppState:
         self,
         chat_provider_id: str,
         num_retries: int | None = None,
+        temperature: float | None = None,
     ) -> LiteLLMAdapter:
-        """Create an LLM adapter configured for a specific Chat Provider."""
+        """Create an LLM adapter configured for a specific Chat Provider.
+
+        ``temperature`` overrides the profile's runtime temperature; prompt
+        refinement evaluates both arms at 0 (#78 FR-5).
+        """
         cp = self.get_chat_provider(chat_provider_id)
         if not cp:
             raise ValueError(f"Chat Provider {chat_provider_id} not found")
@@ -1196,13 +1216,38 @@ class AppState:
             model=prefixed_model,
             api_base=api_base,
             api_key=api_key,
-            temperature=runtime.temperature,
+            temperature=runtime.temperature if temperature is None else temperature,
             top_p=runtime.top_p,
             max_tokens=runtime.max_output_tokens,
             timeout=float(runtime.timeout_seconds),
             num_retries=effective_retries,
             context_window=context_window,
         )
+
+    def try_start_refinement_job(self, profile_id: str) -> bool:
+        """Claim the profile's single evaluation slot; False when one is running."""
+        with self._refinement_jobs_lock:
+            if profile_id in self.refinement_active_profiles:
+                return False
+            self.refinement_active_profiles.add(profile_id)
+            return True
+
+    def finish_refinement_job(self, profile_id: str, refinement_id: str) -> None:
+        """Release the profile's evaluation slot and drop its progress entry."""
+        with self._refinement_jobs_lock:
+            self.refinement_active_profiles.discard(profile_id)
+            self.refinement_progress.pop(refinement_id, None)
+
+    def set_refinement_progress(self, refinement_id: str, done: int, total: int) -> None:
+        """Record how many case × repetition pairs an evaluation has finished."""
+        with self._refinement_jobs_lock:
+            self.refinement_progress[refinement_id] = {"done": done, "total": total}
+
+    def get_refinement_progress(self, refinement_id: str) -> dict[str, int] | None:
+        """Return a running evaluation's progress, or None when none is running."""
+        with self._refinement_jobs_lock:
+            progress = self.refinement_progress.get(refinement_id)
+            return dict(progress) if progress is not None else None
 
     def save_config(self) -> None:
         """Persist current config, profiles, and prompts to disk atomically.

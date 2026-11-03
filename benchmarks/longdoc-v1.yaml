@@ -76,7 +76,7 @@ cases:
     min_tokens: 4000
     category: factual
     difficulty: easy
-    tags: [small, repo-docs]
+    tags: [small, repo-docs, holdout]
     query: "Where does RLM Studio keep its state on disk by default?"
     expected_answer: ".rlm-studio"
     match: contains
@@ -95,7 +95,7 @@ cases:
     min_tokens: 5000
     category: factual
     difficulty: easy
-    tags: [small, synthetic]
+    tags: [small, synthetic, holdout]
     query: "What is the designated maintenance window for the Orion cluster?"
     expected_answer: "03:15 UTC on the second Tuesday"
     match: contains
@@ -111,7 +111,7 @@ cases:
     min_tokens: 5000
     category: refusal
     difficulty: medium
-    tags: [small, synthetic]
+    tags: [small, synthetic, holdout]
     query: "Who is named as the chief financial officer in this document?"
     expected_answer: "not mention || does not || no mention || not specified || not stated || no information || cannot be determined || not provided || isn't mentioned || not found || not included || not named"
     match: contains
@@ -132,7 +132,7 @@ cases:
     min_tokens: 50000
     category: factual
     difficulty: medium
-    tags: [medium, synthetic]
+    tags: [medium, synthetic, holdout]
     query: "Which team owns the Tessellate service?"
     expected_answer: "Harbour Platform"
     match: contains
@@ -168,7 +168,7 @@ cases:
     min_tokens: 50000
     category: refusal
     difficulty: medium
-    tags: [medium, synthetic]
+    tags: [medium, synthetic, holdout]
     query: "What annual revenue figure does this document report?"
     expected_answer: "not mention || does not || no mention || not specified || not stated || no information || cannot be determined || not provided || isn't mentioned || not found || not included || no revenue"
     match: contains
@@ -222,7 +222,7 @@ cases:
     min_tokens: 150000
     category: factual
     difficulty: hard
-    tags: [large, synthetic]
+    tags: [large, synthetic, holdout]
     query: "On which day is the Meridian failover drill rehearsed?"
     expected_answer: "19th"
     match: contains

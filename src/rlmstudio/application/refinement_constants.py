@@ -70,3 +70,31 @@ REFINEMENT_EVIDENCE_ERROR_MAX_CHARS = 1_000
 
 REFINEMENT_CANDIDATE_MAX_CHARS = 8_000
 """Longest candidate supplement a proposal may return."""
+
+# ---------------------------------------------------------------------------
+# Evaluation (spec FR-5..FR-8, FR-16)
+# ---------------------------------------------------------------------------
+
+REFINEMENT_HOLDOUT_TAG = "holdout"
+"""Benchmark case tag that marks the default held-out evaluation set."""
+
+REFINEMENT_DATASET_ENV_SUFFIX = "REFINEMENT_DATASET"
+"""``RLM_STUDIO_REFINEMENT_DATASET`` overrides the evaluation dataset path."""
+
+REFINEMENT_DEFAULT_DATASET = "benchmarks/longdoc-v1.yaml"
+"""Evaluation dataset, relative to the source checkout root."""
+
+REFINEMENT_MIN_REPS = 2
+"""Fewest repetitions per case an evaluation may run (spec scenario 2)."""
+
+REFINEMENT_MAX_REPS = 5
+"""Most repetitions per case an evaluation may run."""
+
+REFINEMENT_EVALUATION_TEMPERATURE = 0.0
+"""Sampling temperature for both evaluation arms (FR-5)."""
+
+REFINEMENT_ARM_BASELINE = "baseline"
+"""Evaluation arm that runs the supplement the proposal was built on."""
+
+REFINEMENT_ARM_CANDIDATE = "candidate"
+"""Evaluation arm that runs the proposed supplement."""

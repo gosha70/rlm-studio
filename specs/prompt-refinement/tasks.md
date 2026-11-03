@@ -32,11 +32,11 @@ only to keep the codebase conventions or ship the feature.
 
 ## Phase C — evaluation (Runtime + API + QA)
 
-- [ ] C1 Tag the six holdout cases in `benchmarks/longdoc-v1.yaml`; `test_benchmark_dataset.py` asserts the tag set. FR-16 (default selection), plan §2.
-- [ ] C2 `GET .../holdout-cases`. FR-16.
-- [ ] C3 `server/services/refinement_eval.py`: materialise, source-hash exclusion, two-slot matrix per case × rep with separate adapters, temperature 0, case budgets, slot recording with run ids, `matches` scoring, optional `JudgeScorer`, aggregation, `complete` flag, regression flag. FR-5, FR-6, FR-7, FR-8, AC-5, AC-6. Tests with `ScriptedLLM`.
-- [ ] C4 `POST .../evaluate` → 202; background thread; per-profile single-job guard; progress dict in `AppState`; `reset_state()` clears it. FR-12, AC-1.
-- [ ] C5 Startup marks `evaluating` rows `interrupted`. FR-12.
+- [x] C1 Tag the six holdout cases in `benchmarks/longdoc-v1.yaml`; `test_benchmark_dataset.py` asserts the tag set. FR-16 (default selection), plan §2.
+- [x] C2 `GET .../holdout-cases`. FR-16.
+- [x] C3 `server/services/refinement_eval.py`: materialise, source-hash exclusion, two-slot matrix per case × rep with separate adapters, temperature 0, case budgets, slot recording with run ids, `matches` scoring, optional `JudgeScorer`, aggregation, `complete` flag, regression flag. FR-5, FR-6, FR-7, FR-8, AC-5, AC-6. Tests with `ScriptedLLM`.
+- [x] C4 `POST .../evaluate` → 202; background thread; per-profile single-job guard; progress dict in `AppState`; `reset_state()` clears it. FR-12, AC-1.
+- [x] C5 Startup marks `evaluating` rows `interrupted`. FR-12.
 
 ## Phase D — decisions (API)
 
@@ -71,6 +71,14 @@ only to keep the codebase conventions or ship the feature.
 - B2 (review fix): each evidence field is redacted whole and then clipped; clipping first cut a key straddling the limit into a fragment the patterns could not match.
 - B4 (spec change, owner 2026-11-03): source runs are `mode = rlm` only, in both the list and proposal creation; FR-2 updated.
 - B4: a failed or unusable proposal returns 502 and stores nothing; recorded as a known gap in spec §6.
+- C3: the service lives at `server/refinement_eval.py`, beside `judge.py` and `quality.py`; there is no `server/services/` package. Pure summary logic (completeness, regression, deltas) is in `application/services/refinement_evaluation.py`.
+- C3: temperature 0 is applied through a new optional `temperature` argument on `AppState.create_llm_adapter_for_chat_provider`; `RunConfigDTO.temperature` does not reach the RLM loop.
+- C3: evaluation arm runs are recorded with `profile_id = None`. They are not runs of the profile's real prompt, so they must never come back as refinement sources (FR-1 nuance).
+- C3: an arm passes only if its outcome is usable and its answer matches, and the judge scores only usable answers, the same rules as `rlm-studio bench`.
+- C4: the evaluation Chat Provider defaults to the proposal's and must use this profile (400 otherwise); the judge defaults to the configured judge Chat Provider, and none runs when neither is set.
+- C4: the dataset path is `RLM_STUDIO_REFINEMENT_DATASET`, else the checkout's `benchmarks/longdoc-v1.yaml`; known gap added to spec §6.
+- C1: the six holdout cases are provisional until owner task O2.
+- C3 (review fix): an arm whose run has `failure_kind` set (auth, model unavailable, connection, request timeout, rate limit) is a missing arm with a reason naming the kind and run id, so the evaluation is incomplete instead of scoring a provider failure as a wrong answer. A provider request timeout counts too, so a slow local model on the large case can leave an evaluation incomplete.
 - A7: `afd2db3` (2026-04-07) removed per-mode prompt editors in favour of prompt groups. FR-14 re-adds one RLM textarea; the old "no per-mode textareas" test now asserts only RLM is editable. Owner decision 2026-11-03: keep the single RLM textarea.
 
 ## Owner tasks (human)
