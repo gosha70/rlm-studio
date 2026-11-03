@@ -257,6 +257,21 @@ def _semantic(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _run_async(coro):
+    """Run one async test coroutine and leave an event loop for later tests.
+
+    ``asyncio.run`` clears the loop that the older async tests in
+    ``test_use_cases.py`` fetch with ``get_event_loop``; restoring one keeps
+    xdist workers order-independent.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 class TestSyncAsyncParity:
     def test_same_script_yields_same_semantic_trace(self) -> None:
         script = [
@@ -269,7 +284,7 @@ class TestSyncAsyncParity:
         sync_result = RunRLMUseCase(FakeLLM(list(script)), FakeSandbox()).execute(
             BIG_CONTENT, "q", config
         )
-        async_result = asyncio.run(
+        async_result = _run_async(
             RunRLMUseCase(FakeLLM(list(script)), FakeSandbox()).execute_async(
                 BIG_CONTENT, "q", config
             )
@@ -537,7 +552,7 @@ class TestCompactionLoop:
         ).execute(BIG_CONTENT, "q", config)
 
         emitter = RecordingEmitter()
-        async_result = asyncio.run(
+        async_result = _run_async(
             RunRLMUseCase(
                 CompactableLLM(list(script), context_window=100), FakeSandbox()
             ).execute_async(BIG_CONTENT, "q", config, event_emitter=emitter)

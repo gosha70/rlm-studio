@@ -673,7 +673,7 @@ async def _run_execution(
         # Build run config, using Chat Provider settings if available.
         # Apply RLM-specific knobs for rlm, auto, and compare (all run RLM internally).
         if cp and mode in MODES_RLM_INTERNAL:
-            run_config = state.create_run_config(mode)
+            run_config = state.create_run_config(mode, telemetry_backend)
             run_config.max_steps = cp.rlm_max_steps
             run_config.max_time_seconds = float(cp.rlm_timeout_seconds)
             run_config.repeat_limit = cp.rlm_repeat_limit
@@ -692,7 +692,7 @@ async def _run_execution(
                             len(_extra),
                         )
         else:
-            run_config = state.create_run_config(mode)
+            run_config = state.create_run_config(mode, telemetry_backend)
 
         # Prepare conversation history via the budgeted helper
         full_query, extra_overlay, _history_info = _prepare_history_context(
@@ -1136,7 +1136,7 @@ async def websocket_chat(
                             type(llm).__name__,
                             q,
                         )
-                        cfg = state.create_run_config(m)
+                        cfg = state.create_run_config(m, ws_telemetry_backend)
                         # Thread Chat Provider RLM settings into run config
                         if ws_cp and m in MODES_RLM_INTERNAL:
                             cfg.max_steps = ws_cp.rlm_max_steps

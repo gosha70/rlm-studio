@@ -34,7 +34,11 @@ from rlmstudio.infrastructure.engines.rlms_adapter import RlmsEngineAdapter
 from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
 from rlmstudio.infrastructure.sandbox.sandbox_factory import create_sandbox
 from rlmstudio.infrastructure.storage.sqlite_adapter import SQLiteStorageAdapter
-from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY
+from rlmstudio.ui.data.providers_catalog import (
+    LOCAL_PROVIDER_KEYS,
+    PROVIDERS_BY_KEY,
+    subcall_concurrency_for,
+)
 
 # Type alias for interaction modes
 InteractionMode = Literal["direct", "rag", "rlm", "compare", "auto"]
@@ -249,7 +253,7 @@ def _resolve_embedding_key(
     )
 
 
-_LOCAL_PROVIDERS: frozenset[str] = frozenset({"ollama", "lmstudio", "vllm"})
+_LOCAL_PROVIDERS: frozenset[str] = LOCAL_PROVIDER_KEYS
 
 _DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o",
@@ -428,6 +432,7 @@ def _setup(
         model=prefixed_model,
         max_steps=max_steps,
         stall_limit=stall_limit,
+        subcall_max_concurrency=subcall_concurrency_for(provider),
         **_registry_config_kwargs(),
     )
 
@@ -822,6 +827,7 @@ def build_matrix_slots(
                 provider=provider,
                 model=prefixed_model,
                 api_key=api_key,
+                subcall_max_concurrency=subcall_concurrency_for(provider),
                 extra={**base.extra, **extra},
             )
 

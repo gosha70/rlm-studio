@@ -111,11 +111,29 @@ Terminates the loop and returns the answer to the user. Execution stops immediat
 
 ### **3.3.3 Subcall Action**
 
-Creates a recursive RLM execution with a subset of the remaining budget. The child run gets its own loop and sandbox. Recursion depth is bounded by max\_recursion\_depth (default: 1).
+Creates one or more recursive RLM executions with a subset of the remaining
+budget. The controller runs the children itself; a v2 subcall never compiles
+to Python sent through the sandbox. The child run gets its own loop, adapter
+copy and sandbox copy. Recursion depth is bounded by max\_recursion\_depth
+(default: 1).
+
+Single:
 
 {"type": "subcall", "prompt": "\<sub-content\>", "query": "\<sub-question\>"}
 
-*Budget allocation: run\_rlm.py:1146–1191*
+Batched (answers return in input order as one registered list result):
+
+{"type": "subcall", "calls": [{"prompt": "\<chunk 1\>", "query": "\<sub-question\>"}, {"prompt": "\<chunk 2\>", "query": "\<sub-question\>"}], "max\_concurrency": 2}
+
+The budget ledger pre-reserves an equal share of the parent's remaining
+cost, tokens and controller steps for each child and folds actual usage back
+in on completion. Wall-clock time is not divided: every child gets the same
+absolute deadline and simply has less time if it starts later. Concurrency
+is capped by the provider kind (2 for local Ollama/LM Studio/vLLM, 4 for
+cloud) and never by the model's requested value alone.
+
+*Dispatch: `_run_subcalls` in application/use\_cases/run\_rlm.py; ledger in
+application/services/subcall\_ledger.py*
 
 ## **3.4 Response Parsing Pipeline**
 
@@ -274,7 +292,11 @@ limit warning message.
 
 # **6\. Sandbox Security Model**
 
-All LLM-generated code runs inside a RestrictedPython sandbox. This is the primary security boundary between the model and the host system.
+The sandbox is the primary security boundary between the model and the host
+system. v2 deterministic actions (`inspect`, `read_result`, single and batched
+`subcall`) are controller operations and never enter it; the sandbox runs only
+free-form Python from the v1 code-block path, and that code is restricted
+according to the rules below.
 
 ## **6.1 What Is Allowed**
 

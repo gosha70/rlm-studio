@@ -129,6 +129,11 @@ RLM_DEFAULT_COMPACTION_RESERVE_TOKENS = 4096
 RLM_DEFAULT_COMPACTION_KEEP_LAST = 4
 """Most recent assistant/execution pairs kept verbatim during compaction."""
 
+RLM_DEFAULT_SUBCALL_MAX_CONCURRENCY = 4
+"""Default cap on concurrently running child RLMs in a batched subcall."""
+RLM_LOCAL_SUBCALL_MAX_CONCURRENCY = 2
+"""Provider-kind cap for local backends (Ollama, LM Studio, vLLM)."""
+
 RUNTIME_DEFAULT_TEMPERATURE = 0.7
 RUNTIME_DEFAULT_TOP_P = 1.0
 RUNTIME_DEFAULT_MAX_OUTPUT_TOKENS = 4096

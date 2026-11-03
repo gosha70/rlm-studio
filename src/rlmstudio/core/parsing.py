@@ -22,6 +22,11 @@ class ParsedResponse:
     response was a JSON inspect action.  The controller executes it directly
     (``application/services/inspect_dispatcher.py``); ``code`` then holds the
     display form recorded in the trace, not code sent to the sandbox."""
+    subcall_action: Any = None
+    """The parsed v2.0 :class:`~rlmstudio.core.actions.SubcallAction`, when the
+    response was a single or batched JSON subcall.  The controller runs the
+    child RLM(s) itself; ``code`` is the display form recorded in the trace,
+    never Python sent to the sandbox."""
 
     @property
     def has_code(self) -> bool:

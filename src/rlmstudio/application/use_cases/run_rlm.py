@@ -8,10 +8,12 @@ until a final answer or budget exhaustion.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import re
 import time
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from rlmstudio.application.dto import (
@@ -61,6 +63,11 @@ from rlmstudio.application.services.provider_failure import (
     failure_kind_value,
 )
 from rlmstudio.application.services.result_registry import ReadSlice, ResultRef, ResultRegistry
+from rlmstudio.application.services.subcall_ledger import (
+    ChildAllowance,
+    ChildUsage,
+    SubcallLedger,
+)
 from rlmstudio.domain.entities import BudgetConfig, BudgetState
 from rlmstudio.domain.exceptions import BudgetExceededError
 from rlmstudio.prompts import get_rlm_message
@@ -447,7 +454,22 @@ class RunRLMUseCase:
                     parent_budget_snapshot["steps"] = float(budget_state.steps)
                     result_ref: ResultRef | None = None
                     readback: ReadSlice | None = None
-                    if parsed.inspect_action is not None:
+                    subcall_total: ChildUsage | None = None
+                    if parsed.subcall_action is not None:
+                        # v2 subcalls are controller-dispatched: the child
+                        # RLM runs in-process, never as Python through the
+                        # sandbox (specs/rlm-working-state G9a).
+                        exec_result, result_ref, subcall_total = self._run_subcalls(
+                            action=parsed.subcall_action,
+                            config=config,
+                            registry=registry,
+                            step=budget_state.steps,
+                            spent_cost=cumulative_cost,
+                            spent_tokens=cumulative_input + cumulative_output,
+                            spent_steps=budget_state.steps,
+                            parent_start=start,
+                        )
+                    elif parsed.inspect_action is not None:
                         # v2 inspect actions are deterministic controller
                         # operations: run against the content, register the
                         # complete value, preview it (specs/rlm-working-state).
@@ -461,6 +483,11 @@ class RunRLMUseCase:
                     else:
                         exec_result = self._sandbox.execute(parsed.code)
                     last_execution_failed = exec_result.exception is not None or exec_result.timeout
+                    if subcall_total is not None:
+                        cumulative_input += subcall_total.input_tokens
+                        cumulative_output += subcall_total.output_tokens
+                        cumulative_cost += subcall_total.total_cost
+                        budget_state.steps += subcall_total.steps
                     # Fold subcall token/cost/step usage back into parent accumulators
                     for _u in subcall_usage:
                         cumulative_input += _u.get("input_tokens", 0)
@@ -1375,7 +1402,20 @@ class RunRLMUseCase:
                     parent_budget_snapshot["steps"] = float(budget_state.steps)
                     result_ref: ResultRef | None = None
                     readback: ReadSlice | None = None
-                    if parsed.inspect_action is not None:
+                    subcall_total: ChildUsage | None = None
+                    if parsed.subcall_action is not None:
+                        exec_result, result_ref, subcall_total = await asyncio.to_thread(
+                            self._run_subcalls,
+                            action=parsed.subcall_action,
+                            config=config,
+                            registry=registry,
+                            step=budget_state.steps,
+                            spent_cost=cumulative_cost,
+                            spent_tokens=cumulative_input + cumulative_output,
+                            spent_steps=budget_state.steps,
+                            parent_start=start,
+                        )
+                    elif parsed.inspect_action is not None:
                         exec_result, result_ref, readback = await asyncio.to_thread(
                             self._run_inspect_action,
                             content=content,
@@ -1387,6 +1427,11 @@ class RunRLMUseCase:
                     else:
                         exec_result = await asyncio.to_thread(self._sandbox.execute, parsed.code)
                     last_execution_failed = exec_result.exception is not None or exec_result.timeout
+                    if subcall_total is not None:
+                        cumulative_input += subcall_total.input_tokens
+                        cumulative_output += subcall_total.output_tokens
+                        cumulative_cost += subcall_total.total_cost
+                        budget_state.steps += subcall_total.steps
                     # Fold subcall token/cost/step usage back into parent accumulators
                     for _u in subcall_usage:
                         cumulative_input += _u.get("input_tokens", 0)
@@ -1977,8 +2022,6 @@ class RunRLMUseCase:
         child execution so the parent loop can fold the child's token and cost
         usage back into its own accumulators.
         """
-        import copy
-
         parent_llm = self._llm
         parent_sandbox = self._sandbox
 
@@ -2324,14 +2367,11 @@ class RunRLMUseCase:
                     )
                 return ParsedResponse(raw_text=text)
             elif action_type == "subcall":
-                # Translate to executable Python; subcall() is bound in sandbox globals
-                code = (
-                    f"_sub_result = subcall("
-                    f"content={repr(action_obj.prompt)}, "
-                    f"query={repr(action_obj.query)})\n"
-                    f"print(_sub_result)"
+                return ParsedResponse(
+                    code=self._subcall_display_code(action_obj),
+                    raw_text=text,
+                    subcall_action=action_obj,
                 )
-                return ParsedResponse(code=code, raw_text=text)
             # unknown action type: fall through to markdown
         except (ParseError, Exception):
             # Retry: if the text contains a JSON object with trailing prose
@@ -2352,13 +2392,11 @@ class RunRLMUseCase:
                                 code=code, raw_text=text, is_inspect=True, inspect_action=action_obj
                             )
                     elif action_type == "subcall":
-                        code = (
-                            f"_sub_result = subcall("
-                            f"content={repr(action_obj.prompt)}, "
-                            f"query={repr(action_obj.query)})\n"
-                            f"print(_sub_result)"
+                        return ParsedResponse(
+                            code=self._subcall_display_code(action_obj),
+                            raw_text=text,
+                            subcall_action=action_obj,
                         )
-                        return ParsedResponse(code=code, raw_text=text)
             except Exception:  # nosec B110 — intentional: v2 JSON parse failure falls through to v1 markdown parser below
                 pass
 
@@ -2699,6 +2737,149 @@ class RunRLMUseCase:
             spill_result_above_bytes=config.spill_result_above_bytes,
             max_registry_bytes=config.max_registry_bytes,
             max_spill_bytes=config.max_spill_bytes,
+        )
+
+    @staticmethod
+    def _subcall_display_code(action_obj: Any) -> str:
+        """The trace/replay display form of a single or batched subcall."""
+        calls = getattr(action_obj, "calls", None)
+        if calls:
+            return f"subcall(calls={len(calls)}, max_concurrency={action_obj.max_concurrency})"
+        return f"subcall(content={action_obj.prompt!r}, query={action_obj.query!r})"
+
+    def _run_subcalls(
+        self,
+        *,
+        action: Any,
+        config: RunConfigDTO,
+        registry: ResultRegistry,
+        step: int,
+        spent_cost: float,
+        spent_tokens: int,
+        spent_steps: int,
+        parent_start: float,
+    ) -> tuple[ExecutionResultDTO, ResultRef | None, ChildUsage]:
+        """Run a single or batched subcall through the controller.
+
+        Children run concurrently up to ``config.subcall_max_concurrency``
+        (itself capped by the provider kind), each with its own adapter copy,
+        sandbox copy and a pre-reserved budget share.  Answers stay in input
+        order and become one primary list result.
+        """
+        calls = action.batch
+        if config.max_recursion_depth <= 0:
+            return (
+                ExecutionResultDTO(exception="Maximum recursion depth exceeded"),
+                None,
+                ChildUsage(),
+            )
+
+        cap = max(1, config.subcall_max_concurrency)
+        requested = action.max_concurrency or cap
+        workers = max(1, min(requested, cap, len(calls)))
+        deadline_epoch = (
+            parent_start + config.max_time_seconds if config.max_time_seconds is not None else None
+        )
+        ledger = SubcallLedger(
+            max_cost=config.max_cost,
+            max_tokens=config.max_tokens,
+            max_steps=config.max_steps,
+            spent_cost=spent_cost,
+            spent_tokens=spent_tokens,
+            spent_steps=spent_steps,
+            deadline_epoch=deadline_epoch,
+        )
+        allowances = ledger.reserve(len(calls))
+        answers: list[str | None] = [None] * len(calls)
+        usages: list[ChildUsage] = [ChildUsage()] * len(calls)
+
+        def run_one(index: int, call: Any, allowance: ChildAllowance) -> None:
+            if allowance.max_steps <= 0:
+                ledger.release(allowance, ChildUsage())
+                answers[index] = "Error in subcall: parent budget exhausted"
+                return
+            try:
+                child_llm = copy.copy(self._llm)
+                child_sandbox = copy.deepcopy(self._sandbox)
+                child_sandbox.reset()
+            except Exception as exc:
+                ledger.release(allowance, ChildUsage())
+                answers[index] = f"Error: Cannot create subcall environment: {exc}"
+                return
+
+            remaining_time = (
+                max(0.0, allowance.deadline_epoch - time.time())
+                if allowance.deadline_epoch is not None
+                else None
+            )
+            child_config = replace(
+                config,
+                mode=MODE_RLM,
+                max_steps=allowance.max_steps,
+                max_tokens=allowance.max_tokens,
+                max_cost=allowance.max_cost,
+                max_time_seconds=remaining_time,
+                max_recursion_depth=config.max_recursion_depth - 1,
+                extra={},
+            )
+            usage = ChildUsage()
+            try:
+                child = RunRLMUseCase(child_llm, child_sandbox)
+                result = child.execute(call.prompt, call.query, child_config)
+                usage = ChildUsage(
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
+                    total_cost=result.total_cost,
+                    steps=result.steps,
+                )
+                answers[index] = (
+                    result.answer
+                    if result.success
+                    else f"Error in subcall: {result.error or 'child run failed'}"
+                )
+            except Exception as exc:
+                usage = ChildUsage()
+                answers[index] = f"Error in subcall: {exc}"
+            finally:
+                usages[index] = usage
+                ledger.release(allowance, usage)
+
+        if workers == 1:
+            for index, call in enumerate(calls):
+                run_one(index, call, allowances[index])
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(run_one, index, call, allowances[index]): index
+                    for index, call in enumerate(calls)
+                }
+                for future in as_completed(futures):
+                    # ``run_one`` handles its own failure; this guards a
+                    # truly unexpected error without failing the batch.
+                    exc = future.exception()
+                    if exc is not None:
+                        index = futures[future]
+                        ledger.release(allowances[index], ChildUsage())
+                        answers[index] = f"Error in subcall: {exc}"
+
+        ordered = [
+            answer if answer is not None else "Error in subcall: no result" for answer in answers
+        ]
+        total = ChildUsage(
+            input_tokens=sum(u.input_tokens for u in usages),
+            output_tokens=sum(u.output_tokens for u in usages),
+            total_cost=sum(u.total_cost for u in usages),
+            steps=sum(u.steps for u in usages),
+        )
+        ref = registry.register(ordered, kind="subcall", step=step)
+        preview = format_preview(registry, ref, cap=config.result_preview_chars)
+        return (
+            ExecutionResultDTO(
+                stdout=preview,
+                truncated=ref.length > config.result_preview_chars,
+            ),
+            ref,
+            total,
         )
 
     @staticmethod

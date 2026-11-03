@@ -255,6 +255,9 @@ def _one_line_action(content: str) -> str | None:
 
         return _clip(display_code(action))
     if action_type == "subcall" and action is not None:
+        calls = getattr(action, "calls", None)
+        if calls:
+            return _clip(f"subcall(calls={len(calls)})")
         query = str(getattr(action, "query", "") or "")
         return _clip(f"subcall(query={query!r})")
 

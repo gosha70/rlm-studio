@@ -43,15 +43,19 @@ OQ-1..3 in `spec.md` §5 unless the owner answers otherwise in Phase 0.
 *(Phase 2 landed 2026-11-02: `context_compaction.py` (candidate-message estimate with `count_tokens(messages=...)` or `last_clamp_info`+chars/4 fallback, keep-last window, result stubs, one-line actions, idempotency); `ResultRegistry` message-position index; both loops compact before each call and retry once on overflow; compaction rows carry trigger, tokens and ids; config YAML/`RunConfigDTO`/server and library plumbing; canonical `compaction` action across the domain Literal, route map (no `final` promotion), replay (`decision` step) and timeline colour. Tests: `test_context_compaction.py`, loop AC-4/5 + sync/async parity + emitter, e2e WebSocket compaction event, replay/canonicalisation. Test-local fake rather than extending `benchmark/fakes.py` — the loop tests own their script; `ScriptedLLM` stays a simple one-reply fake.)*
 
 ## Phase 3 — batched subcalls + ledger (PR 3)
-- [ ] T3.1 `core/actions.py`: `calls` + `max_concurrency` on `SubcallAction`; single form unchanged; parser tests for both.
-- [ ] T3.2 `application/services/subcall_ledger.py` + tests (equal split of cost/tokens/steps, release/re-reserve, common absolute deadline carried unchanged into every allowance, lock under a thread pool, parent fold-in).
-- [ ] T3.3 `run_rlm.py`: controller-dispatched subcalls (D2/D6): delete the `subcall` sandbox binding, `_make_subcall`, `parent_budget_snapshot`, `subcall_usage`; `_run_subcalls` with `copy.copy(llm)` + sandbox copy per child, each child's between-steps time limit = parent deadline (no hard pool bound, plan D6); ordered results → one registered list result; per-child error isolation; single call = one-element batch.
-- [ ] T3.4 `RunConfigDTO.subcall_max_concurrency`; provider-kind defaults (2 local / 4 cloud) in `server/dependencies.py` and `api.py`; action value `min`'d.
-- [ ] T3.5 Prompt 2.2 batched example + `chunk()` map-reduce workflow.
-- [ ] T3.6 AC-6, AC-6a, AC-7 loop tests on both paths (AC-6a with the subprocess sandbox configured); `tests/test_json_subcall.py` and `tests/integration/test_budget_enforcement.py` still green or updated for controller dispatch.
+- [x] T3.1 `core/actions.py`: `calls` + `max_concurrency` on `SubcallAction`; single form unchanged; parser tests for both.
+- [x] T3.2 `application/services/subcall_ledger.py` + tests (equal split of cost/tokens/steps, release/re-reserve, common absolute deadline carried unchanged into every allowance, lock under a thread pool, parent fold-in).
+- [x] T3.3 `run_rlm.py`: controller-dispatched subcalls (D2/D6): `_run_subcalls` with `copy.copy(llm)` + sandbox copy per child, each child's between-steps time limit = parent deadline (no hard pool bound, plan D6); ordered results → one registered list result; per-child error isolation; single call = one-element batch.
+- [x] T3.4 `RunConfigDTO.subcall_max_concurrency`; provider-kind defaults (2 local / 4 cloud) in `server/dependencies.py` and `api.py`; action value `min`'d.
+- [x] T3.5 Prompt 2.3 batched example + `chunk()` map-reduce workflow.
+- [x] T3.6 AC-6, AC-6a, AC-7 loop tests on both paths (AC-6a with the subprocess sandbox configured); `tests/test_json_subcall.py` and `tests/integration/test_budget_enforcement.py` still green or updated for controller dispatch.
+
+*(Phase 3 landed 2026-11-02: `SubcallCall`/batched `SubcallAction` parser; `subcall_ledger.py`; controller-dispatched `_run_subcalls` in both loops with adapter/sandbox copies, pre-reserved cost/token/step shares, common deadline, provider cap, ordered list result and per-child error isolation; prompt 2.3; provider defaults in `api.py`, `server/dependencies.py` and the compare-matrix slot config; tests `test_subcall_action.py`, `test_subcall_ledger.py`, `test_subcall_batching.py`. Deviation from T3.3: the v1 free-form `subcall()` sandbox binding is retained — spec I6 requires existing single-call payloads and tests to keep working — but v2 actions never use it. Batched actions on the legacy `RLM` REPL path run serially.)*
 
 ## Phase 4 — docs
-- [ ] T4.1 Design doc §3 / §4 / §5 / §6 / §9.6 / §9.9; `rlm-concepts.md` §4 and §9; CHANGELOG `[Unreleased]` entries (one per item, the subprocess-subcall fix called out under item 3).
+- [x] T4.1 Design doc §3 / §4 / §5 / §6 / §9.6 / §9.9; `rlm-concepts.md` §4 and §9; CHANGELOG `[Unreleased]` entries (one per item, the subprocess-subcall fix called out under item 3).
+
+*(Docs landed with items 1–3: design doc §3.3.3 (controller-dispatched single/batched subcalls), §4.5 (`read_result`), §5.7 (lossless compaction), §6 (sandbox scope is the v1 path), §9.6/§9.9; concepts §4 (batched map-reduce), §9.10 (compaction), §10 limitation row; prompt 2.3; CHANGELOG entries per item.)*
 
 ## Phase 5 — regression run (owner)
 - [ ] T5.1 AC-9: `rlm-studio bench --config benchmarks/longdoc-v1.yaml --providers ollama/<8k-context model> --engines rlm --reps 2 --out benchmarks/results/<date>-working-state/` before (baseline tag) and after; compare overflow-induced limit warnings, accuracy, judge; commit results.

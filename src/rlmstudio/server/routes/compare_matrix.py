@@ -943,7 +943,9 @@ def _build_slot_run_config(
     """Build a per-slot :class:`RunConfigDTO` with the chat provider's profile
     settings applied (mirrors ``/api/chat`` for RLM) and optional RAG extras.
     """
-    run_config = state.create_run_config(mode=mode)
+    llm_provider = state.get_llm_provider(cp.llm_provider_id) if cp.llm_provider_id else None
+    provider_key = (llm_provider.backend if llm_provider else None) or cp.llm_provider
+    run_config = state.create_run_config(mode=mode, provider_key=provider_key)
 
     # Apply per-provider RLM knobs the same way /api/chat does.  The official
     # engine shares the step/time budgets but runs its own prompts, so the

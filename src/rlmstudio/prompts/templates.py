@@ -23,7 +23,7 @@ def get_system_prompt_version(version: str = "2.0") -> str:
 
     The file is selected by the *major* version (``2.0`` →
     ``system_prompt_v2_0.yaml``); its metadata carries the exact protocol
-    revision (``2.2`` once ``read_result`` exists), which the RLM runtime
+    revision (``2.3`` once batched subcalls exist), which the RLM runtime
     fingerprint records so a trace says which prompt the model saw.
     """
     cache_key = f"system_prompt_v{version}"

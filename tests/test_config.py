@@ -142,6 +142,22 @@ class TestExecutionConfig:
         assert config2.registry_kwargs()["compaction_reserve_tokens"] == 2048
 
 
+class TestSubcallConcurrency:
+    def test_run_config_defaults_to_cloud_cap(self):
+        from rlmstudio.application.dto import RunConfigDTO
+
+        assert RunConfigDTO().subcall_max_concurrency == 4
+
+    def test_provider_kind_caps_local_backends(self):
+        from rlmstudio.ui.data.providers_catalog import subcall_concurrency_for
+
+        assert subcall_concurrency_for("ollama") == 2
+        assert subcall_concurrency_for("lmstudio") == 2
+        assert subcall_concurrency_for("vllm") == 2
+        assert subcall_concurrency_for("openai") == 4
+        assert subcall_concurrency_for(None) == 4
+
+
 class TestMonitoringConfig:
     """Test MonitoringConfig functionality."""
 
