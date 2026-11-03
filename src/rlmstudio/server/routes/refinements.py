@@ -90,6 +90,8 @@ def _load_source_runs(state: AppState, profile_id: str, run_ids: list[str]) -> l
             problems.append(f"{run_id}: not found")
         elif run.profile_id != profile_id:
             problems.append(f"{run_id}: not a run of this profile")
+        elif run.mode != MODE_RLM:
+            problems.append(f"{run_id}: not an RLM run ({run.mode})")
         elif not run.content_sha256:
             problems.append(f"{run_id}: recorded before document hashing")
         else:
@@ -124,12 +126,16 @@ async def list_source_runs(
     limit: int = Query(SOURCE_RUNS_DEFAULT_LIMIT, ge=1, le=SOURCE_RUNS_MAX_LIMIT),
     state: AppState = Depends(get_state),
 ) -> list[RefinementSourceRun]:
-    """Runs of this profile that can be refinement evidence, newest first (FR-2).
+    """RLM runs of this profile that can be refinement evidence, newest first (FR-2).
 
+    Only ``rlm`` runs are listed: the supplement changes nothing else, and
+    an ``auto`` or ``compare`` run may not have run the RLM loop at all.
     Runs recorded before document hashing are never listed.
     """
     _get_profile(state, profile_id)
-    runs = state.telemetry.list_runs(limit=limit, profile_id=profile_id, require_content_hash=True)
+    runs = state.telemetry.list_runs(
+        limit=limit, mode=MODE_RLM, profile_id=profile_id, require_content_hash=True
+    )
     return [
         RefinementSourceRun(
             id=run.id,

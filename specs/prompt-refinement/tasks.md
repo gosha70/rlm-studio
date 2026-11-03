@@ -68,6 +68,8 @@ only to keep the codebase conventions or ship the feature.
 - A6 (found in Phase B): `reset_state()` stubbed `save_config` but not `save_config_checked`, so a test reaching the checked save through the test state would write the user's real config. Stubbed in Phase B.
 - B2: the FR-17 line rule matches any identifier *ending* in a listed name (`aws_secret_key=`), which is stricter than the literal names; FR-17 wording updated.
 - B3: only the models Phase B routes use were added (source run row, create request, refinement response). The evaluate, accept, reject and holdout-case models land with their routes in C and D, so nothing unused ships.
+- B2 (review fix): each evidence field is redacted whole and then clipped; clipping first cut a key straddling the limit into a fragment the patterns could not match.
+- B4 (spec change, owner 2026-11-03): source runs are `mode = rlm` only, in both the list and proposal creation; FR-2 updated.
 - B4: a failed or unusable proposal returns 502 and stores nothing; recorded as a known gap in spec §6.
 - A7: `afd2db3` (2026-04-07) removed per-mode prompt editors in favour of prompt groups. FR-14 re-adds one RLM textarea; the old "no per-mode textareas" test now asserts only RLM is editable. Owner decision 2026-11-03: keep the single RLM textarea.
 

@@ -170,6 +170,22 @@ def test_digest_clips_long_fields_and_counts_redactions() -> None:
     assert "abc123" not in digest.text
 
 
+@pytest.mark.parametrize(
+    ("secret", "leak"),
+    [
+        ("sk-proj-" + "Q" * 30, "QQQ"),
+        ("password: hunter2hunter2", "hunter"),
+    ],
+)
+def test_secret_straddling_the_clip_limit_is_still_redacted(secret: str, leak: str) -> None:
+    # The secret starts 10 chars before the answer limit, so a clip-first
+    # order would keep a fragment too short to match any pattern.
+    answer = "x" * (REFINEMENT_EVIDENCE_ANSWER_MAX_CHARS - 10) + secret + " tail"
+    digest = build_evidence_digest([_run("r1", 1.0, answer=answer)])
+    assert leak not in digest.text
+    assert "sk-proj" not in digest.text
+
+
 def test_digest_marks_degraded_answers_and_lists_actions() -> None:
     run = _run("r1", 1.0, success=True, outcome_category="success", answer=DEGRADED, error=None)
     digest = build_evidence_digest([run])

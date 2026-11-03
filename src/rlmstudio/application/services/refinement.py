@@ -128,13 +128,18 @@ def _clip(text: str, limit: int) -> tuple[str, int]:
 
 
 def _render_run(run: EvidenceRun) -> tuple[str, int, int]:
-    """Render one run; return ``(block, truncated_chars, redacted_lines)``."""
-    query, q_cut = _clip(run.query, REFINEMENT_EVIDENCE_QUERY_MAX_CHARS)
-    answer, a_cut = _clip(run.answer, REFINEMENT_EVIDENCE_ANSWER_MAX_CHARS)
-    error, e_cut = _clip(run.error or "", REFINEMENT_EVIDENCE_ERROR_MAX_CHARS)
-    query, q_red = redact_evidence_text(query)
-    answer, a_red = redact_evidence_text(answer)
-    error, e_red = redact_evidence_text(error)
+    """Render one run; return ``(block, truncated_chars, redacted_lines)``.
+
+    Each field is redacted whole and clipped afterwards.  Clipping first
+    would cut a key at the limit into a fragment too short for the key-shape
+    patterns, and that fragment would reach the proposer.
+    """
+    query, q_red = redact_evidence_text(run.query)
+    answer, a_red = redact_evidence_text(run.answer)
+    error, e_red = redact_evidence_text(run.error or "")
+    query, q_cut = _clip(query, REFINEMENT_EVIDENCE_QUERY_MAX_CHARS)
+    answer, a_cut = _clip(answer, REFINEMENT_EVIDENCE_ANSWER_MAX_CHARS)
+    error, e_cut = _clip(error, REFINEMENT_EVIDENCE_ERROR_MAX_CHARS)
 
     outcome = run.outcome_category or "unknown"
     if is_degraded_answer(run.success, run.answer):

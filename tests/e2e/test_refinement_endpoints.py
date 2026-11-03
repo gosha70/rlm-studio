@@ -96,6 +96,7 @@ def setup(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Setup:
     _record(state, "new", 2.0, profile_id=pid, success=True, answer=DEGRADED, error=None)
     _record(state, "legacy", 3.0, profile_id=pid, content_sha256=None)
     _record(state, "foreign", 4.0, profile_id="someone-else")
+    _record(state, "direct-run", 5.0, profile_id=pid, mode="direct")
 
     llm = FakeLLM()
     adapter_calls: list[str] = []
@@ -122,7 +123,7 @@ def _propose(client: TestClient, s: Setup, **body: Any) -> Any:
 
 
 class TestSourceRuns:
-    def test_lists_only_hashed_runs_of_the_profile_newest_first(
+    def test_lists_only_hashed_rlm_runs_of_the_profile_newest_first(
         self, client: TestClient, setup: Setup
     ) -> None:
         resp = client.get(PATH.format(pid=setup.profile_id) + "/source-runs")
@@ -218,6 +219,7 @@ class TestCreateProposal:
             (["missing"], "missing: not found"),
             (["foreign"], "foreign: not a run of this profile"),
             (["legacy"], "legacy: recorded before document hashing"),
+            (["direct-run"], "direct-run: not an RLM run (direct)"),
         ],
     )
     def test_unusable_source_runs_are_400(
