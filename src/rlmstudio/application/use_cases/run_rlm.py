@@ -31,6 +31,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_CODE,
     TRACE_KEY_COMPACTION_REASON,
     TRACE_KEY_CONTENT,
+    TRACE_KEY_COST,
     TRACE_KEY_ELAPSED_SECONDS,
     TRACE_KEY_IDS_STUBBED,
     TRACE_KEY_INPUT_TOKENS,
@@ -522,7 +523,22 @@ class RunRLMUseCase:
                         exec_entry[TRACE_KEY_RESULT_CHARS] = result_ref.length
                     if readback is not None:
                         exec_entry[TRACE_KEY_READBACK_OF] = readback.ref.id
+                    if subcall_total is not None:
+                        # Child usage belongs to this row so trace and
+                        # telemetry totals reconcile with RunResultDTO.
+                        exec_entry[TRACE_KEY_INPUT_TOKENS] = subcall_total.input_tokens
+                        exec_entry[TRACE_KEY_OUTPUT_TOKENS] = subcall_total.output_tokens
+                        exec_entry[TRACE_KEY_COST] = subcall_total.total_cost
                     trace.append(exec_entry)
+                    budget_state.elapsed_seconds = time.time() - start
+                    if subcall_total is not None and not budget_state.is_within(budget_config):
+                        # Provider usage is known only after the response, so a
+                        # single call can overshoot its reserved share.  Record
+                        # it (the row above carries the aggregate), then stop
+                        # the run with a budget warning instead of continuing.
+                        raise BudgetExceededError(
+                            "Subcall batch exceeded the parent token/cost budget"
+                        )
 
                     # Repeat detection — only for inspect actions.
                     # Non-inspect code (subcalls, arbitrary computation) can legitimately
@@ -1464,7 +1480,22 @@ class RunRLMUseCase:
                         exec_entry[TRACE_KEY_RESULT_CHARS] = result_ref.length
                     if readback is not None:
                         exec_entry[TRACE_KEY_READBACK_OF] = readback.ref.id
+                    if subcall_total is not None:
+                        # Child usage belongs to this row so trace and
+                        # telemetry totals reconcile with RunResultDTO.
+                        exec_entry[TRACE_KEY_INPUT_TOKENS] = subcall_total.input_tokens
+                        exec_entry[TRACE_KEY_OUTPUT_TOKENS] = subcall_total.output_tokens
+                        exec_entry[TRACE_KEY_COST] = subcall_total.total_cost
                     trace.append(exec_entry)
+                    budget_state.elapsed_seconds = time.time() - start
+                    if subcall_total is not None and not budget_state.is_within(budget_config):
+                        # Provider usage is known only after the response, so a
+                        # single call can overshoot its reserved share.  Record
+                        # it (the row above carries the aggregate), then stop
+                        # the run with a budget warning instead of continuing.
+                        raise BudgetExceededError(
+                            "Subcall batch exceeded the parent token/cost budget"
+                        )
 
                     # Repeat detection — only for inspect actions.
                     repeat_nudge: str | None = None
@@ -2800,6 +2831,21 @@ class RunRLMUseCase:
                 return
             try:
                 child_llm = copy.copy(self._llm)
+            except Exception as exc:
+                ledger.release(allowance, ChildUsage())
+                answers[index] = f"Error: Cannot create subcall environment: {exc}"
+                return
+            if not self._subcall_share_fits(
+                child_llm,
+                prompt=call.prompt,
+                query=call.query,
+                allowance=allowance,
+                config=config,
+            ):
+                ledger.release(allowance, ChildUsage())
+                answers[index] = "Error in subcall: budget share too small for the prompt"
+                return
+            try:
                 child_sandbox = copy.deepcopy(self._sandbox)
                 child_sandbox.reset()
             except Exception as exc:
@@ -2881,6 +2927,41 @@ class RunRLMUseCase:
             ref,
             total,
         )
+
+    def _subcall_share_fits(
+        self,
+        llm: LLMPort,
+        *,
+        prompt: str,
+        query: str,
+        allowance: ChildAllowance,
+        config: RunConfigDTO,
+    ) -> bool:
+        """Whether the child's initial prompt can fit its reserved share.
+
+        A provider response can still overshoot the share (usage is known only
+        after the call), but a child must not start a call whose *estimated
+        prompt* alone cannot fit.
+        """
+        if allowance.max_tokens is None and allowance.max_cost is None:
+            return True
+        system_prompt = self._build_system_prompt(len(prompt))
+        if config.system_prompt_extra:
+            system_prompt += "\n\n" + config.system_prompt_extra
+        estimate = estimate_tokens(
+            llm,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query},
+            ],
+        )
+        if allowance.max_tokens is not None and estimate >= allowance.max_tokens:
+            return False
+        if allowance.max_cost is not None:
+            input_cost_per_1m, _ = self._get_pricing(llm)
+            if estimate * input_cost_per_1m / 1_000_000 >= allowance.max_cost:
+                return False
+        return True
 
     @staticmethod
     def _run_inspect_action(

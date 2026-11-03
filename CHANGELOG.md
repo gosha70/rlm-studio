@@ -14,13 +14,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   the subprocess sandbox.
 - A new `SubcallLedger` pre-reserves an equal share of the parent's remaining
   cost, tokens and controller steps for each child and folds actual usage back
-  in on completion, returning unused headroom for later batches. Wall-clock
-  time is not divided: every child carries the parent's common absolute
-  deadline. Concurrency is capped by provider kind — 2 for local Ollama, LM
-  Studio and vLLM, 4 for cloud — and an action's requested
-  `max_concurrency` can only lower that cap.
+  in on completion, returning unused headroom for later batches. A child does
+  not start a call whose estimated initial prompt cannot fit its share.
+  Provider usage is known only after a response, so one in-flight call can
+  overshoot; the overage is recorded and the run stops with a budget warning
+  instead of continuing. Wall-clock time is not divided: every child carries
+  the parent's common absolute deadline. Concurrency is capped by provider
+  kind — 2 for local Ollama, LM Studio and vLLM, 4 for cloud — and an action's
+  requested `max_concurrency` can only lower that cap.
 - Answers stay in input order and become one registered list result, readable
-  with `read_result` and stubbable by compaction. A failed child becomes an
+  with `read_result` and stubbable by compaction. The subcall execution row
+  carries aggregate child input/output tokens and cost, so trace and persisted
+  telemetry totals reconcile with the run totals. A failed child becomes an
   error string in its slot instead of failing the batch.
 - Prompt 2.3 documents the batched form and the `chunk()` map-reduce workflow.
   The legacy `RLM` REPL path runs batched actions serially through its existing

@@ -16,6 +16,8 @@ from typing import Any
 from rlmstudio.application.dto import LLMResponseDTO, RunConfigDTO, RunResultDTO
 from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_IDS_STUBBED,
+    TRACE_KEY_INPUT_TOKENS,
+    TRACE_KEY_OUTPUT_TOKENS,
     TRACE_KEY_READBACK_OF,
     TRACE_KEY_RESULT_ID,
     TRACE_KEY_ROLE,
@@ -66,11 +68,17 @@ class BatchRoutingLLM:
         fail_queries: set[str] | None = None,
         delay: float = 0.02,
         pricing: dict[str, float] | None = None,
+        child_input_tokens: int = 10,
+        child_output_tokens: int = 5,
+        count_tokens_override: int | None = None,
     ) -> None:
         self._parent_responses = list(parent_responses)
         self._fail_queries = fail_queries or set()
         self._delay = delay
         self._pricing = pricing or {"input_cost_per_1m": 0.0, "output_cost_per_1m": 0.0}
+        self._child_input_tokens = child_input_tokens
+        self._child_output_tokens = child_output_tokens
+        self._count_tokens_override = count_tokens_override
         self.context_window = context_window
         self._lock = threading.Lock()
         self._state: dict[str, Any] = {
@@ -103,8 +111,8 @@ class BatchRoutingLLM:
             return LLMResponseDTO(
                 content=text,
                 model="fake",
-                input_tokens=10,
-                output_tokens=5,
+                input_tokens=self._child_input_tokens if is_child else 10,
+                output_tokens=self._child_output_tokens if is_child else 5,
             )
         finally:
             with self._lock:
@@ -117,6 +125,8 @@ class BatchRoutingLLM:
         *,
         messages: list[dict[str, str]] | None = None,
     ) -> int:
+        if self._count_tokens_override is not None:
+            return self._count_tokens_override
         if messages is not None:
             return max(1, sum(len(m.get("content", "")) for m in messages) // 4 + 10)
         return max(1, len(text or "") // 4)
@@ -296,6 +306,7 @@ class TestSubcallBudgets:
         llm = BatchRoutingLLM(
             [_batch("child-0", "child-1", "child-2", "child-3"), _final("done")],
             delay=0.0,
+            count_tokens_override=1,
         )
         config = RunConfigDTO(
             mode="rlm",
@@ -329,6 +340,7 @@ class TestSubcallBudgets:
         llm = BatchRoutingLLM(
             [_batch("child-0", "child-1", "child-2", "child-3"), _final("done")],
             delay=0.0,
+            count_tokens_override=1,
         )
         config = RunConfigDTO(
             mode="rlm",
@@ -400,6 +412,75 @@ class TestSubcallBudgets:
 
         assert result.success
         assert result.total_cost <= 0.1
+
+    def test_infeasible_child_share_skips_the_call(self) -> None:
+        llm = BatchRoutingLLM(
+            [_batch("child-0", "child-1", "child-2", "child-3"), _final("done")],
+            delay=0.0,
+        )
+        config = RunConfigDTO(
+            mode="rlm",
+            max_steps=6,
+            max_tokens=100,
+            max_recursion_depth=1,
+            subcall_max_concurrency=4,
+        )
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("doc", "batch them", config)
+
+        assert result.success
+        assert result.input_tokens + result.output_tokens <= 100
+        content = _execution_rows(result)[0]["content"]
+        assert content.count("budget share too small for the prompt") == 4
+
+    def test_oversized_child_response_is_recorded_and_stops_the_run(self) -> None:
+        llm = BatchRoutingLLM(
+            [_batch("child-0", "child-1", "child-2", "child-3"), _final("done")],
+            delay=0.0,
+            child_input_tokens=60,
+            child_output_tokens=40,
+            count_tokens_override=1,
+        )
+        config = RunConfigDTO(
+            mode="rlm",
+            max_steps=6,
+            max_tokens=100,
+            max_recursion_depth=1,
+            subcall_max_concurrency=4,
+        )
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("doc", "batch them", config)
+
+        # A provider response can exceed its reserved share; the overage is
+        # recorded, and the run stops with a warning instead of a normal final.
+        assert result.answer != "done"
+        assert "budget" in result.answer.lower()
+        assert result.input_tokens + result.output_tokens > 100
+        subcall_row = _execution_rows(result)[0]
+        assert subcall_row[TRACE_KEY_INPUT_TOKENS] == 240
+        assert subcall_row[TRACE_KEY_OUTPUT_TOKENS] == 160
+        assert (
+            sum(row.get(TRACE_KEY_INPUT_TOKENS, 0) for row in result.trace) == result.input_tokens
+        )
+        assert (
+            sum(row.get(TRACE_KEY_OUTPUT_TOKENS, 0) for row in result.trace) == result.output_tokens
+        )
+
+    def test_trace_rows_reconcile_with_run_totals(self) -> None:
+        llm = BatchRoutingLLM([_batch("child-0", "child-1"), _final("done")], delay=0.0)
+        config = RunConfigDTO(
+            mode="rlm",
+            max_steps=5,
+            max_recursion_depth=1,
+            subcall_max_concurrency=2,
+        )
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("doc", "batch them", config)
+
+        assert result.success
+        assert (
+            sum(row.get(TRACE_KEY_INPUT_TOKENS, 0) for row in result.trace) == result.input_tokens
+        )
+        assert (
+            sum(row.get(TRACE_KEY_OUTPUT_TOKENS, 0) for row in result.trace) == result.output_tokens
+        )
 
 
 class TestSubprocessSandbox:

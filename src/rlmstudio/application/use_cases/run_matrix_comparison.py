@@ -15,7 +15,7 @@ import logging
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypeAlias
 
 from rlmstudio.application.dto import RunConfigDTO, RunResultDTO
@@ -422,27 +422,12 @@ class RunMatrixComparisonUseCase:
 def _copy_config_for_slot(base: RunConfigDTO, mode: str) -> RunConfigDTO:
     """Return a per-slot config copy with ``mode`` set.
 
-    We copy by field rather than ``dataclasses.replace`` so ``extra`` is
-    not shared between slots (each slot gets its own mutable dict).
+    ``dataclasses.replace`` preserves every config field added in the
+    future; ``extra`` is explicitly copied so slots do not share its
+    mutable dict.
     """
     extra_copy: dict[str, Any] = dict(base.extra)
-    return RunConfigDTO(
-        mode=mode,
-        provider=base.provider,
-        model=base.model,
-        api_key=base.api_key,
-        max_steps=base.max_steps,
-        max_tokens=base.max_tokens,
-        max_cost=base.max_cost,
-        max_time_seconds=base.max_time_seconds,
-        max_recursion_depth=base.max_recursion_depth,
-        stall_limit=base.stall_limit,
-        repeat_limit=base.repeat_limit,
-        nudge_at_fraction=base.nudge_at_fraction,
-        system_prompt_extra=base.system_prompt_extra,
-        verbose=base.verbose,
-        extra=extra_copy,
-    )
+    return replace(base, mode=mode, extra=extra_copy)
 
 
 def _default_label(slot: MatrixSlotDTO) -> str:

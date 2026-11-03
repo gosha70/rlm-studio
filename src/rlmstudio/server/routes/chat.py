@@ -30,6 +30,7 @@ from rlmstudio.application.sandbox_vars import (
     MODES_RLM_INTERNAL,
     TRACE_KEY_CODE,
     TRACE_KEY_CONTENT,
+    TRACE_KEY_COST,
     TRACE_KEY_ELAPSED_SECONDS,
     TRACE_KEY_INPUT_TOKENS,
     TRACE_KEY_MODEL,
@@ -609,6 +610,7 @@ def _record_telemetry(
             output=step_data.get(TRACE_KEY_CONTENT),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cost=float(step_data.get(TRACE_KEY_COST, 0.0) or 0.0),
             duration=step_data.get(TRACE_KEY_ELAPSED_SECONDS, 0.0),
             model=step_data.get(TRACE_KEY_MODEL),
             # Prefill/decode telemetry (spec v1.7). The four plain-string

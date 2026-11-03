@@ -31,6 +31,7 @@ from rlmstudio.application.sandbox_vars import (
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
     RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS,
+    TRACE_KEY_COST,
     ExecutionMode,
 )
 from rlmstudio.application.use_cases.run_matrix_comparison import (
@@ -895,6 +896,7 @@ def _record_slot_telemetry(
                 output=step_data.get("content"),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                cost=float(step_data.get(TRACE_KEY_COST, 0.0) or 0.0),
                 duration=step_data.get("elapsed_seconds", 0.0),
                 model=step_data.get("model"),
                 # Prefill/decode telemetry — mirrors the chat route.
