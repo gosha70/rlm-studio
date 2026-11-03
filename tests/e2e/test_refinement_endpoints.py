@@ -162,7 +162,7 @@ class TestCreateProposal:
         proposal = body["proposal"]
 
         template_rlm = SYSTEM_PROMPT_TEMPLATES["Default"]["rlm"]
-        assert proposal["source_run_ids"] == ["old", "new"]
+        assert proposal["source_run_ids"] == ["new", "old"]
         assert proposal["source_content_sha256"] == {
             "old": content_sha256(DOC),
             "new": content_sha256(DOC),

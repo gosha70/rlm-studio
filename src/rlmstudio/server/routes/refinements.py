@@ -168,7 +168,9 @@ async def create_refinement(
         raise HTTPException(status_code=400, detail="Built-in profiles cannot be refined")
 
     runs = _load_source_runs(state, profile_id, list(dict.fromkeys(req.source_run_ids)))
-    newest = max(runs, key=lambda r: r.created_at)
+    # Newest first, the same order the evidence digest uses.
+    runs.sort(key=lambda r: r.created_at, reverse=True)
+    newest = runs[0]
     cp_id = req.proposal_chat_provider_id or newest.chat_provider_id
     if not cp_id:
         raise HTTPException(
