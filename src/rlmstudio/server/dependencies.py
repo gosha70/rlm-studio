@@ -1233,76 +1233,100 @@ class AppState:
         with self._config_lock:
             self._save_config_locked()
 
+    def save_config_checked(self) -> None:
+        """Persist config like :meth:`save_config`, but raise on failure.
+
+        :meth:`save_config` logs and swallows write, fsync and replace
+        errors, so its caller cannot tell whether the change reached disk.
+        Prompt-refinement accept and rollback must know (spec FR-9/FR-11),
+        so they use this variant and restore the in-memory profile when it
+        raises.  Acquires ``_config_lock`` (reentrant), so a caller that
+        already holds it can call this inside its own critical section.
+
+        Raises:
+            Exception: Whatever the serialization or file write raised;
+                the previous ``config.json`` is left intact.
+        """
+        with self._config_lock:
+            self._write_config_locked()
+
     def _save_config_locked(self) -> None:
         """Do the actual write. MUST be called with ``_config_lock`` held."""
         try:
-            _STATE_DIR.mkdir(parents=True, exist_ok=True)
-            config_dump = self.config.model_dump()
-            # Filter out ephemeral CPs from the persisted chat_providers list.
-            config_dump["chat_providers"] = [
-                cp for cp in config_dump.get("chat_providers", []) if not cp.get("ephemeral", False)
-            ]
-            data = {
-                "config": config_dump,
-                "system_prompts": self.system_prompts.model_dump(),
-                "user_profiles": [p.model_dump() for p in self.user_profiles],
-            }
-            serialized = json.dumps(data, indent=2, default=str)
-
-            # Write to temp file in the SAME directory as the target.  Cross-
-            # filesystem os.replace is not atomic; same-dir is.  delete=False
-            # because the "with" block's __exit__ would unlink the file
-            # before os.replace could see it — we need it alive for the
-            # rename, and on Windows it must be closed before the rename.
-            target_dir = _CONFIG_FILE.parent
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=str(target_dir),
-                prefix=".config.",
-                suffix=".tmp",
-                delete=False,
-            )
-            tmp_path = tmp.name
-            try:
-                try:
-                    tmp.write(serialized)
-                    tmp.flush()
-                    os.fsync(tmp.fileno())
-                finally:
-                    tmp.close()
-            except BaseException:
-                # Write-path failure (ENOSPC, EIO, quota exceeded, read-only
-                # remount, SIGTERM between flush and fsync, ...).  The temp
-                # file already exists on disk; unlink it before re-raising
-                # so the outer except doesn't leave a .config.*.tmp behind.
-                # BaseException on purpose: SystemExit / KeyboardInterrupt
-                # can also interrupt the write path.
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
-
-            try:
-                os.replace(tmp_path, _CONFIG_FILE)
-            except OSError:
-                # Rename failed — clean up the dangling temp file so we do
-                # not leak one per failed save.
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
-
-            logger.info(
-                "Saved config: provider=%s model=%s (%d provider configs)",
-                self.config.active_provider,
-                self.config.active_model,
-                len(self.config.provider_configs),
-            )
+            self._write_config_locked()
         except Exception as exc:
             logger.warning("Failed to save config: %s", exc)
+
+    def _write_config_locked(self) -> None:
+        """Serialize and atomically replace ``config.json``; raise on failure.
+
+        MUST be called with ``_config_lock`` held.
+        """
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        config_dump = self.config.model_dump()
+        # Filter out ephemeral CPs from the persisted chat_providers list.
+        config_dump["chat_providers"] = [
+            cp for cp in config_dump.get("chat_providers", []) if not cp.get("ephemeral", False)
+        ]
+        data = {
+            "config": config_dump,
+            "system_prompts": self.system_prompts.model_dump(),
+            "user_profiles": [p.model_dump() for p in self.user_profiles],
+        }
+        serialized = json.dumps(data, indent=2, default=str)
+
+        # Write to temp file in the SAME directory as the target.  Cross-
+        # filesystem os.replace is not atomic; same-dir is.  delete=False
+        # because the "with" block's __exit__ would unlink the file
+        # before os.replace could see it — we need it alive for the
+        # rename, and on Windows it must be closed before the rename.
+        target_dir = _CONFIG_FILE.parent
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(target_dir),
+            prefix=".config.",
+            suffix=".tmp",
+            delete=False,
+        )
+        tmp_path = tmp.name
+        try:
+            try:
+                tmp.write(serialized)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            finally:
+                tmp.close()
+        except BaseException:
+            # Write-path failure (ENOSPC, EIO, quota exceeded, read-only
+            # remount, SIGTERM between flush and fsync, ...).  The temp
+            # file already exists on disk; unlink it before re-raising
+            # so the outer except doesn't leave a .config.*.tmp behind.
+            # BaseException on purpose: SystemExit / KeyboardInterrupt
+            # can also interrupt the write path.
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+        try:
+            os.replace(tmp_path, _CONFIG_FILE)
+        except OSError:
+            # Rename failed — clean up the dangling temp file so we do
+            # not leak one per failed save.
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+        logger.info(
+            "Saved config: provider=%s model=%s (%d provider configs)",
+            self.config.active_provider,
+            self.config.active_model,
+            len(self.config.provider_configs),
+        )
 
     # ------------------------------------------------------------------
     # Session persistence

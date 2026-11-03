@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { FieldLabel } from "./field-label";
 import {
   Collapsible,
@@ -31,7 +32,7 @@ import {
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Trash2, Lock, Edit2, Copy, Download, ChevronDown, ChevronUp } from "lucide-react";
-import { displayModeName } from "@/lib/constants";
+import { MODE_RLM, displayModeName } from "@/lib/constants";
 import { StrategySelectItems } from "./strategy-select-items";
 
 interface ProfileCardProps {
@@ -75,6 +76,7 @@ export function ProfileCard({
     repeat_limit: String(profile.budget.repeat_limit ?? 2),
     nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? 0.6),
     prompt_template_name: profile.prompt_template_name as string | null,
+    rlm_prompt: profile.system_prompts?.[MODE_RLM] ?? "",
   });
 
   const usedBy = chatProviders.filter((cp) => cp.profile_id === profile.id);
@@ -106,6 +108,7 @@ export function ProfileCard({
         strategy: profile.strategy,
         runtime_settings: { ...profile.runtime_settings },
         budget: { ...profile.budget },
+        system_prompts: { ...(profile.system_prompts ?? {}) },
         prompt_template_name: profile.prompt_template_name,
       });
       onCloned?.();
@@ -133,6 +136,7 @@ export function ProfileCard({
       repeat_limit: String(profile.budget.repeat_limit ?? 2),
       nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? 0.6),
       prompt_template_name: profile.prompt_template_name,
+      rlm_prompt: profile.system_prompts?.[MODE_RLM] ?? "",
     });
     setEditing(true);
     setExpanded(true);
@@ -146,6 +150,7 @@ export function ProfileCard({
       strategy: profile.strategy,
       runtime_settings: profile.runtime_settings,
       budget: profile.budget,
+      system_prompts: profile.system_prompts ?? {},
       prompt_template_name: profile.prompt_template_name,
     };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
@@ -220,6 +225,15 @@ export function ProfileCard({
       return;
     }
 
+    // Keep every stored per-mode prompt; only the RLM entry is editable here.
+    // An empty RLM field removes the key so the profile follows its prompt group.
+    const systemPrompts: Record<string, string> = { ...(profile.system_prompts ?? {}) };
+    if (editData.rlm_prompt.trim()) {
+      systemPrompts[MODE_RLM] = editData.rlm_prompt;
+    } else {
+      delete systemPrompts[MODE_RLM];
+    }
+
     setSaving(true);
     setMessage(null);
     try {
@@ -243,7 +257,7 @@ export function ProfileCard({
           nudge_at_fraction: nudgeFraction,
         },
         prompt_template_name: editData.prompt_template_name,
-        system_prompts: {},
+        system_prompts: systemPrompts,
       });
       toast.success("Profile saved");
       onUpdated?.();
@@ -374,6 +388,8 @@ export function ProfileCard({
             <span>{profile.budget.nudge_at_fraction ?? 0.6}</span>
             <span className="text-muted-foreground">Prompt Group</span>
             <span>{profile.prompt_template_name ?? "Global defaults"}</span>
+            <span className="text-muted-foreground">Custom RLM prompt</span>
+            <span>{profile.system_prompts?.[MODE_RLM] ? `${profile.system_prompts[MODE_RLM].length} chars` : "None"}</span>
           </div>
         )}
 
@@ -551,6 +567,21 @@ export function ProfileCard({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-1">
+              <FieldLabel
+                htmlFor={`edit-rlm-prompt-${profile.id}`}
+                className="text-xs"
+                tooltip="Supplement appended to the built-in RLM system prompt for this profile. When set, it replaces the prompt group's RLM text; leave it empty to follow the prompt group."
+              >
+                Custom RLM prompt
+              </FieldLabel>
+              <Textarea
+                id={`edit-rlm-prompt-${profile.id}`}
+                className="min-h-24 text-xs font-mono"
+                value={editData.rlm_prompt}
+                onChange={(e) => setEditData({ ...editData, rlm_prompt: e.target.value })}
+              />
             </div>
             <div className="flex gap-2">
               <Button size="sm" onClick={handleSaveEdit} disabled={saving}>

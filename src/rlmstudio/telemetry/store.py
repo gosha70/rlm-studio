@@ -7,15 +7,23 @@ wrapped in try/finally so telemetry failures never block execution.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
 import threading
+import time
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from rlmstudio.application.refinement_constants import (
+    REFINEMENT_INTERRUPTED_ON_STARTUP_ERROR,
+    REFINEMENT_STATUS_EVALUATING,
+    REFINEMENT_STATUS_INTERRUPTED,
+)
 from rlmstudio.branding import state_dir
 
 logger = logging.getLogger(__name__)
@@ -105,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_ratings_run ON ratings(run_id);
 # migration path via `_run_migrations()` using SQLite's `PRAGMA user_version`.
 # This keeps the bootstrap rule pinned: one code path, no branching.
 
-_CURRENT_SCHEMA_VERSION = 3
+_CURRENT_SCHEMA_VERSION = 4
 
 _MIGRATIONS: dict[int, list[str]] = {
     2: [
@@ -125,7 +133,53 @@ _MIGRATIONS: dict[int, list[str]] = {
         # read-time pricing falls back to the LiteLLM map.
         "ALTER TABLE steps ADD COLUMN cost_known INTEGER",
     ],
+    4: [
+        # Prompt refinement (#78): run attribution and document identity.
+        # Legacy rows stay NULL and are not selectable as refinement sources.
+        "ALTER TABLE runs ADD COLUMN profile_id TEXT",
+        "ALTER TABLE runs ADD COLUMN content_sha256 TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_runs_profile ON runs(profile_id, created_at)",
+        # One row per refinement; the JSON columns hold the proposal,
+        # evaluation and decision records.  No FK to runs: the evidence
+        # must survive run deletion.
+        """CREATE TABLE IF NOT EXISTS refinements (
+            id              TEXT PRIMARY KEY,
+            profile_id      TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            created_at      REAL NOT NULL,
+            updated_at      REAL NOT NULL,
+            proposal_json   TEXT NOT NULL,
+            evaluation_json TEXT,
+            decision_json   TEXT,
+            error           TEXT
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_refinements_profile ON refinements(profile_id, created_at)",
+    ],
 }
+
+
+def content_sha256(content: str) -> str:
+    """Return the SHA-256 hex digest of *content* encoded as UTF-8.
+
+    Single definition of the document identity stored in
+    ``runs.content_sha256``; the held-out check in prompt refinement
+    compares benchmark case content against it, so every writer must
+    hash the same way.
+    """
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+class RefinementStoreError(Exception):
+    """A refinement read or write failed in the database.
+
+    Unlike the run/step writers, refinement writers never swallow
+    failures: accept and rollback must know whether the status write
+    landed (spec FR-11a).
+    """
+
+
+class RefinementConflictError(RefinementStoreError):
+    """The refinement is missing or its status no longer matches the expected one."""
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
@@ -139,14 +193,27 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     Fresh installs run the v1 `_SCHEMA_SQL` (pragma starts at 0) and then
     the v2 migration adds the new columns. Upgrades from pre-Phase-2 DBs
     also start at 0 and follow the same path.
+
+    Each version block runs in one explicit transaction together with its
+    ``user_version`` bump.  Python's ``sqlite3`` does not open an implicit
+    transaction before DDL, so without the explicit ``BEGIN`` a failure
+    after the first ``ALTER TABLE`` would leave the columns added at the
+    old version and every later startup would fail on a duplicate column.
+    SQLite DDL and ``PRAGMA user_version`` are both transactional, so a
+    failed block rolls back completely and the next open retries it.
     """
     current = int(conn.execute("PRAGMA user_version").fetchone()[0])
     for target_version in sorted(_MIGRATIONS):
         if target_version <= current:
             continue
-        for stmt in _MIGRATIONS[target_version]:
-            conn.execute(stmt)
-        conn.execute(f"PRAGMA user_version = {target_version}")
+        conn.execute("BEGIN")
+        try:
+            for stmt in _MIGRATIONS[target_version]:
+                conn.execute(stmt)
+            conn.execute(f"PRAGMA user_version = {target_version}")
+        except BaseException:
+            conn.rollback()
+            raise
         conn.commit()
 
 
@@ -178,6 +245,23 @@ class RunSummary:
     comparison_group_id: str | None = None
     answer: str = ""
     outcome_category: str | None = None
+    profile_id: str | None = None
+    content_sha256: str | None = None
+
+
+@dataclass
+class RefinementRecord:
+    """One prompt refinement row (schema v4)."""
+
+    id: str
+    profile_id: str
+    status: str
+    created_at: float
+    updated_at: float
+    proposal: dict[str, Any]
+    evaluation: dict[str, Any] | None = None
+    decision: dict[str, Any] | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -287,6 +371,8 @@ class TelemetryStore:
         comparison_group_id: str | None = None,
         steps_count: int = 0,
         outcome_category: str | None = None,
+        profile_id: str | None = None,
+        content_sha256: str | None = None,
     ) -> str:
         """Record a completed run. Returns the run ID.
 
@@ -296,6 +382,10 @@ class TelemetryStore:
         and does not validate). Passing ``None`` is permitted; legacy
         rows surface ``None`` on read and re-derive via the no-trace
         classifier path on the dashboard.
+
+        ``profile_id`` is the profile of the Chat Provider that ran, and
+        ``content_sha256`` is :func:`content_sha256` of the document the run
+        saw.  Both are schema v4 and drive prompt-refinement source selection.
         """
         rid = run_id or uuid.uuid4().hex
         if answer_length is None:
@@ -310,8 +400,8 @@ class TelemetryStore:
                         output_tokens, total_tokens, total_cost, elapsed_seconds,
                         success, error, session_id, chat_provider_id,
                         chat_provider_name, comparison_group_id, steps_count,
-                        outcome_category)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        outcome_category, profile_id, content_sha256)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         rid,
                         created_at,
@@ -335,6 +425,8 @@ class TelemetryStore:
                         comparison_group_id,
                         steps_count,
                         outcome_category,
+                        profile_id,
+                        content_sha256,
                     ),
                 )
                 conn.commit()
@@ -500,10 +592,22 @@ class TelemetryStore:
         chat_provider_id: str | None = None,
         comparison_group_id: str | None = None,
         success: bool | None = None,
+        profile_id: str | None = None,
+        require_content_hash: bool = False,
     ) -> list[RunSummary]:
-        """List runs ordered by created_at descending."""
+        """List runs ordered by created_at descending.
+
+        ``require_content_hash=True`` drops runs without ``content_sha256``
+        (every run recorded before schema v4), which prompt refinement
+        cannot use as a verified source.
+        """
         clauses: list[str] = []
         params: list[Any] = []
+        if profile_id is not None:
+            clauses.append("profile_id = ?")
+            params.append(profile_id)
+        if require_content_hash:
+            clauses.append("content_sha256 IS NOT NULL")
         if mode is not None:
             clauses.append("mode = ?")
             params.append(mode)
@@ -570,6 +674,9 @@ class TelemetryStore:
             answer_length=row["answer_length"],
             comparison_group_id=row["comparison_group_id"],
             answer=row["answer"],
+            outcome_category=row["outcome_category"],
+            profile_id=row["profile_id"],
+            content_sha256=row["content_sha256"],
             input_tokens=row["input_tokens"],
             output_tokens=row["output_tokens"],
             content_length=row["content_length"],
@@ -705,6 +812,174 @@ class TelemetryStore:
         return "\n".join(lines) + "\n"
 
     # ------------------------------------------------------------------
+    # Prompt refinements (#78)
+    #
+    # These writers raise RefinementStoreError instead of logging and
+    # continuing: accept and rollback must know whether a status write
+    # landed after the profile was saved (spec FR-11a).
+    # ------------------------------------------------------------------
+
+    def create_refinement(
+        self,
+        *,
+        profile_id: str,
+        status: str,
+        proposal: dict[str, Any],
+        refinement_id: str | None = None,
+        created_at: float | None = None,
+    ) -> RefinementRecord:
+        """Insert a refinement row and return it.
+
+        Raises:
+            RefinementStoreError: The insert failed.
+        """
+        rid = refinement_id or uuid.uuid4().hex
+        now = time.time() if created_at is None else created_at
+        proposal_json = json.dumps(proposal, sort_keys=True)
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    """INSERT INTO refinements
+                       (id, profile_id, status, created_at, updated_at, proposal_json)
+                       VALUES (?,?,?,?,?,?)""",
+                    (rid, profile_id, status, now, now, proposal_json),
+                )
+                conn.commit()
+            except sqlite3.Error as exc:
+                conn.rollback()
+                raise RefinementStoreError(f"Failed to create refinement {rid}: {exc}") from exc
+        return RefinementRecord(
+            id=rid,
+            profile_id=profile_id,
+            status=status,
+            created_at=now,
+            updated_at=now,
+            proposal=proposal,
+        )
+
+    def update_refinement(
+        self,
+        refinement_id: str,
+        *,
+        expected_status: str | Collection[str],
+        status: str,
+        evaluation: dict[str, Any] | None = None,
+        decision: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> RefinementRecord:
+        """Move a refinement to *status* if its current status is expected.
+
+        The update is a compare-and-set on ``status``.  ``evaluation``,
+        ``decision`` and ``error`` are written only when not ``None``.
+
+        Raises:
+            RefinementConflictError: The row is missing or its status is not
+                one of *expected_status*.
+            RefinementStoreError: The database write failed.
+        """
+        expected = [expected_status] if isinstance(expected_status, str) else list(expected_status)
+        if not expected:
+            raise ValueError("expected_status must name at least one status")
+        assignments = ["status = ?", "updated_at = ?"]
+        params: list[Any] = [status, time.time()]
+        if evaluation is not None:
+            assignments.append("evaluation_json = ?")
+            params.append(json.dumps(evaluation, sort_keys=True))
+        if decision is not None:
+            assignments.append("decision_json = ?")
+            params.append(json.dumps(decision, sort_keys=True))
+        if error is not None:
+            assignments.append("error = ?")
+            params.append(error)
+        placeholders = ",".join("?" for _ in expected)
+        params.append(refinement_id)
+        params.extend(expected)
+        # Column names and placeholders are literals built above; every
+        # value is bound as a parameter.
+        sql = (
+            f"UPDATE refinements SET {', '.join(assignments)}"  # nosec B608
+            f" WHERE id = ? AND status IN ({placeholders})"
+        )
+        with self._lock:
+            conn = self._connect()
+            try:
+                cursor = conn.execute(sql, tuple(params))
+                if cursor.rowcount != 1:
+                    conn.rollback()
+                    current = conn.execute(
+                        "SELECT status FROM refinements WHERE id = ?", (refinement_id,)
+                    ).fetchone()
+                    if current is None:
+                        raise RefinementConflictError(f"Refinement {refinement_id} not found")
+                    raise RefinementConflictError(
+                        f"Refinement {refinement_id} is {current['status']!r},"
+                        f" expected one of {expected!r}"
+                    )
+                conn.commit()
+            except sqlite3.Error as exc:
+                conn.rollback()
+                raise RefinementStoreError(
+                    f"Failed to update refinement {refinement_id}: {exc}"
+                ) from exc
+            row = conn.execute(
+                "SELECT * FROM refinements WHERE id = ?", (refinement_id,)
+            ).fetchone()
+        return self._row_to_refinement(row)
+
+    def get_refinement(self, refinement_id: str) -> RefinementRecord | None:
+        """Return one refinement, or ``None`` when it does not exist."""
+        with self._lock:
+            row = (
+                self._connect()
+                .execute("SELECT * FROM refinements WHERE id = ?", (refinement_id,))
+                .fetchone()
+            )
+        return self._row_to_refinement(row) if row is not None else None
+
+    def list_refinements(self, profile_id: str) -> list[RefinementRecord]:
+        """Return a profile's refinements, newest first."""
+        with self._lock:
+            rows = (
+                self._connect()
+                .execute(
+                    "SELECT * FROM refinements WHERE profile_id = ? ORDER BY created_at DESC",
+                    (profile_id,),
+                )
+                .fetchall()
+            )
+        return [self._row_to_refinement(r) for r in rows]
+
+    def mark_evaluating_as_interrupted(self) -> int:
+        """Mark every ``evaluating`` refinement ``interrupted``; return the count.
+
+        Called once at server start: an evaluation runs on an in-process
+        thread, so a row still ``evaluating`` at startup has no worker.
+
+        Raises:
+            RefinementStoreError: The database write failed.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                cursor = conn.execute(
+                    "UPDATE refinements SET status = ?, updated_at = ?, error = ? WHERE status = ?",
+                    (
+                        REFINEMENT_STATUS_INTERRUPTED,
+                        time.time(),
+                        REFINEMENT_INTERRUPTED_ON_STARTUP_ERROR,
+                        REFINEMENT_STATUS_EVALUATING,
+                    ),
+                )
+                conn.commit()
+            except sqlite3.Error as exc:
+                conn.rollback()
+                raise RefinementStoreError(
+                    f"Failed to mark interrupted refinements: {exc}"
+                ) from exc
+        return int(cursor.rowcount)
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
@@ -738,11 +1013,29 @@ class TelemetryStore:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _row_to_refinement(row: sqlite3.Row) -> RefinementRecord:
+        evaluation_json = row["evaluation_json"]
+        decision_json = row["decision_json"]
+        return RefinementRecord(
+            id=row["id"],
+            profile_id=row["profile_id"],
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            proposal=json.loads(row["proposal_json"]),
+            evaluation=json.loads(evaluation_json) if evaluation_json else None,
+            decision=json.loads(decision_json) if decision_json else None,
+            error=row["error"],
+        )
+
+    @staticmethod
     def _row_to_summary(row: sqlite3.Row) -> RunSummary:
         # outcome_category was added in schema v2; read defensively so legacy
         # rows on databases that haven't migrated yet don't blow up reads.
         keys = row.keys()
         outcome_category = row["outcome_category"] if "outcome_category" in keys else None
+        profile_id = row["profile_id"] if "profile_id" in keys else None
+        run_content_sha256 = row["content_sha256"] if "content_sha256" in keys else None
         return RunSummary(
             id=row["id"],
             created_at=row["created_at"],
@@ -763,6 +1056,8 @@ class TelemetryStore:
             comparison_group_id=row["comparison_group_id"],
             answer=row["answer"] or "",
             outcome_category=outcome_category,
+            profile_id=profile_id,
+            content_sha256=run_content_sha256,
         )
 
 

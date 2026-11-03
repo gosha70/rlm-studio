@@ -14,11 +14,17 @@ inverse of ``to_dict`` and is NOT appropriate for the raw-DTO path.
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel
 
 from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_CODE,
     TRACE_KEY_CONTENT,
+    TRACE_KEY_COST,
+    TRACE_KEY_COST_KNOWN,
     TRACE_KEY_ELAPSED_SECONDS,
     TRACE_KEY_INPUT_TOKENS,
     TRACE_KEY_MODEL,
@@ -27,6 +33,12 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_STEP,
 )
 from rlmstudio.domain.entities import ExecutionTrace, TraceStep
+
+if TYPE_CHECKING:
+    from rlmstudio.application.use_cases.run_matrix_comparison import MatrixSlotResultDTO
+    from rlmstudio.server.dependencies import AppState
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Role → action_type canonicalization
@@ -140,3 +152,111 @@ def _materialize_trace(
         for i, d in enumerate(dicts)
     ]
     return ExecutionTrace(steps=steps, start_time=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Matrix slot → telemetry
+# ---------------------------------------------------------------------------
+#
+# Lifted from ``compare_matrix.py`` so the prompt-refinement evaluation
+# service can record its baseline/candidate arms through the same writer
+# without importing a route module.
+
+
+class _SlotMeta(BaseModel):
+    """Per-slot metadata that is not part of the use-case layer."""
+
+    chat_provider_id: str
+    chat_provider_name: str | None = None
+    execution_id: str
+    profile_id: str | None = None
+
+
+def _record_slot_telemetry(
+    *,
+    state: AppState,
+    slot_result: MatrixSlotResultDTO,
+    meta: _SlotMeta,
+    session_id: str,
+    comparison_group_id: str,
+    query: str,
+    created_at: datetime,
+    content_sha256: str | None = None,
+) -> None:
+    """Persist one matrix slot as a telemetry ``runs`` row + steps."""
+    try:
+        result = slot_result.result
+
+        # Classify per slot (not aggregate) so PREFILL_TIMEOUT stays
+        # stable across dashboard reloads — see spec §8b.
+        from rlmstudio.application.services.outcome_classifier import (
+            classify_execution_outcome,
+        )
+
+        slot_trace = _materialize_trace(result.trace, run_success=result.success)
+        outcome = classify_execution_outcome(
+            success=result.success,
+            error=result.error,
+            answer=result.answer,
+            trace=slot_trace,
+        )
+
+        state.telemetry.record_run(
+            run_id=meta.execution_id,
+            created_at=created_at.timestamp(),
+            mode=slot_result.mode,
+            provider=slot_result.provider,
+            model=slot_result.model,
+            query=query,
+            answer=result.answer,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            total_tokens=result.total_tokens,
+            total_cost=result.total_cost,
+            elapsed_seconds=result.elapsed_time,
+            success=result.success,
+            error=result.error,
+            session_id=session_id,
+            chat_provider_id=meta.chat_provider_id,
+            chat_provider_name=meta.chat_provider_name,
+            comparison_group_id=comparison_group_id,
+            steps_count=result.steps,
+            outcome_category=outcome.category.value,
+            profile_id=meta.profile_id,
+            content_sha256=content_sha256,
+        )
+        # Canonicalize action types to match in-memory traces / JSONL exports.
+        total = len(result.trace)
+        for i, step_data in enumerate(result.trace):
+            action_type = _canonical_action_type(
+                step_data.get("role"),
+                is_last=(i == total - 1),
+                success=result.success,
+            )
+            input_tokens = step_data.get("input_tokens", 0)
+            output_tokens = step_data.get("output_tokens", 0)
+            raw_cost_known = step_data.get(TRACE_KEY_COST_KNOWN)
+            cost_known = bool(raw_cost_known) if raw_cost_known is not None else None
+            state.telemetry.record_step(
+                run_id=meta.execution_id,
+                step_index=i,
+                action_type=action_type,
+                code=step_data.get("code"),
+                output=step_data.get("content"),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost=float(step_data.get(TRACE_KEY_COST, 0.0) or 0.0),
+                cost_known=cost_known,
+                duration=step_data.get("elapsed_seconds", 0.0),
+                model=step_data.get("model"),
+                # Prefill/decode telemetry — mirrors the chat route.
+                prompt_tokens=input_tokens,
+                completion_tokens=output_tokens,
+                ttft_ms=step_data.get("ttft_ms"),
+                decode_ms=int(step_data.get("decode_ms", 0) or 0),
+                cached_tokens=int(step_data.get("cached_tokens", 0) or 0),
+                cache_write_tokens=int(step_data.get("cache_write_tokens", 0) or 0),
+            )
+    except Exception:
+        # Telemetry failures must never break the user's matrix response.
+        logger.exception("Failed to record telemetry for slot %s", slot_result.slot_id)

@@ -4,7 +4,7 @@
  * Covers:
  *   - FieldLabel: renders label text, help button is focusable with accessible name
  *   - ProfileCard: displays prompt group, editing form shows Prompt Group dropdown,
- *     no per-mode textareas for custom prompts
+ *     a single custom RLM prompt textarea, and save/clone keep system_prompts
  */
 
 import React from "react";
@@ -226,12 +226,13 @@ describe("ProfileCard — editing form", () => {
     expect(screen.getByText("Prompt Group")).toBeInTheDocument();
   });
 
-  test("does NOT show per-mode textareas for custom prompts", () => {
+  test("shows only the RLM custom prompt textarea (no Direct/RAG editors)", () => {
     openEditor();
-    // Ensure no textareas with per-mode prompt labels exist
+    // Only RLM consumes a profile prompt, and prompt refinement (#78) stores
+    // accepted candidates there, so it is the one editable per-mode prompt.
     expect(screen.queryByLabelText(/direct mode/i)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/rlm mode/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/rag mode/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Custom RLM prompt")).toBeInTheDocument();
   });
 
   test("shows FieldLabel tooltips for numeric fields", () => {
@@ -255,5 +256,64 @@ describe("ProfileCard — editing form", () => {
     // After cancel, the Save button (edit-form-only) should not be visible;
     // the read-only settings grid may still show labels like "Prompt Group".
     expect(screen.queryByRole("button", { name: /^Save$/i })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ProfileCard — system_prompts persistence (#78 FR-14)
+// ---------------------------------------------------------------------------
+
+describe("ProfileCard — system_prompts persistence", () => {
+  beforeEach(async () => {
+    mockUseSWR.mockReturnValue({
+      data: MOCK_TEMPLATES,
+      error: undefined,
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    const api = await import("@/lib/api");
+    vi.mocked(api.updateProfile).mockClear();
+    vi.mocked(api.createProfile).mockClear();
+  });
+
+  const STORED = { [MODE_RLM]: "Read the index first.", direct: "legacy direct text" };
+
+  async function saveWith(rlmText: string | null) {
+    render(<ProfileCard profile={makeProfile({ system_prompts: { ...STORED } })} />);
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    const textarea = screen.getByLabelText("Custom RLM prompt") as HTMLTextAreaElement;
+    expect(textarea.value).toBe(STORED[MODE_RLM]);
+    if (rlmText !== null) {
+      fireEvent.change(textarea, { target: { value: rlmText } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/i }));
+    const api = await import("@/lib/api");
+    await vi.waitFor(() => expect(api.updateProfile).toHaveBeenCalledTimes(1));
+    return vi.mocked(api.updateProfile).mock.calls[0][1];
+  }
+
+  test("save without touching the prompt keeps every stored key", async () => {
+    const payload = await saveWith(null);
+    expect(payload.system_prompts).toEqual(STORED);
+  });
+
+  test("save sends the edited RLM prompt and keeps other keys", async () => {
+    const payload = await saveWith("New supplement");
+    expect(payload.system_prompts).toEqual({ ...STORED, [MODE_RLM]: "New supplement" });
+  });
+
+  test("clearing the RLM prompt removes only the RLM key", async () => {
+    const payload = await saveWith("   ");
+    expect(payload.system_prompts).toEqual({ direct: STORED.direct });
+  });
+
+  test("clone copies system_prompts", async () => {
+    render(<ProfileCard profile={makeProfile({ system_prompts: { ...STORED } })} />);
+    fireEvent.click(screen.getByRole("button", { name: /clone/i }));
+    const api = await import("@/lib/api");
+    await vi.waitFor(() => expect(api.createProfile).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.createProfile).mock.calls[0][0].system_prompts).toEqual(STORED);
   });
 });

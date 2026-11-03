@@ -64,6 +64,7 @@ from rlmstudio.server.models import (
 from rlmstudio.server.models import (
     RunProfile as _RunProfile,
 )
+from rlmstudio.telemetry.store import content_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -548,6 +549,8 @@ def _record_telemetry(
     *,
     provider: str,
     model: str,
+    profile_id: str | None = None,
+    content: str | None = None,
 ) -> None:
     """Persist a completed execution to the telemetry store.
 
@@ -559,6 +562,11 @@ def _record_telemetry(
             This MUST be the structured backend key, not a user display name,
             so ``aggregate_by_provider()`` remains consistent across code paths.
         model: Model identifier (e.g. "gpt-4o", "claude-sonnet-4-6").
+        profile_id: Profile of the Chat Provider that ran, or ``None``.
+        content: The document the use case executed on; stored as its
+            SHA-256 so prompt refinement can prove a held-out case differs.
+            ``None`` leaves ``content_sha256`` empty and the run unusable as
+            a refinement source.
     """
     # Materialize the raw trace once and classify the outcome before
     # persisting. The classifier keys on TTFT/duration ratios, so it
@@ -593,6 +601,8 @@ def _record_telemetry(
         chat_provider_name=execution.chat_provider_name,
         steps_count=result.steps,
         outcome_category=outcome.category.value,
+        profile_id=profile_id,
+        content_sha256=content_sha256(content) if content is not None else None,
     )
     total = len(result.trace)
     for i, step_data in enumerate(result.trace):
@@ -817,6 +827,8 @@ async def _run_execution(
             result,
             provider=telemetry_backend,
             model=telemetry_model,
+            profile_id=cp.profile_id if cp else None,
+            content=content,
         )
 
         # Save trajectory if configured
@@ -1266,6 +1278,8 @@ async def websocket_chat(
                             result,
                             provider=ws_telemetry_backend,
                             model=ws_telemetry_model,
+                            profile_id=ws_cp.profile_id if ws_cp else None,
+                            content=cnt,
                         )
 
                         for res in results:

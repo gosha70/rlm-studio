@@ -31,8 +31,6 @@ from rlmstudio.application.sandbox_vars import (
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
     RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS,
-    TRACE_KEY_COST,
-    TRACE_KEY_COST_KNOWN,
     ExecutionMode,
 )
 from rlmstudio.application.use_cases.run_matrix_comparison import (
@@ -52,6 +50,8 @@ from rlmstudio.server.models import (
     RAGConfig,
     RuntimeSettings,
 )
+from rlmstudio.server.routes._helpers import _record_slot_telemetry, _SlotMeta
+from rlmstudio.telemetry.store import content_sha256
 
 if TYPE_CHECKING:
     from rlmstudio.server.models import LLMProviderConfig
@@ -245,14 +245,6 @@ def _slot_perf_aggregates(raw_trace: list[dict] | None) -> dict:
 # Shared metadata model + V2 ephemeral-CP helpers
 # (all defined before the endpoint so mypy resolves them)
 # ---------------------------------------------------------------------------
-
-
-class _SlotMeta(BaseModel):
-    """Per-slot metadata that is not part of the use-case layer."""
-
-    chat_provider_id: str
-    chat_provider_name: str | None = None
-    execution_id: str
 
 
 def _get_or_create_ephemeral_cp(
@@ -459,6 +451,7 @@ async def _compare_matrix_v2(
                 chat_provider_id=cp_id,
                 chat_provider_name=cp.name,
                 execution_id=execution_id,
+                profile_id=cp.profile_id,
             )
 
     # --- Fan out -------------------------------------------------------
@@ -474,6 +467,7 @@ async def _compare_matrix_v2(
 
     # --- Finalize records and messages --------------------------------
     finish = datetime.now(timezone.utc)
+    content_hash = content_sha256(content)
     for slot_result in result.slots:
         meta = slot_meta[slot_result.slot_id]
         execution = state.executions[meta.execution_id]
@@ -486,6 +480,7 @@ async def _compare_matrix_v2(
             comparison_group_id=result.comparison_group_id,
             query=req.query,
             created_at=started_at,
+            content_sha256=content_hash,
         )
         answer_content = slot_result.result.answer
         if not slot_result.result.success and not answer_content:
@@ -723,6 +718,7 @@ async def compare_matrix(
                 chat_provider_id=cp_id,
                 chat_provider_name=cp.name,
                 execution_id=execution_id,
+                profile_id=cp.profile_id,
             )
 
     # --- Fan out via the use case (ThreadPoolExecutor under the hood) -
@@ -738,6 +734,7 @@ async def compare_matrix(
 
     # --- Finalize execution records, persist telemetry, add messages --
     finish = datetime.now(timezone.utc)
+    content_hash = content_sha256(content)
     for slot_result in result.slots:
         meta = slot_meta[slot_result.slot_id]
         execution = state.executions[meta.execution_id]
@@ -754,6 +751,7 @@ async def compare_matrix(
             comparison_group_id=result.comparison_group_id,
             query=req.query,
             created_at=started_at,
+            content_sha256=content_hash,
         )
 
         # Append assistant message per slot so session metrics / judge
@@ -824,96 +822,6 @@ async def compare_matrix(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _record_slot_telemetry(
-    *,
-    state: AppState,
-    slot_result: MatrixSlotResultDTO,
-    meta: _SlotMeta,
-    session_id: str,
-    comparison_group_id: str,
-    query: str,
-    created_at: datetime,
-) -> None:
-    """Persist one matrix slot as a telemetry ``runs`` row + steps."""
-    try:
-        result = slot_result.result
-
-        # Classify per slot (not aggregate) so PREFILL_TIMEOUT stays
-        # stable across dashboard reloads — see spec §8b.
-        from rlmstudio.application.services.outcome_classifier import (
-            classify_execution_outcome,
-        )
-        from rlmstudio.server.routes._helpers import _materialize_trace
-
-        slot_trace = _materialize_trace(result.trace, run_success=result.success)
-        outcome = classify_execution_outcome(
-            success=result.success,
-            error=result.error,
-            answer=result.answer,
-            trace=slot_trace,
-        )
-
-        state.telemetry.record_run(
-            run_id=meta.execution_id,
-            created_at=created_at.timestamp(),
-            mode=slot_result.mode,
-            provider=slot_result.provider,
-            model=slot_result.model,
-            query=query,
-            answer=result.answer,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            total_tokens=result.total_tokens,
-            total_cost=result.total_cost,
-            elapsed_seconds=result.elapsed_time,
-            success=result.success,
-            error=result.error,
-            session_id=session_id,
-            chat_provider_id=meta.chat_provider_id,
-            chat_provider_name=meta.chat_provider_name,
-            comparison_group_id=comparison_group_id,
-            steps_count=result.steps,
-            outcome_category=outcome.category.value,
-        )
-        # Canonicalize action types to match in-memory traces / JSONL exports.
-        from rlmstudio.server.routes._helpers import _canonical_action_type
-
-        total = len(result.trace)
-        for i, step_data in enumerate(result.trace):
-            action_type = _canonical_action_type(
-                step_data.get("role"),
-                is_last=(i == total - 1),
-                success=result.success,
-            )
-            input_tokens = step_data.get("input_tokens", 0)
-            output_tokens = step_data.get("output_tokens", 0)
-            raw_cost_known = step_data.get(TRACE_KEY_COST_KNOWN)
-            cost_known = bool(raw_cost_known) if raw_cost_known is not None else None
-            state.telemetry.record_step(
-                run_id=meta.execution_id,
-                step_index=i,
-                action_type=action_type,
-                code=step_data.get("code"),
-                output=step_data.get("content"),
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cost=float(step_data.get(TRACE_KEY_COST, 0.0) or 0.0),
-                cost_known=cost_known,
-                duration=step_data.get("elapsed_seconds", 0.0),
-                model=step_data.get("model"),
-                # Prefill/decode telemetry — mirrors the chat route.
-                prompt_tokens=input_tokens,
-                completion_tokens=output_tokens,
-                ttft_ms=step_data.get("ttft_ms"),
-                decode_ms=int(step_data.get("decode_ms", 0) or 0),
-                cached_tokens=int(step_data.get("cached_tokens", 0) or 0),
-                cache_write_tokens=int(step_data.get("cache_write_tokens", 0) or 0),
-            )
-    except Exception:
-        # Telemetry failures must never break the user's matrix response.
-        logger.exception("Failed to record telemetry for slot %s", slot_result.slot_id)
 
 
 def _resolve_embedding_api_key(
