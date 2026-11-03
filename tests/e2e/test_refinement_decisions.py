@@ -481,9 +481,11 @@ def test_reject_waits_for_an_in_flight_accept_then_fails(env: Env) -> None:
 
 def test_profile_edit_waits_for_the_config_lock(client: TestClient, env: Env) -> None:
     done = threading.Event()
+    statuses: list[int] = []
 
     def edit() -> None:
-        client.put(f"/api/profiles/{env.profile_id}", json={"description": "edited"})
+        resp = client.put(f"/api/profiles/{env.profile_id}", json={"description": "edited"})
+        statuses.append(resp.status_code)
         done.set()
 
     with env.state._config_lock:
@@ -492,6 +494,10 @@ def test_profile_edit_waits_for_the_config_lock(client: TestClient, env: Env) ->
         assert not done.wait(0.3), "the profile edit must wait for the config lock"
     assert done.wait(10)
     worker.join(10)
+    assert statuses == [200]
+    profile = env.state.find_profile(env.profile_id)
+    assert profile is not None
+    assert profile.description == "edited"
 
 
 # ---------------------------------------------------------------------------
