@@ -124,7 +124,7 @@ follow-up issue:
 | FR-14 | ProfileCard save, clone and export preserve `system_prompts`; the card gets a textarea for the custom RLM prompt. |
 | FR-15 | `GET /api/profiles/{id}/refinements/export.jsonl` returns one JSON line per refinement of that profile with the stored proposal, evaluation and decision records verbatim. |
 | FR-16 | `GET /api/profiles/{id}/refinements/holdout-cases` returns, for each case in `benchmarks/longdoc-v1.yaml`, its id, tags, size bucket, whether it has an `expected_answer`, and whether it materialises offline; cases tagged `holdout` are the default selection. |
-| FR-17 | Evidence redaction policy: the digest passes each query, answer and error through `redact_secrets()` (API-key and bearer-token shapes) and additionally drops any line that matches, case-insensitively and with optional whitespace around the separator, one of the names `key`, `api_key`, `apikey`, `token`, `password`, `passwd`, `secret`, `authorization` followed by `=`, `:`, or a JSON-style `":`. The policy is documented in the proposal prompt's README entry and covered by mutation tests. It does not claim to catch arbitrary secrets (see §6, residual evidence leakage). |
+| FR-17 | Evidence redaction policy: the digest passes each query, answer and error through `redact_secrets()` (API-key and bearer-token shapes) and additionally drops any line in which an identifier ending in one of the names (so `aws_secret_key=` is caught too) is matched, case-insensitively and with optional whitespace around the separator; the names are `key`, `api_key`, `apikey`, `token`, `password`, `passwd`, `secret`, `authorization` followed by `=`, `:`, or a JSON-style `":`. The policy is documented in the proposal prompt's README entry and covered by mutation tests. It does not claim to catch arbitrary secrets (see §6, residual evidence leakage). |
 | FR-18 | Settings → Profiles exposes the refinement flow for user profiles: source-run selection, proposal provider choice, diff and rationale, holdout selection with run count, progress, per-case results with the regression flag defaulting to Reject, accept acknowledgement, history with rollback, and the current resolved supplement shown next to the candidate. |
 
 ## 5. Acceptance criteria (hard)
@@ -190,6 +190,10 @@ here before the phase closes.
   source runs and the proposal provider, and the digest is stored verbatim
   in the proposal record, so what was sent is auditable. Stronger structured
   redaction goes to the follow-up issue.
+- **Failed proposals leave no record.** A proposal call that fails at the
+  provider or returns an unusable reply returns 502 and stores no
+  refinement row, so that paid call and the digest it sent appear only in
+  the server log. Found in Phase B.
 - **Selection is not bound to the request.** The run count and case list the
   UI shows before evaluation are computed client-side from
   `holdout-cases`; the evaluate request carries its own case ids and reps and

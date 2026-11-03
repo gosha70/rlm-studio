@@ -1644,6 +1644,7 @@ def reset_state() -> None:
         _state._stop_connection_testing()
     _state = AppState(load_from_disk=False)
     _state.save_config = lambda: None  # type: ignore[assignment]
+    _state.save_config_checked = lambda: None  # type: ignore[assignment]
     _state.save_sessions = lambda: None  # type: ignore[assignment]
     _state.save_files = lambda: None  # type: ignore[assignment]
     _state.save_evaluations = lambda: None  # type: ignore[assignment]

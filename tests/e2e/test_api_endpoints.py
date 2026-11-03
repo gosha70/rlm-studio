@@ -463,6 +463,26 @@ class TestProfileEndpoints:
 
 
 # ---------------------------------------------------------------------------
+# Prompt refinement (#78) — smoke; full coverage in test_refinement_endpoints.py
+# ---------------------------------------------------------------------------
+
+
+class TestRefinementEndpoints:
+    """Every refinement route is mounted and answers on a fresh profile."""
+
+    def test_fresh_profile_has_no_sources_or_refinements(self, client: TestClient) -> None:
+        pid = client.post("/api/profiles", json={"name": "Refinable"}).json()["id"]
+        assert client.get(f"/api/profiles/{pid}/refinements/source-runs").json() == []
+        assert client.get(f"/api/profiles/{pid}/refinements").json() == []
+        assert client.get(f"/api/profiles/{pid}/refinements/missing").status_code == 404
+
+    def test_proposal_without_usable_runs_is_400(self, client: TestClient) -> None:
+        pid = client.post("/api/profiles", json={"name": "Refinable"}).json()["id"]
+        resp = client.post(f"/api/profiles/{pid}/refinements", json={"source_run_ids": ["nope"]})
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
 # Chat Providers with Profiles
 # ---------------------------------------------------------------------------
 
