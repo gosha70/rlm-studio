@@ -106,3 +106,55 @@ export function displayProviderName(key: string): string {
 export function displayModeName(key: string): string {
   return MODE_DISPLAY_NAMES[key] ?? key;
 }
+
+// ---------------------------------------------------------------------------
+// Prompt refinement (#78) — mirrors src/rlmstudio/application/refinement_constants.py
+// ---------------------------------------------------------------------------
+
+export const REFINEMENT_STATUS_PROPOSAL_READY = "proposal_ready" as const;
+export const REFINEMENT_STATUS_EVALUATING = "evaluating" as const;
+export const REFINEMENT_STATUS_EVALUATED = "evaluated" as const;
+export const REFINEMENT_STATUS_INTERRUPTED = "interrupted" as const;
+export const REFINEMENT_STATUS_FAILED = "failed" as const;
+export const REFINEMENT_STATUS_ACCEPTED = "accepted" as const;
+export const REFINEMENT_STATUS_REJECTED = "rejected" as const;
+export const REFINEMENT_STATUS_ROLLED_BACK = "rolled_back" as const;
+
+export type RefinementStatus =
+  | typeof REFINEMENT_STATUS_PROPOSAL_READY
+  | typeof REFINEMENT_STATUS_EVALUATING
+  | typeof REFINEMENT_STATUS_EVALUATED
+  | typeof REFINEMENT_STATUS_INTERRUPTED
+  | typeof REFINEMENT_STATUS_FAILED
+  | typeof REFINEMENT_STATUS_ACCEPTED
+  | typeof REFINEMENT_STATUS_REJECTED
+  | typeof REFINEMENT_STATUS_ROLLED_BACK;
+
+/** Statuses a reject is allowed from (server: REJECTABLE_STATUSES). */
+export const REFINEMENT_REJECTABLE_STATUSES: readonly RefinementStatus[] = [
+  REFINEMENT_STATUS_PROPOSAL_READY,
+  REFINEMENT_STATUS_EVALUATED,
+  REFINEMENT_STATUS_INTERRUPTED,
+  REFINEMENT_STATUS_FAILED,
+];
+
+export const REFINEMENT_STATUS_LABELS: Record<RefinementStatus, string> = {
+  [REFINEMENT_STATUS_PROPOSAL_READY]: "Proposal ready",
+  [REFINEMENT_STATUS_EVALUATING]: "Evaluating",
+  [REFINEMENT_STATUS_EVALUATED]: "Evaluated",
+  [REFINEMENT_STATUS_INTERRUPTED]: "Interrupted",
+  [REFINEMENT_STATUS_FAILED]: "Failed",
+  [REFINEMENT_STATUS_ACCEPTED]: "Accepted",
+  [REFINEMENT_STATUS_REJECTED]: "Rejected",
+  [REFINEMENT_STATUS_ROLLED_BACK]: "Rolled back",
+};
+
+/** Repetitions per case an evaluation may run (server: REFINEMENT_MIN/MAX_REPS). */
+export const REFINEMENT_MIN_REPS = 2;
+export const REFINEMENT_MAX_REPS = 5;
+
+/** Longest accept/reject reason (server: REFINEMENT_DECISION_REASON_MAX_CHARS). */
+export const REFINEMENT_DECISION_REASON_MAX_CHARS = 2_000;
+
+/** Polling interval while an evaluation is running. */
+export const REFINEMENT_POLL_MS = 2_000;

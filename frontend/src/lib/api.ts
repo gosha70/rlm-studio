@@ -2,6 +2,8 @@
  * Typed API client for the RLM Studio backend.
  */
 
+import type { RefinementStatus } from "./constants";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 // Direct backend URL — bypasses the Next.js dev-server proxy for
@@ -1030,6 +1032,265 @@ export const updateProfile = (id: string, req: Partial<RunProfileCreate>) =>
 
 export const deleteProfile = (id: string) =>
   fetchJSON<void>(`/api/profiles/${id}`, { method: "DELETE" });
+
+// ---------------------------------------------------------------------------
+// Prompt refinement (#78) — /api/profiles/{id}/refinements
+// ---------------------------------------------------------------------------
+
+export interface RefinementSourceRun {
+  id: string;
+  created_at: number;
+  mode: string;
+  query: string;
+  success: boolean;
+  outcome_category: string | null;
+  degraded: boolean;
+  chat_provider_id: string | null;
+  chat_provider_name: string | null;
+  total_cost: number;
+  total_tokens: number;
+  steps_count: number;
+  content_sha256: string;
+}
+
+export interface HoldoutCase {
+  id: string;
+  query: string;
+  tags: string[];
+  size: string | null;
+  holdout: boolean;
+  deterministic: boolean;
+  materialisable: boolean;
+  skip_reason: string | null;
+}
+
+export interface RefinementBaseState {
+  resolved: string;
+  sha256: string;
+  rlm_key_present: boolean;
+  rlm_key_value: string | null;
+  template_name: string | null;
+  base_prompt_version: string;
+  base_prompt_sha256: string;
+}
+
+export interface RefinementProposal {
+  source_run_ids: string[];
+  source_content_sha256: Record<string, string>;
+  evidence: {
+    text: string;
+    sha256: string;
+    included_run_ids: string[];
+    excluded_run_ids: string[];
+    truncated_chars: number;
+    redacted_lines: number;
+  };
+  proposal_chat_provider_id: string;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  prompt_sha256: string;
+  input_tokens: number;
+  output_tokens: number;
+  base: RefinementBaseState;
+  candidate: string;
+  rationale: string;
+  diff: string;
+}
+
+export interface RefinementArm {
+  run_id: string;
+  success: boolean;
+  usable: boolean;
+  outcome_category: string;
+  passed: boolean | null;
+  judge_overall: number | null;
+  cost: number;
+  steps: number;
+  error: string | null;
+}
+
+export interface RefinementCaseSummary {
+  case_id: string;
+  deterministic: boolean;
+  content_sha256: string;
+  reps: { rep: number; baseline: RefinementArm | null; candidate: RefinementArm | null }[];
+  baseline_pass_rate: number | null;
+  candidate_pass_rate: number | null;
+  regressed: boolean;
+}
+
+export interface RefinementScoreRange {
+  mean: number;
+  min: number;
+  max: number;
+}
+
+export interface RefinementEvaluation {
+  setup: {
+    chat_provider_id: string;
+    provider: string;
+    model: string;
+    temperature: number;
+    reps: number;
+    dataset_name: string;
+    dataset_version: string;
+    case_ids: string[];
+    excluded_cases: Record<string, string>;
+    skipped_cases: Record<string, string>;
+    judge: { chat_provider_id: string; model: string; prompt_version: string } | null;
+    started_at: number;
+  };
+  cases: RefinementCaseSummary[];
+  complete: boolean;
+  incomplete_reasons: string[];
+  deterministic_case_count: number;
+  regression: boolean;
+  regression_case_ids: string[];
+  deltas: {
+    accuracy_baseline: number | null;
+    accuracy_candidate: number | null;
+    judge_baseline: RefinementScoreRange | null;
+    judge_candidate: RefinementScoreRange | null;
+    cost_baseline: number;
+    cost_candidate: number;
+    steps_mean_baseline: number;
+    steps_mean_candidate: number;
+    outcomes_baseline: Record<string, number>;
+    outcomes_candidate: Record<string, number>;
+  } | null;
+  finished_at: number;
+}
+
+export interface RefinementDecision {
+  decision: string;
+  decided_at: number;
+  reason: string | null;
+  regression: boolean;
+  acknowledge_regression: boolean;
+  rollback: {
+    rolled_back_at: number;
+    restored_rlm_key_present: boolean;
+    restored_rlm_key_value: string | null;
+  } | null;
+}
+
+export interface Refinement {
+  id: string;
+  profile_id: string;
+  status: RefinementStatus;
+  created_at: number;
+  updated_at: number;
+  proposal: RefinementProposal;
+  evaluation: RefinementEvaluation | null;
+  decision: RefinementDecision | null;
+  error: string | null;
+  /** `{done, total}` case × repetition pairs while evaluating; total can be 0. */
+  progress: { done: number; total: number } | null;
+}
+
+export interface RefinementEvaluateRequest {
+  case_ids?: string[];
+  reps?: number;
+  chat_provider_id?: string;
+  judge_chat_provider_id?: string;
+}
+
+export interface RefinementEvaluateResponse {
+  refinement_id: string;
+  status: RefinementStatus;
+  case_ids: string[];
+  reps: number;
+  run_count: number;
+  chat_provider_id: string;
+  judge_chat_provider_id: string | null;
+}
+
+const refinementsPath = (profileId: string) =>
+  `/api/profiles/${encodeURIComponent(profileId)}/refinements`;
+
+export const getRefinementSourceRuns = (profileId: string) =>
+  fetchJSON<RefinementSourceRun[]>(`${refinementsPath(profileId)}/source-runs`);
+
+export const getHoldoutCases = (profileId: string) =>
+  fetchJSON<HoldoutCase[]>(`${refinementsPath(profileId)}/holdout-cases`);
+
+export const listRefinements = (profileId: string) =>
+  fetchJSON<Refinement[]>(refinementsPath(profileId));
+
+export const getRefinement = (profileId: string, refinementId: string) =>
+  fetchJSON<Refinement>(`${refinementsPath(profileId)}/${encodeURIComponent(refinementId)}`);
+
+export const createRefinement = (
+  profileId: string,
+  req: { source_run_ids: string[]; proposal_chat_provider_id?: string },
+) =>
+  fetchJSON<Refinement>(refinementsPath(profileId), {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+
+export const evaluateRefinement = (
+  profileId: string,
+  refinementId: string,
+  req: RefinementEvaluateRequest,
+) =>
+  fetchJSON<RefinementEvaluateResponse>(
+    `${refinementsPath(profileId)}/${encodeURIComponent(refinementId)}/evaluate`,
+    { method: "POST", body: JSON.stringify(req) },
+  );
+
+export const acceptRefinement = (
+  profileId: string,
+  refinementId: string,
+  req: { acknowledge_regression: boolean; reason?: string },
+) =>
+  fetchJSON<Refinement>(
+    `${refinementsPath(profileId)}/${encodeURIComponent(refinementId)}/accept`,
+    { method: "POST", body: JSON.stringify(req) },
+  );
+
+export const rejectRefinement = (profileId: string, refinementId: string, reason?: string) =>
+  fetchJSON<Refinement>(
+    `${refinementsPath(profileId)}/${encodeURIComponent(refinementId)}/reject`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+
+export const rollbackRefinement = (profileId: string, refinementId: string) =>
+  fetchJSON<Refinement>(
+    `${refinementsPath(profileId)}/${encodeURIComponent(refinementId)}/rollback`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+
+/** Download URL for the profile's refinement history (one JSON record per line). */
+export const refinementExportUrl = (profileId: string) =>
+  `${API_BASE}${refinementsPath(profileId)}/export.jsonl`;
+
+/** HTTP status of a `fetchJSON` error (`API error 409: …`), or 0 when there is none. */
+export function apiErrorStatus(err: unknown): number {
+  const text = err instanceof Error ? err.message : String(err);
+  const match = /^API error (\d{3})\b/.exec(text);
+  return match ? Number(match[1]) : 0;
+}
+
+/**
+ * The server's message from an `fetchJSON` error (`API error 409: {"error": {"message": …}}`),
+ * falling back to the raw text.
+ */
+export function apiErrorMessage(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  const brace = text.indexOf("{");
+  if (brace !== -1) {
+    try {
+      const body = JSON.parse(text.slice(brace));
+      const message = body?.error?.message ?? body?.detail;
+      if (typeof message === "string" && message) return message;
+    } catch {
+      // not JSON — fall through to the raw text
+    }
+  }
+  return text;
+}
 
 // System Prompts
 export interface SystemPrompts {
