@@ -90,6 +90,36 @@ export const ENDPOINT_PLACEHOLDER: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// RAG embedding models
+// ---------------------------------------------------------------------------
+
+/** Embedding model a new RAG Chat Provider starts with on a cloud LLM. */
+export const EMBEDDING_MODEL_DEFAULT = "text-embedding-3-small";
+
+/**
+ * A RAG Chat Provider on a local server starts with that server's own
+ * embedding model, so document text never leaves the machine by default.
+ * The `ollama/` and `lm_studio/` prefixes route the embedder to the server.
+ */
+export const EMBEDDING_MODEL_DEFAULT_BY_BACKEND: Record<string, string> = {
+  [BACKEND_OLLAMA]: "ollama/nomic-embed-text",
+  [BACKEND_LMSTUDIO]: "lm_studio/text-embedding-nomic-embed-text-v1.5",
+};
+
+/** The default embedding model for a Chat Provider on `backend`. */
+export function defaultEmbeddingModelFor(backend: string | null | undefined): string {
+  return (backend && EMBEDDING_MODEL_DEFAULT_BY_BACKEND[backend]) || EMBEDDING_MODEL_DEFAULT;
+}
+
+/** Whether `model` is one of the defaults above, i.e. not chosen by the user. */
+export function isDefaultEmbeddingModel(model: string): boolean {
+  return (
+    model === EMBEDDING_MODEL_DEFAULT ||
+    Object.values(EMBEDDING_MODEL_DEFAULT_BY_BACKEND).includes(model)
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

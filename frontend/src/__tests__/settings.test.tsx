@@ -775,3 +775,90 @@ describe("SettingsPage", () => {
     expect(screen.queryByText(/Connected/)).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// SettingsPage — Wave 3 regressions
+// ---------------------------------------------------------------------------
+
+const RUNTIME = { temperature: 0.7, top_p: 1.0, max_output_tokens: 4096, timeout_seconds: 30 };
+
+const makeLLMProvider = (overrides: Record<string, unknown>) => ({
+  id: "lp-1",
+  name: "Local",
+  backend: "ollama",
+  model: "llama3.2",
+  endpoint: null,
+  runtime_settings: RUNTIME,
+  status: "configured",
+  last_tested_at: null,
+  last_tested_by: null,
+  consecutive_failures: 0,
+  ...overrides,
+});
+
+const RAG_PROFILE = {
+  id: "prof-rag",
+  name: "RAG profile",
+  description: "",
+  strategy: "rag",
+  runtime_settings: RUNTIME,
+  budget: MOCK_CONFIG.budget,
+  system_prompts: {},
+  prompt_template_name: null,
+  is_builtin: false,
+};
+
+/** Stub SWR keys for one render of the Settings page. */
+function stubSettingsData(data: Record<string, unknown>) {
+  const swrStub = (value: unknown) => ({ data: value, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+  vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+    if (key === "config") return swrStub(MOCK_CONFIG);
+    if (typeof key === "string" && key in data) return swrStub(data[key]);
+    return swrStub(undefined);
+  }) as typeof useSWR);
+}
+
+describe("SettingsPage — Wave 3", () => {
+  beforeEach(() => {
+    // Radix Select needs pointer-capture and scrolling APIs jsdom lacks.
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.releasePointerCapture = () => {};
+    Element.prototype.scrollIntoView = () => {};
+  });
+
+  const setupUser = async () => (await import("@testing-library/user-event")).default.setup();
+
+  const pick = async (
+    user: Awaited<ReturnType<typeof setupUser>>,
+    comboboxId: string,
+    optionName: RegExp,
+  ) => {
+    await user.click(document.getElementById(comboboxId)!);
+    await user.click(await screen.findByRole("option", { name: optionName }));
+  };
+
+  test.each([
+    ["ollama", "ollama/nomic-embed-text"],
+    ["lmstudio", "lm_studio/text-embedding-nomic-embed-text-v1.5"],
+    ["openai", "text-embedding-3-small"],
+  ])("a RAG Chat Provider on %s defaults to %s", async (backend, expected) => {
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ backend, name: `My ${backend}` })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    await pick(user, "cp-profile", /RAG profile/);
+    await pick(user, "cp-llm-provider", new RegExp(`My ${backend}`));
+
+    const embedding = screen.getByLabelText("Embedding Model") as HTMLInputElement;
+    expect(embedding.value).toBe(expected);
+    // Still editable.
+    await user.clear(embedding);
+    await user.type(embedding, "ollama/mxbai-embed-large");
+    expect(embedding.value).toBe("ollama/mxbai-embed-large");
+  });
+});

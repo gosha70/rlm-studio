@@ -70,6 +70,9 @@ import {
   MODE_DIRECT,
   MODE_RLM,
   MODE_RAG,
+  EMBEDDING_MODEL_DEFAULT,
+  defaultEmbeddingModelFor,
+  isDefaultEmbeddingModel,
   displayModeName,
 } from "@/lib/constants";
 import { StrategySelectItems } from "@/components/settings/strategy-select-items";
@@ -200,7 +203,7 @@ function SettingsPageInner() {
       chunk_size: 512,
       chunk_overlap: 64,
       top_k: 5,
-      embedding_model: "text-embedding-3-small",
+      embedding_model: EMBEDDING_MODEL_DEFAULT,
     },
   });
   const [savingProvider, setSavingProvider] = useState(false);
@@ -438,9 +441,25 @@ function SettingsPageInner() {
         chunk_size: 512,
         chunk_overlap: 64,
         top_k: 5,
-        embedding_model: "text-embedding-3-small",
+        embedding_model: defaultEmbeddingModelFor(
+          llmProviders.find((lp) => lp.id === provider.llm_provider_id)?.backend,
+        ),
       },
     });
+  };
+
+  // Picking the LLM Provider moves an untouched embedding model to that
+  // server's default, so a RAG Chat Provider on Ollama or LM Studio embeds
+  // locally unless the user typed another model.
+  const handleChatProviderLLMChange = (llmProviderId: string) => {
+    const backend = llmProviders.find((lp) => lp.id === llmProviderId)?.backend;
+    setFormData((prev) => ({
+      ...prev,
+      llm_provider_id: llmProviderId,
+      rag_config: isDefaultEmbeddingModel(prev.rag_config.embedding_model)
+        ? { ...prev.rag_config, embedding_model: defaultEmbeddingModelFor(backend) }
+        : prev.rag_config,
+    }));
   };
 
   const handleSaveChatProvider = async () => {
@@ -547,7 +566,7 @@ function SettingsPageInner() {
         chunk_size: 512,
         chunk_overlap: 64,
         top_k: 5,
-        embedding_model: "text-embedding-3-small",
+        embedding_model: EMBEDDING_MODEL_DEFAULT,
       },
     });
   };
@@ -1235,7 +1254,7 @@ function SettingsPageInner() {
                     <FieldLabel htmlFor="cp-llm-provider" tooltip="The LLM provider instance to use for inference. Must be configured and connected in the LLM Providers tab.">LLM Provider</FieldLabel>
                     <Select
                       value={formData.llm_provider_id}
-                      onValueChange={(value) => setFormData({ ...formData, llm_provider_id: value })}
+                      onValueChange={handleChatProviderLLMChange}
                     >
                       <SelectTrigger id="cp-llm-provider">
                         <SelectValue placeholder="Select an LLM Provider" />
@@ -1463,7 +1482,7 @@ function SettingsPageInner() {
                       <FieldLabel htmlFor={`edit-cp-llm-provider-${provider.id}`} tooltip="The LLM provider instance to use for inference.">LLM Provider</FieldLabel>
                       <Select
                         value={formData.llm_provider_id}
-                        onValueChange={(value) => setFormData({ ...formData, llm_provider_id: value })}
+                        onValueChange={handleChatProviderLLMChange}
                       >
                         <SelectTrigger id={`edit-cp-llm-provider-${provider.id}`}>
                           <SelectValue />
