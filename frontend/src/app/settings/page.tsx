@@ -80,6 +80,13 @@ import {
   displayModeName,
 } from "@/lib/constants";
 import { StrategySelectItems } from "@/components/settings/strategy-select-items";
+import {
+  RAG_CHUNK_SIZE_MAX,
+  RAG_CHUNK_SIZE_MIN,
+  RAG_TOP_K_MAX,
+  RAG_TOP_K_MIN,
+  wholeNumberProblem,
+} from "@/components/settings/input-limits";
 
 // Backend keys the Settings form accepts. The deep-link banner only
 // renders when `?provider=` matches one of these, so a random or
@@ -108,6 +115,60 @@ const DEEP_LINK_BASE_URL_ALLOWED_BACKENDS: ReadonlySet<string> = new Set([
 function missingFieldsHint(missing: (string | false)[], action: string): string | null {
   const names = missing.filter((m): m is string => !!m);
   return names.length > 0 ? `Fill in ${names.join(", ")} to ${action}.` : null;
+}
+
+/**
+ * RAG settings as typed.  The numbers stay text until Save so a blank,
+ * fractional or out-of-range value is refused, not coerced to a default.
+ */
+interface RagFormFields {
+  chunk_size: string;
+  chunk_overlap: string;
+  top_k: string;
+  embedding_model: string;
+}
+
+const RAG_FORM_DEFAULTS = { chunk_size: "512", chunk_overlap: "64", top_k: "5" };
+
+function ragFormFields(cfg: RAGConfig): RagFormFields {
+  return {
+    chunk_size: String(cfg.chunk_size),
+    chunk_overlap: String(cfg.chunk_overlap),
+    top_k: String(cfg.top_k),
+    embedding_model: cfg.embedding_model,
+  };
+}
+
+/** Why the RAG settings cannot be saved, or null when they can. */
+function ragFormProblem(rag: RagFormFields): string | null {
+  const chunkProblem = wholeNumberProblem(
+    "Chunk Size",
+    rag.chunk_size,
+    RAG_CHUNK_SIZE_MIN,
+    RAG_CHUNK_SIZE_MAX,
+  );
+  if (chunkProblem) return chunkProblem;
+  // Overlap must leave each chunk some new text: 0 up to one less than the chunk.
+  const overlapProblem = wholeNumberProblem(
+    "Chunk Overlap",
+    rag.chunk_overlap,
+    0,
+    Number(rag.chunk_size.trim()) - 1,
+  );
+  if (overlapProblem) return overlapProblem;
+  const topKProblem = wholeNumberProblem("Top K", rag.top_k, RAG_TOP_K_MIN, RAG_TOP_K_MAX);
+  if (topKProblem) return topKProblem;
+  if (!rag.embedding_model.trim()) return "Enter an Embedding Model.";
+  return null;
+}
+
+function ragConfigFromForm(rag: RagFormFields): RAGConfig {
+  return {
+    chunk_size: Number(rag.chunk_size.trim()),
+    chunk_overlap: Number(rag.chunk_overlap.trim()),
+    top_k: Number(rag.top_k.trim()),
+    embedding_model: rag.embedding_model.trim(),
+  };
 }
 
 // A dropdown of user-named items: never wider than the viewport, so a long
@@ -209,17 +270,12 @@ function SettingsPageInner() {
     name: string;
     llm_provider_id: string;
     profile_id: string;
-    rag_config: RAGConfig;
+    rag_config: RagFormFields;
   }>({
     name: "",
     llm_provider_id: "",
     profile_id: "",
-    rag_config: {
-      chunk_size: 512,
-      chunk_overlap: 64,
-      top_k: 5,
-      embedding_model: EMBEDDING_MODEL_DEFAULT,
-    },
+    rag_config: { ...RAG_FORM_DEFAULTS, embedding_model: EMBEDDING_MODEL_DEFAULT },
   });
   const [savingProvider, setSavingProvider] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -456,14 +512,14 @@ function SettingsPageInner() {
       name: provider.name,
       llm_provider_id: provider.llm_provider_id,
       profile_id: provider.profile_id || "",
-      rag_config: provider.rag_config || {
-        chunk_size: 512,
-        chunk_overlap: 64,
-        top_k: 5,
-        embedding_model: defaultEmbeddingModelFor(
-          llmProviders.find((lp) => lp.id === provider.llm_provider_id)?.backend,
-        ),
-      },
+      rag_config: provider.rag_config
+        ? ragFormFields(provider.rag_config)
+        : {
+            ...RAG_FORM_DEFAULTS,
+            embedding_model: defaultEmbeddingModelFor(
+              llmProviders.find((lp) => lp.id === provider.llm_provider_id)?.backend,
+            ),
+          },
     });
   };
 
@@ -486,6 +542,7 @@ function SettingsPageInner() {
       console.error("Missing required fields");
       return;
     }
+    if (ragProblem) return;
 
     setSavingProvider(true);
     try {
@@ -497,7 +554,7 @@ function SettingsPageInner() {
       };
 
       if (selectedProfile?.strategy === MODE_RAG) {
-        payload.rag_config = formData.rag_config;
+        payload.rag_config = ragConfigFromForm(formData.rag_config);
       }
 
       const result = editingId
@@ -575,18 +632,16 @@ function SettingsPageInner() {
 
   // Resolve the selected profile for the form
   const selectedProfile = profiles.find((p) => p.id === formData.profile_id);
+  // RAG settings are only sent, and so only checked, for a RAG profile.
+  const ragProblem =
+    selectedProfile?.strategy === MODE_RAG ? ragFormProblem(formData.rag_config) : null;
 
   const resetForm = () => {
     setFormData({
       name: "",
       llm_provider_id: "",
       profile_id: "",
-      rag_config: {
-        chunk_size: 512,
-        chunk_overlap: 64,
-        top_k: 5,
-        embedding_model: EMBEDDING_MODEL_DEFAULT,
-      },
+      rag_config: { ...RAG_FORM_DEFAULTS, embedding_model: EMBEDDING_MODEL_DEFAULT },
     });
   };
 
@@ -1391,14 +1446,15 @@ function SettingsPageInner() {
                         <Input
                           id="cp-chunk-size"
                           type="number"
-                          min="1"
+                          min={RAG_CHUNK_SIZE_MIN}
+                          max={RAG_CHUNK_SIZE_MAX}
                           value={formData.rag_config.chunk_size}
                           onChange={(e) =>
                             setFormData({
                               ...formData,
                               rag_config: {
                                 ...formData.rag_config,
-                                chunk_size: parseInt(e.target.value) || 512,
+                                chunk_size: e.target.value,
                               },
                             })
                           }
@@ -1416,7 +1472,7 @@ function SettingsPageInner() {
                               ...formData,
                               rag_config: {
                                 ...formData.rag_config,
-                                chunk_overlap: parseInt(e.target.value) || 64,
+                                chunk_overlap: e.target.value,
                               },
                             })
                           }
@@ -1427,14 +1483,15 @@ function SettingsPageInner() {
                         <Input
                           id="cp-top-k"
                           type="number"
-                          min="1"
+                          min={RAG_TOP_K_MIN}
+                          max={RAG_TOP_K_MAX}
                           value={formData.rag_config.top_k}
                           onChange={(e) =>
                             setFormData({
                               ...formData,
                               rag_config: {
                                 ...formData.rag_config,
-                                top_k: parseInt(e.target.value) || 5,
+                                top_k: e.target.value,
                               },
                             })
                           }
@@ -1457,6 +1514,11 @@ function SettingsPageInner() {
                           }
                         />
                       </div>
+                      {ragProblem && (
+                        <p className="text-xs text-destructive" role="status">
+                          {ragProblem}
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -1467,7 +1529,8 @@ function SettingsPageInner() {
                         savingProvider ||
                         !formData.name.trim() ||
                         !formData.llm_provider_id ||
-                        !formData.profile_id
+                        !formData.profile_id ||
+                        !!ragProblem
                       }
                     >
                       Create
@@ -1604,23 +1667,23 @@ function SettingsPageInner() {
                         <div className="grid grid-cols-2 gap-3">
                           <div className="space-y-1">
                             <FieldLabel htmlFor={`edit-cp-chunk-${provider.id}`} className="text-xs" tooltip="Number of tokens per text chunk for retrieval.">Chunk Size</FieldLabel>
-                            <Input id={`edit-cp-chunk-${provider.id}`} type="number" min="1" className="h-8 text-xs"
+                            <Input id={`edit-cp-chunk-${provider.id}`} type="number" min={RAG_CHUNK_SIZE_MIN} max={RAG_CHUNK_SIZE_MAX} className="h-8 text-xs"
                               value={formData.rag_config.chunk_size}
-                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, chunk_size: parseInt(e.target.value) || 512 }})}
+                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, chunk_size: e.target.value }})}
                             />
                           </div>
                           <div className="space-y-1">
                             <FieldLabel htmlFor={`edit-cp-overlap-${provider.id}`} className="text-xs" tooltip="Token overlap between adjacent chunks. Aim for 10-15% of chunk size.">Overlap</FieldLabel>
                             <Input id={`edit-cp-overlap-${provider.id}`} type="number" min="0" className="h-8 text-xs"
                               value={formData.rag_config.chunk_overlap}
-                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, chunk_overlap: parseInt(e.target.value) || 64 }})}
+                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, chunk_overlap: e.target.value }})}
                             />
                           </div>
                           <div className="space-y-1">
                             <FieldLabel htmlFor={`edit-cp-topk-${provider.id}`} className="text-xs" tooltip="Number of most relevant chunks to retrieve per query.">Top K</FieldLabel>
-                            <Input id={`edit-cp-topk-${provider.id}`} type="number" min="1" className="h-8 text-xs"
+                            <Input id={`edit-cp-topk-${provider.id}`} type="number" min={RAG_TOP_K_MIN} max={RAG_TOP_K_MAX} className="h-8 text-xs"
                               value={formData.rag_config.top_k}
-                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, top_k: parseInt(e.target.value) || 5 }})}
+                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, top_k: e.target.value }})}
                             />
                           </div>
                           <div className="space-y-1">
@@ -1631,11 +1694,16 @@ function SettingsPageInner() {
                             />
                           </div>
                         </div>
+                        {ragProblem && (
+                          <p className="text-xs text-destructive" role="status">
+                            {ragProblem}
+                          </p>
+                        )}
                       </div>
                     )}
                     <div className="flex gap-2">
                       <Button size="sm" onClick={handleSaveChatProvider}
-                        disabled={savingProvider || !formData.name.trim() || !formData.llm_provider_id || !formData.profile_id}
+                        disabled={savingProvider || !formData.name.trim() || !formData.llm_provider_id || !formData.profile_id || !!ragProblem}
                       >
                         {savingProvider ? "Saving..." : "Save"}
                       </Button>

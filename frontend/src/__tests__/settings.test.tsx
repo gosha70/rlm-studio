@@ -14,7 +14,9 @@ import { ProviderCard } from "@/components/settings/provider-card";
 import { ExecutionConfig } from "@/components/settings/execution-config";
 import useSWR from "swr";
 import {
+  createChatProvider,
   deleteLLMProvider,
+  updateChatProvider,
   getLLMProviderModelsForConfig,
   testLLMProviderConfig,
   testProvider,
@@ -39,6 +41,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getProviderModels: vi.fn().mockResolvedValue([]),
     testLLMProviderConfig: vi.fn(),
     updateConfig: vi.fn(),
+    createChatProvider: vi.fn(),
+    updateChatProvider: vi.fn(),
     deleteLLMProvider: vi.fn(),
     getLLMProviderModelsForConfig: vi.fn().mockResolvedValue({
       models: [],
@@ -883,6 +887,111 @@ describe("SettingsPage — Wave 3", () => {
     await user.clear(embedding);
     await user.type(embedding, "ollama/mxbai-embed-large");
     expect(embedding.value).toBe("ollama/mxbai-embed-large");
+  });
+
+  /** Open Create Chat Provider on a RAG profile and set one RAG field. */
+  const fillRagChatProvider = async (field: string, value: string) => {
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ name: "My ollama" })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    await user.type(screen.getByLabelText("Name"), "Docs");
+    await pick(user, "cp-profile", /RAG profile/);
+    await pick(user, "cp-llm-provider", /My ollama/);
+    const input = screen.getByLabelText(field);
+    await user.clear(input);
+    if (value) await user.type(input, value);
+    return user;
+  };
+
+  test.each([
+    ["Chunk Size", "-5", "Chunk Size must be between 1 and 100,000."],
+    ["Chunk Size", "99999999999", "Chunk Size must be between 1 and 100,000."],
+    ["Chunk Size", "0", "Chunk Size must be between 1 and 100,000."],
+    ["Chunk Size", "12.5", "Chunk Size must be a whole number."],
+    ["Chunk Size", "", "Enter a value for Chunk Size."],
+    ["Chunk Overlap", "-1", "Chunk Overlap must be between 0 and 511."],
+    ["Chunk Overlap", "512", "Chunk Overlap must be between 0 and 511."],
+    ["Top K", "-1", "Top K must be between 1 and 100."],
+    ["Top K", "0", "Top K must be between 1 and 100."],
+    ["Top K", "100000", "Top K must be between 1 and 100."],
+    ["Embedding Model", "", "Enter an Embedding Model."],
+  ])("a RAG %s of %j is refused, not saved", async (field, value, message) => {
+    vi.mocked(createChatProvider).mockClear();
+    const user = await fillRagChatProvider(field, value);
+
+    expect(screen.getByRole("status")).toHaveTextContent(message);
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create).toBeDisabled();
+    await user.click(create);
+    expect(vi.mocked(createChatProvider)).not.toHaveBeenCalled();
+  });
+
+  test("the Chat Provider edit form refuses an invalid RAG value too", async () => {
+    vi.mocked(updateChatProvider).mockClear();
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ name: "My ollama" })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [
+        {
+          id: "cp-rag",
+          name: "Docs",
+          llm_provider_id: "lp-1",
+          llm_provider_name: "My ollama",
+          profile_id: RAG_PROFILE.id,
+          execution_mode: "rag",
+          runtime_settings: RUNTIME,
+          rlm_max_steps: 16,
+          rlm_timeout_seconds: 600,
+          rlm_repeat_limit: 2,
+          rag_config: {
+            chunk_size: 512,
+            chunk_overlap: 64,
+            top_k: 5,
+            embedding_model: "ollama/nomic-embed-text",
+          },
+        },
+      ],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const topK = screen.getByLabelText("Top K");
+    await user.clear(topK);
+    await user.type(topK, "0");
+
+    expect(screen.getByRole("status")).toHaveTextContent("Top K must be between 1 and 100.");
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(vi.mocked(updateChatProvider)).not.toHaveBeenCalled();
+  });
+
+  test("valid RAG settings are saved as typed", async () => {
+    vi.mocked(createChatProvider).mockClear();
+    vi.mocked(createChatProvider).mockResolvedValueOnce({} as never);
+    const user = await fillRagChatProvider("Top K", "12");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(createChatProvider)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rag_config: {
+            chunk_size: 512,
+            chunk_overlap: 64,
+            top_k: 12,
+            embedding_model: "ollama/nomic-embed-text",
+          },
+        }),
+      ),
+    );
   });
 
   test.each(["1e3", "-5", "0", "12abc"])(
