@@ -818,7 +818,9 @@ export function uploadFile(
           reject(new Error("Invalid response from server"));
         }
       } else {
-        reject(new Error(`Upload failed: ${xhr.status}`));
+        // Carry the server's reason (unsupported type, too large, unreadable
+        // file) so the user sees why, not just a status code.
+        reject(new Error(serverErrorMessage(xhr.responseText) ?? `Upload failed (HTTP ${xhr.status})`));
       }
     };
     xhr.onerror = () => reject(new Error("Network error during upload"));
@@ -1281,17 +1283,21 @@ export function apiErrorStatus(err: unknown): number {
  */
 export function apiErrorMessage(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err);
+  return serverErrorMessage(text) ?? text;
+}
+
+/** The message in a server error body (`{"error": {"message": …}}` or `{"detail": …}`), or null. */
+function serverErrorMessage(text: string): string | null {
   const brace = text.indexOf("{");
-  if (brace !== -1) {
-    try {
-      const body = JSON.parse(text.slice(brace));
-      const message = body?.error?.message ?? body?.detail;
-      if (typeof message === "string" && message) return message;
-    } catch {
-      // not JSON — fall through to the raw text
-    }
+  if (brace === -1) return null;
+  try {
+    const body = JSON.parse(text.slice(brace));
+    const message = body?.error?.message ?? body?.detail;
+    if (typeof message === "string" && message) return message;
+  } catch {
+    // not JSON
   }
-  return text;
+  return null;
 }
 
 // System Prompts

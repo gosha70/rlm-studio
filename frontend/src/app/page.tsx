@@ -47,6 +47,17 @@ import {
   storageKeyFilesForSession,
 } from "@/lib/branding";
 
+const MAX_FILES = 10;
+const BYTES_PER_MB = 1024 * 1024;
+const MAX_MESSAGE_MB = 50;
+/** Extracted text per message; mirrors backend `_MAX_TOTAL_CONTENT_BYTES`. */
+const MAX_BYTES = MAX_MESSAGE_MB * BYTES_PER_MB;
+const MAX_UPLOAD_FILE_MB = 200;
+/** One upload's raw size; mirrors `_MAX_FILE_SIZE` in `server/routes/files.py`. */
+const MAX_UPLOAD_FILE_BYTES = MAX_UPLOAD_FILE_MB * BYTES_PER_MB;
+/** Types the server decodes as-is, so their text is no smaller than the file. */
+const PLAIN_TEXT_EXTENSIONS = [".txt", ".md", ".py", ".json", ".csv"];
+
 interface ChatTurn {
   id: string;
   userMessage: {
@@ -899,17 +910,14 @@ export default function ChatPage() {
   );
 
   const handleFileUpload = useCallback(async (files: File[]) => {
-    const MAX_FILES = 10;
-    const MAX_BYTES = 50 * 1024 * 1024; // mirrors backend _MAX_TOTAL_CONTENT_BYTES
-
     const remaining = MAX_FILES - uploadedFiles.length;
     if (remaining <= 0) {
-      toast.error("Maximum 10 files per session reached");
+      toast.error(`Maximum ${MAX_FILES} files per session reached`);
       return;
     }
     const batch = files.slice(0, remaining);
     if (batch.length < files.length) {
-      toast.warning(`Only the first ${remaining} file(s) will be uploaded (10-file limit)`);
+      toast.warning(`Only the first ${remaining} file(s) will be uploaded (${MAX_FILES}-file limit)`);
     }
     setUploadProgress(0);
     let anyFailed = false;
@@ -917,15 +925,38 @@ export default function ChatPage() {
     // size_bytes on FileUploadResponse reflects server-side extracted text size.
     let cumulativeBytes = uploadedFiles.reduce((sum, f) => sum + f.text_size_bytes, 0);
     for (let i = 0; i < batch.length; i++) {
+      const file = batch[i];
+      // Refuse what the server would refuse (or what would blow the per-message
+      // limit) before sending the bytes, not after a long upload.
+      if (file.size === 0) {
+        toast.error(`"${file.name}" is empty (0 bytes), so there is nothing to upload`);
+        anyFailed = true;
+        continue;
+      }
+      if (file.size > MAX_UPLOAD_FILE_BYTES) {
+        toast.error(`"${file.name}" is larger than the ${MAX_UPLOAD_FILE_MB} MB upload limit`);
+        anyFailed = true;
+        continue;
+      }
+      // A plain-text file's extracted text is at least as large as the file,
+      // so the per-message limit can be checked up front.
+      const isPlainText = PLAIN_TEXT_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext));
+      if (isPlainText && cumulativeBytes + file.size > MAX_BYTES) {
+        toast.error(
+          `"${file.name}" skipped — adding it would exceed the ${MAX_MESSAGE_MB} MB per-message limit`,
+        );
+        anyFailed = true;
+        continue;
+      }
       try {
-        const resp = await uploadFile(batch[i], (pct) => {
+        const resp = await uploadFile(file, (pct) => {
           // Show overall progress: (completed files + current file fraction) / total
           const overall = ((i + (pct >= 100 ? 1 : pct / 100)) / batch.length) * 100;
           setUploadProgress(overall >= 100 ? "processing" : Math.round(overall));
         });
         if (cumulativeBytes + resp.text_size_bytes > MAX_BYTES) {
           toast.error(
-            `"${resp.name}" skipped — adding it would exceed the 50 MB per-message limit`,
+            `"${resp.name}" skipped — adding it would exceed the ${MAX_MESSAGE_MB} MB per-message limit`,
           );
           anyFailed = true;
           continue;
@@ -934,8 +965,10 @@ export default function ChatPage() {
         // Commit each file immediately so partial failures don't discard successes
         setUploadedFiles((prev) => [...prev, resp]);
       } catch (err) {
-        console.error(`Failed to upload ${batch[i].name}:`, err);
-        toast.error(`Upload failed: ${batch[i].name}`);
+        console.error(`Failed to upload ${file.name}:`, err);
+        toast.error(
+          `Couldn't upload "${file.name}": ${err instanceof Error ? err.message : "the upload failed"}`,
+        );
         anyFailed = true;
       }
     }
