@@ -155,9 +155,11 @@ function _isSlotFailed(slot: CompareMatrixSlotResponse): boolean {
 
 /** Human-friendly error message — strip raw JSON/stack traces. */
 function _friendlyError(slot: CompareMatrixSlotResponse): string {
-  const raw = slot.error || slot.answer || "Execution failed";
-  // Extract just the user-facing message from litellm errors
-  const match = raw.match(/Cannot connect to the LLM server[^.]*\./);
+  // Markdown emphasis from the server's message is noise in plain text.
+  const raw = (slot.error || slot.answer || "Execution failed").replace(/\*\*/g, "");
+  // Extract just the user-facing message from litellm errors. The quoted
+  // URL is skipped whole: its dots are not the end of the sentence.
+  const match = raw.match(/Cannot connect to the LLM server(?: at '[^']*')?[^.]*\./);
   if (match) return match[0];
   const timeoutMatch = raw.match(/RAG timed out[^.]*\./);
   if (timeoutMatch) return timeoutMatch[0];

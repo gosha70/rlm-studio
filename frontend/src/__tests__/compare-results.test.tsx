@@ -152,3 +152,38 @@ describe("Failed Compare cell", () => {
     expect(detail.textContent).not.toContain("**");
   });
 });
+
+describe("Failed Compare cell without an answer", () => {
+  test("keeps the whole server URL in the connection error", async () => {
+    const unreachable = makeSlot({
+      success: false,
+      answer: "",
+      error:
+        "Cannot connect to the LLM server at 'http://127.0.0.1:18097/v1'. Make sure the server is running and reachable. (Detail: litellm.InternalServerError: Connection refused)",
+    });
+    await runWith([unreachable]);
+
+    expect(
+      within(card(unreachable)).getByText(
+        "Cannot connect to the LLM server at 'http://127.0.0.1:18097/v1'.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test("drops markdown asterisks from the shortened message", async () => {
+    const exhausted = makeSlot({
+      mode: "rlm",
+      label: "LM Studio Qwen · rlm",
+      success: false,
+      answer: "",
+      error: "⚠️ **Step budget exhausted** (13 of 16 steps used) without producing a complete answer.",
+    });
+    await runWith([exhausted]);
+
+    expect(
+      within(card(exhausted)).getByText(
+        "Step budget exhausted (13 of 16 steps used) without producing a complete answer.",
+      ),
+    ).toBeInTheDocument();
+  });
+});
