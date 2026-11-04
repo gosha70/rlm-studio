@@ -929,3 +929,24 @@ def test_connection_loop_uses_the_event_it_was_started_with(
 
     assert not still_running
     assert calls == []
+
+
+def test_the_listed_status_follows_the_background_check(state: AppState) -> None:
+    """Browser pre-pass H2: after a manual Test said Connected, the background
+    check flipped the provider offline but the list kept showing Connected (an
+    in-memory cache of the manual result won), and an offline or error
+    provider was reported as merely "configured", also after a restart."""
+    from rlmstudio.server.routes.llm_providers import _compute_status
+
+    lp = _make_lp(status="connected", consecutive_failures=0)
+    state.config.llm_providers = [lp]
+    assert _compute_status(state.config.llm_providers[0]) == "connected"
+
+    with patch.object(AppState, "_safe_test", lambda self, p: _offline_result()):
+        state._run_test_cycle()
+        state._run_test_cycle()
+
+    assert _compute_status(state.config.llm_providers[0]) == "offline"
+    # A restart reloads the persisted status; it must not decay to "configured".
+    assert _compute_status(_make_lp(status="offline")) == "offline"
+    assert _compute_status(_make_lp(status="error")) == "error"

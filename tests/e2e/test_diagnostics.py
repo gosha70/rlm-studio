@@ -5,9 +5,8 @@ real FastAPI app via TestClient. State is reset between tests via the
 autouse ``_clean_state`` fixture in ``conftest.py``.
 
 Provider-check tests isolate themselves from the ambient environment
-(real API keys in env vars, real SecretStore contents, stale entries
-in the module-level ``_status_cache``) via the ``isolate_provider_env``
-fixture. That lets each test declare exactly one signal at a time.
+(real API keys in env vars, real SecretStore contents) via the
+``isolate_provider_env`` fixture. That lets each test declare exactly one signal at a time.
 """
 
 from __future__ import annotations
@@ -26,13 +25,9 @@ pytestmark = [pytest.mark.e2e]
 def isolate_provider_env(monkeypatch: pytest.MonkeyPatch):
     """Pin provider-status inputs so tests are deterministic.
 
-    - ``_status_cache`` is reset so prior tests cannot leak a cached
-      status into the provider under test.
     - ``_get_api_key`` defaults to returning ``None``; individual
       tests can override via the returned ``set_api_key`` callable.
     """
-    monkeypatch.setattr(llm_providers_mod, "_status_cache", {})
-
     current_key: dict[str, str | None] = {"value": None}
 
     def _fake_get_api_key(_llm_provider_id: str, _backend: str) -> str | None:
