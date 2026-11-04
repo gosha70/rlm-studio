@@ -87,6 +87,8 @@ _LEGACY_SESSIONS_FILE = Path(".rlmkit_sessions.json")
 _LEGACY_EVALUATIONS_FILE = Path(".rlmkit_evaluations.json")
 _MAX_PERSISTED_SESSIONS = 50
 _MAX_PERSISTED_FILES = 100
+# Default session names use the server's local time (the user's clock).
+_SESSION_NAME_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # ---------------------------------------------------------------------------
 # In-memory stores (replaced by real persistence in production)
@@ -1567,9 +1569,11 @@ class AppState:
             return self.sessions[session_id]
         now = datetime.now(timezone.utc)
         sid = session_id or str(uuid.uuid4())
+        # The name is for people: local time, to the second, so sessions
+        # started within the same minute stay distinguishable.
         session = SessionRecord(
             id=sid,
-            name=f"Session {now.strftime('%Y-%m-%d %H:%M')}",
+            name=f"Session {now.astimezone().strftime(_SESSION_NAME_TIME_FORMAT)}",
             created_at=now,
             updated_at=now,
         )

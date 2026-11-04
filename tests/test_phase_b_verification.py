@@ -6,7 +6,8 @@ These tests verify the fixes for Bugs #2, #4, and #5 from the outstanding bugs h
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -215,6 +216,21 @@ class TestDashboardMetrics:
 
 
 class TestSessionPersistence:
+    def test_default_session_name_uses_local_time_to_the_second(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Default names show the user's clock, not UTC, and include seconds."""
+        monkeypatch.setenv("TZ", "America/New_York")
+        time.tzset()
+        try:
+            session = AppState(load_from_disk=False).get_or_create_session()
+            local = session.created_at.astimezone()
+        finally:
+            monkeypatch.undo()
+            time.tzset()
+        assert local.utcoffset() != timedelta(0)
+        assert session.name == f"Session {local.strftime('%Y-%m-%d %H:%M:%S')}"
+
     def test_sessions_loaded_from_disk(self) -> None:
         """AppState._load_sessions() correctly restores sessions."""
         state = AppState(load_from_disk=False)
