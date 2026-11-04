@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 
 import pytest
 
-from rlmstudio.application.dto import LLMResponseDTO, RunResultDTO
+from rlmstudio.application.dto import LLMResponseDTO, RunConfigDTO, RunResultDTO
 from rlmstudio.application.sandbox_vars import (
     MODE_DIRECT,
     MODE_RLM_OFFICIAL,
@@ -164,3 +165,56 @@ class TestUnknownCostRanking:
         ranking = RunMatrixComparisonUseCase._rank(slots, "cost")
 
         assert [slots[i].slot_id for i in ranking] == ["free", "paid"]
+
+
+class _OverlapProbe(FakeRLMEngine):
+    """Engine that records how many official runs were in flight at once."""
+
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def run(self, content: str, query: str, config: RunConfigDTO) -> RunResultDTO:
+        with _OverlapProbe.lock:
+            _OverlapProbe.in_flight += 1
+            _OverlapProbe.peak = max(_OverlapProbe.peak, _OverlapProbe.in_flight)
+        try:
+            return super().run(content, query, config)
+        finally:
+            with _OverlapProbe.lock:
+                _OverlapProbe.in_flight -= 1
+
+
+class TestSerialModes:
+    """Browser pre-pass (RB-1): two official cells in one grid lost the second
+    to "engine busy" after 30 s whenever the first ran longer, because the
+    matrix ran them in parallel against a REPL that admits one run at a time."""
+
+    def _slots(self) -> list[MatrixSlotDTO]:
+        return [
+            MatrixSlotDTO(
+                slot_id=f"o{i}",
+                mode=MODE_RLM_OFFICIAL,
+                llm=_FakeLLM(),
+                engine=_OverlapProbe(answer=f"a{i}", delay=0.15),
+            )
+            for i in range(3)
+        ] + [MatrixSlotDTO(slot_id="d", mode=MODE_DIRECT, llm=_FakeLLM())]
+
+    def setup_method(self) -> None:
+        _OverlapProbe.in_flight = 0
+        _OverlapProbe.peak = 0
+
+    def test_serial_official_slots_never_overlap_and_all_succeed(self) -> None:
+        out = RunMatrixComparisonUseCase(serial_modes=frozenset({MODE_RLM_OFFICIAL})).execute(
+            "doc", "q", self._slots()
+        )
+
+        assert _OverlapProbe.peak == 1
+        assert [s.slot_id for s in out.slots] == ["o0", "o1", "o2", "d"]
+        assert all(s.result.success for s in out.slots)
+
+    def test_without_serial_modes_official_slots_run_in_parallel(self) -> None:
+        RunMatrixComparisonUseCase().execute("doc", "q", self._slots())
+
+        assert _OverlapProbe.peak > 1

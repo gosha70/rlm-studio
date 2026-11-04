@@ -992,7 +992,9 @@ def compare_matrix(
         embedding_api_key=embedding_api_key,
     )
 
-    uc = RunMatrixComparisonUseCase()
+    # The slots run the official engine in-process, whose REPL admits one run
+    # at a time: queue official slots rather than lose all but one to "busy".
+    uc = RunMatrixComparisonUseCase(serial_modes=frozenset({MODE_RLM_OFFICIAL}))
     result = uc.execute(
         content,
         query,

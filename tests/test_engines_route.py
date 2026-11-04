@@ -272,6 +272,15 @@ class TestCompareMatrixWithOfficialEngine:
         assert engine.calls[0][:2] == ("doc", "q")
         assert official["cost_known"] is True
 
+    def test_official_slots_queue_unless_the_sandbox_is_docker(self) -> None:
+        from rlmstudio.server.routes.compare_matrix import _serial_modes
+
+        state = get_state()
+        state.config.sandbox.type = "restricted"
+        assert _serial_modes(state) == frozenset({MODE_RLM_OFFICIAL})
+        state.config.sandbox.type = "docker"
+        assert _serial_modes(state) == frozenset()
+
     def test_an_unpriced_official_slot_reports_cost_unknown(self, client: TestClient) -> None:
         """The page ranks cost itself; without this flag an unpriced $0 slot
         ranked first on cost in the UI while the server ranked it last."""

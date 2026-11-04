@@ -154,13 +154,21 @@ class RunMatrixComparisonUseCase:
     Args:
         max_workers: Upper bound on the thread pool.  ``None`` (default)
             picks ``min(len(slots), 8)`` at ``execute()`` time.
+        serial_modes: Modes whose slots must run one after another (while
+            the other slots still run in parallel).  The official engine's
+            in-process REPL admits one run at a time process-wide and a
+            queued run gives up after a short wait, so callers pass
+            ``{MODE_RLM_OFFICIAL}`` unless that engine runs in Docker.
     """
 
     #: Hard ceiling on fan-out — matches the SDD's stated max of 10 slots.
     MAX_SLOTS = 10
 
-    def __init__(self, max_workers: int | None = None) -> None:
+    def __init__(
+        self, max_workers: int | None = None, serial_modes: frozenset[str] = frozenset()
+    ) -> None:
         self._max_workers = max_workers
+        self._serial_modes = serial_modes
 
     # ------------------------------------------------------------------
     # Public API
@@ -200,26 +208,32 @@ class RunMatrixComparisonUseCase:
         results_by_slot_id: dict[str, MatrixSlotResultDTO] = {}
         start = time.time()
 
-        workers = self._max_workers or min(len(slots), 8)
+        # Slots in a serial mode run in order inside one pool task; every
+        # other slot gets its own task.  A single serial slot needs no queue.
+        serial = [s for s in slots if s.mode in self._serial_modes]
+        if len(serial) < 2:
+            serial = []
+        serial_ids = {s.slot_id for s in serial}
+        groups: list[list[MatrixSlotDTO]] = [[s] for s in slots if s.slot_id not in serial_ids]
+        if serial:
+            groups.append(serial)
+
+        workers = self._max_workers or min(len(groups), 8)
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures: dict[Future[MatrixSlotResultDTO], str] = {
+            futures: dict[Future[None], list[MatrixSlotDTO]] = {
                 pool.submit(
-                    self._execute_slot,
-                    slot,
-                    content,
-                    query,
-                    base_config,
-                ): slot.slot_id
-                for slot in slots
+                    self._execute_group, group, content, query, base_config, results_by_slot_id
+                ): group
+                for group in groups
             }
             for fut in as_completed(futures):
-                slot_id = futures[fut]
                 try:
-                    results_by_slot_id[slot_id] = fut.result()
+                    fut.result()
                 except Exception as exc:  # pragma: no cover — defensive
-                    logger.exception("Matrix slot %s crashed", slot_id)
-                    slot = next(s for s in slots if s.slot_id == slot_id)
-                    results_by_slot_id[slot_id] = _failed_slot_result(slot, str(exc))
+                    for slot in futures[fut]:
+                        if slot.slot_id not in results_by_slot_id:
+                            logger.exception("Matrix slot %s crashed", slot.slot_id)
+                            results_by_slot_id[slot.slot_id] = _failed_slot_result(slot, str(exc))
 
         # Preserve input order in the result list.
         ordered = [results_by_slot_id[s.slot_id] for s in slots]
@@ -238,6 +252,18 @@ class RunMatrixComparisonUseCase:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _execute_group(
+        self,
+        group: list[MatrixSlotDTO],
+        content: str,
+        query: str,
+        base_config: RunConfigDTO,
+        results_by_slot_id: dict[str, MatrixSlotResultDTO],
+    ) -> None:
+        """Run ``group``'s slots in order, recording each result as it lands."""
+        for slot in group:
+            results_by_slot_id[slot.slot_id] = self._execute_slot(slot, content, query, base_config)
 
     def _validate(self, slots: list[MatrixSlotDTO]) -> None:
         if not slots:

@@ -39,6 +39,7 @@ from rlmstudio.application.use_cases.run_matrix_comparison import (
     MatrixSlotResultDTO,
     RunMatrixComparisonUseCase,
 )
+from rlmstudio.infrastructure.engines.rlms_adapter import SANDBOX_TYPE_DOCKER
 from rlmstudio.infrastructure.storage.sqlite_adapter import SQLiteStorageAdapter
 from rlmstudio.server.dependencies import AppState, ExecutionRecord, get_state
 from rlmstudio.server.models import (
@@ -452,7 +453,7 @@ async def _compare_matrix_v2(
             )
 
     # --- Fan out -------------------------------------------------------
-    uc = RunMatrixComparisonUseCase()
+    uc = RunMatrixComparisonUseCase(serial_modes=_serial_modes(state))
     result: MatrixComparisonResultDTO = await asyncio.to_thread(
         uc.execute,
         content,
@@ -716,7 +717,7 @@ async def compare_matrix(
             )
 
     # --- Fan out via the use case (ThreadPoolExecutor under the hood) -
-    uc = RunMatrixComparisonUseCase()
+    uc = RunMatrixComparisonUseCase(serial_modes=_serial_modes(state))
     result: MatrixComparisonResultDTO = await asyncio.to_thread(
         uc.execute,
         content,
@@ -817,6 +818,19 @@ async def compare_matrix(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _serial_modes(state: AppState) -> frozenset[str]:
+    """Modes whose slots must run one after another in this grid.
+
+    The official engine's in-process REPL admits one run at a time and a
+    queued run gives up after a short wait, so two official cells in one grid
+    lost the second to "engine busy". With the Docker sandbox each run has its
+    own container and they can run in parallel.
+    """
+    if state.config.sandbox.type == SANDBOX_TYPE_DOCKER:
+        return frozenset()
+    return frozenset({MODE_RLM_OFFICIAL})
 
 
 def _build_slot_run_config(
