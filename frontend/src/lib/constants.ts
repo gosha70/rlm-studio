@@ -158,3 +158,8 @@ export const REFINEMENT_DECISION_REASON_MAX_CHARS = 2_000;
 
 /** Polling interval while an evaluation is running. */
 export const REFINEMENT_POLL_MS = 2_000;
+
+/** How often the header re-checks the backend while it is reachable. */
+export const HEALTH_POLL_MS = 10_000;
+/** How often it retries while the backend is unreachable, so it recovers on its own. */
+export const HEALTH_RETRY_MS = 5_000;

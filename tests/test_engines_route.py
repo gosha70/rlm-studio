@@ -34,6 +34,7 @@ from rlmstudio.application.dto import LLMResponseDTO
 from rlmstudio.application.sandbox_vars import (
     MODE_DIRECT,
     MODE_RLM_OFFICIAL,
+    RESULT_KEY_COST_KNOWN,
     TRACE_KEY_CONTENT,
     TRACE_KEY_ROLE,
 )
@@ -269,6 +270,41 @@ class TestCompareMatrixWithOfficialEngine:
         assert official["steps"] == _ENGINE_STEPS
         assert official["total_tokens"] == _ENGINE_TOTAL_TOKENS
         assert engine.calls[0][:2] == ("doc", "q")
+        assert official["cost_known"] is True
+
+    def test_official_slots_queue_unless_the_sandbox_is_docker(self) -> None:
+        from rlmstudio.server.routes.compare_matrix import _serial_modes
+
+        state = get_state()
+        state.config.sandbox.type = "restricted"
+        assert _serial_modes(state) == frozenset({MODE_RLM_OFFICIAL})
+        state.config.sandbox.type = "docker"
+        assert _serial_modes(state) == frozenset()
+
+    def test_an_unpriced_official_slot_reports_cost_unknown(self, client: TestClient) -> None:
+        """The page ranks cost itself; without this flag an unpriced $0 slot
+        ranked first on cost in the UI while the server ranked it last."""
+        state = get_state()
+        cp = _make_chat_provider()
+        state.config.chat_providers.append(cp)
+        _install_fakes(
+            state, engine=_engine(total_cost=0.0, metadata={RESULT_KEY_COST_KNOWN: False})
+        )
+
+        resp = client.post(
+            "/api/chat/compare-matrix",
+            json={
+                "content": "doc",
+                "query": "q",
+                "chat_provider_ids": [cp.id],
+                "modes": [MODE_DIRECT, MODE_RLM_OFFICIAL],
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        slots = {s["mode"]: s for s in resp.json()["slots"]}
+        assert slots[MODE_RLM_OFFICIAL]["cost_known"] is False
+        assert slots[MODE_DIRECT]["cost_known"] is True
 
     def test_unavailable_engine_is_a_400_with_the_reason(self, client: TestClient) -> None:
         state = get_state()

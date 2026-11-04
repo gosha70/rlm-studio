@@ -58,6 +58,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import {
+  apiErrorMessage,
   getConfig,
   getLLMProviders,
   getProfiles,
@@ -436,7 +437,7 @@ export default function ComparePage() {
       const resp = await submitCompareMatrix(req);
       setResult(resp);
     } catch (err) {
-      setRunError(err instanceof Error ? err.message : "Matrix run failed");
+      setRunError(err instanceof Error ? apiErrorMessage(err) : "Matrix run failed");
     } finally {
       setIsRunning(false);
     }
@@ -472,7 +473,11 @@ export default function ComparePage() {
         newScores[s.execution_id] = s;
       }
       setJudgeScores(newScores);
-      toast.success(`Judged ${judgeResult.pointwise.length} slots`);
+      if (judgeResult.pointwise.length === 0) {
+        toast.error("The judge returned no scores. Check that the judge Chat Provider is reachable.");
+      } else {
+        toast.success(`Judged ${judgeResult.pointwise.length} of ${usableSlots.length} slots`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Judge evaluation failed");
     } finally {
@@ -1042,61 +1047,56 @@ export function _rankSlots(
   metric: MatrixRankingMetric,
   judgeScores: Record<string, JudgeScoreData>,
 ): number[] {
+  // Sort by tier, then score, then input order. Tiers keep every success
+  // above every failure and a slot without the metric (unjudged, unpriced,
+  // no TTFT) below the slots that have it. Scores never use Infinity, so
+  // the comparator never computes Infinity - Infinity (NaN), which made the
+  // order arbitrary.
+  const HAS_VALUE = 0;
+  const NO_VALUE = 1;
+  const FAILED = 2;
   const scored = slots.map((s, idx) => {
-    if (_isSlotFailed(s)) return { idx, score: Infinity };
-    let score: number;
+    if (_isSlotFailed(s)) return { idx, tier: FAILED, score: 0 };
+    const value = (score: number) => ({ idx, tier: HAS_VALUE, score });
+    const missing = { idx, tier: NO_VALUE, score: 0 };
+    const costKnown = s.cost_known !== false;
     switch (metric) {
       case "cost":
-        score = s.total_cost;
-        break;
+        // An unpriced run's $0 is not free: it ranks after priced runs.
+        return costKnown ? value(s.total_cost) : missing;
       case "tokens":
-        score = s.total_tokens;
-        break;
+        return value(s.total_tokens);
       case "latency":
-        score = s.elapsed_seconds;
-        break;
+        return value(s.elapsed_seconds);
       case "judge_score": {
-        // Higher is better → negate. Unjudged slots sort just above failed
-        // (Infinity) but below any real score (negative values).
+        // Higher is better → negate.
         const js = judgeScores[s.execution_id];
-        score = js ? -js.overall_score : Infinity - 1;
-        break;
+        return js ? value(-js.overall_score) : missing;
       }
       case "answer_per_cost":
-        // Zero-cost providers (local models) get -Infinity → always rank first
-        score = s.total_cost > 0 ? -(s.answer.length / s.total_cost) : -Infinity;
-        break;
+        // Free (known $0) runs rank first, longest answer first; then
+        // priced runs by answer length per dollar; unpriced runs last.
+        if (!costKnown) return missing;
+        if (s.total_cost <= 0) return { idx, tier: HAS_VALUE - 1, score: -s.answer.length };
+        return value(-(s.answer.length / s.total_cost));
       case "ttft":
-        // Lower TTFT is better; slots without a value sort last.
-        score = s.median_ttft_ms ?? Number.POSITIVE_INFINITY;
-        break;
+        // Lower TTFT is better.
+        return s.median_ttft_ms == null ? missing : value(s.median_ttft_ms);
       case "decode_tokens_per_sec": {
         const decodeMs = s.total_decode_ms ?? 0;
         const completion = s.total_completion_tokens ?? 0;
-        // Higher tok/s is better → negate. Slots without a decode
-        // phase sort last (infinity).
-        score =
-          decodeMs > 0
-            ? -(completion / (decodeMs / 1000))
-            : Number.POSITIVE_INFINITY;
-        break;
+        // Higher tok/s is better → negate.
+        return decodeMs > 0 ? value(-(completion / (decodeMs / 1000))) : missing;
       }
       case "cache_hit_rate":
-        // Higher cache_hit_rate is better → negate. Slots without the
-        // field at all (legacy bundles, pre-Phase-5 responses) sort
-        // last — matching the null-last discipline used by ttft and
-        // decode_tokens_per_sec.
-        score =
-          s.cache_hit_rate == null
-            ? Number.POSITIVE_INFINITY
-            : -s.cache_hit_rate;
-        break;
+        // Higher is better → negate. Legacy responses without the field
+        // sort after the slots that have it.
+        return s.cache_hit_rate == null ? missing : value(-s.cache_hit_rate);
       default:
-        score = s.total_cost;
+        return costKnown ? value(s.total_cost) : missing;
     }
-    return { idx, score };
   });
-  scored.sort((a, b) => a.score - b.score);
+  scored.sort((a, b) => a.tier - b.tier || a.score - b.score || a.idx - b.idx);
   return scored.map((s) => s.idx);
 }
 

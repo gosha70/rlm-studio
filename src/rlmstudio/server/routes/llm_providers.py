@@ -27,8 +27,8 @@ from rlmstudio.ui.services.secret_store import FileSecretStore, KeyringSecretSto
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# In-memory status cache: llm_provider_id -> status
-_status_cache: dict[str, str] = {}
+# Statuses that record a test result (manual Test or the background check).
+_TESTED_STATUSES: frozenset[str] = frozenset({"connected", "offline", "error"})
 
 
 def _persist_api_key(llm_provider_id: str, backend: str, api_key: str) -> None:
@@ -142,24 +142,21 @@ def _discover_context_window(backend: str, model: str, endpoint: str | None) -> 
 
 
 def _compute_status(lp: LLMProviderConfig) -> str:
-    """Compute current status for an LLM Provider instance."""
-    # Check in-memory cache first
-    cached = _status_cache.get(lp.id)
-    if cached:
-        return cached
-    # Persisted status from last test
-    if lp.status == "connected":
-        return "connected"
+    """Current status for an LLM Provider instance.
+
+    The last test result wins, whether the manual Test or the background check
+    produced it: both write ``lp.status`` under the config lock. Before any
+    test, a provider is "configured" when it can be used (a local backend, or
+    a key is available) and "not_configured" otherwise.
+    """
+    if lp.status in _TESTED_STATUSES:
+        return lp.status
     entry = PROVIDERS_BY_KEY.get(lp.backend)
     if not entry:
         return "not_configured"
-    if entry.requires_api_key:
-        key = _get_api_key(lp.id, lp.backend)
-        if key:
-            return lp.status if lp.status in ("connected", "configured") else "configured"
+    if entry.requires_api_key and not _get_api_key(lp.id, lp.backend):
         return "not_configured"
-    # Local provider (Ollama, LM Studio) — configured by default
-    return lp.status if lp.status == "connected" else "configured"
+    return "configured"
 
 
 @router.get("/api/llm-providers")
@@ -315,7 +312,6 @@ async def update_llm_provider(
             lp.model_check_alternatives = None
             lp.model_checked_at = None
             lp.consecutive_failures = 0
-            _status_cache.pop(lp.id, None)
 
         if req.api_key:
             # A replacement key affects every probe: the stored result
@@ -331,7 +327,6 @@ async def update_llm_provider(
             lp.model_check_alternatives = None
             lp.model_checked_at = None
             lp.consecutive_failures = 0
-            _status_cache.pop(lp.id, None)
 
         lp.updated_at = datetime.now(timezone.utc)
         state.save_config()
@@ -369,7 +364,6 @@ async def delete_llm_provider(
         state.config.llm_providers = [
             lp for lp in state.config.llm_providers if lp.id != llm_provider_id
         ]
-        _status_cache.pop(llm_provider_id, None)
         state.save_config()
 
 
@@ -636,7 +630,6 @@ async def test_llm_provider(
         lp.last_tested_by = "manual"
         record_failure_classification(lp, result)
         record_model_check_from_probe(lp, result)
-        _status_cache[lp.id] = lp.status
         state.save_config()
 
     if result.failure_kind is ProviderFailureKind.MODEL_UNAVAILABLE:

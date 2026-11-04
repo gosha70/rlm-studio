@@ -6,6 +6,7 @@ import { getSessions, getHealth, deleteSession as apiDeleteSession, renameSessio
 import { Sidebar } from "./sidebar";
 import { ThemeToggle } from "./theme-toggle";
 import { StatusIndicator } from "./status-indicator";
+import { HEALTH_POLL_MS, HEALTH_RETRY_MS } from "@/lib/constants";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -20,11 +21,19 @@ export function AppShell({
   onSelectSession,
   onNewSession,
 }: AppShellProps) {
-  const { data: health } = useSWR("health", getHealth, {
-    refreshInterval: 30_000,
-    errorRetryCount: 2,
+  const { data: health, error: healthError } = useSWR("health", getHealth, {
+    refreshInterval: HEALTH_POLL_MS,
+    // SWR skips interval refreshes while the key holds an error, so retry on
+    // a fixed beat instead; otherwise the header never noticed the backend
+    // coming back.
+    onErrorRetry: (_err, _key, _config, revalidate) => {
+      setTimeout(() => revalidate(), HEALTH_RETRY_MS);
+    },
   });
-  const isConnected = health?.status === "ok";
+  // SWR keeps the last good response when a request fails, so the error, not
+  // the data, says the backend is gone.
+  const backendDown = Boolean(healthError);
+  const headerStatus = backendDown ? "offline" : health?.status === "ok" ? "connected" : "loading";
   const [collapsed, setCollapsed] = useState(false);
 
   const { data: sessions = [], mutate: mutateSessions } = useSWR<SessionSummary[]>(
@@ -65,10 +74,19 @@ export function AppShell({
         <header className="flex h-14 shrink-0 items-center justify-between border-b bg-card px-4">
           <h1 className="text-lg font-semibold">RLM Studio</h1>
           <div className="flex items-center gap-3">
-            <StatusIndicator status={isConnected ? "connected" : "offline"} />
+            <StatusIndicator status={headerStatus} />
             <ThemeToggle />
           </div>
         </header>
+        {backendDown && (
+          <div
+            role="alert"
+            className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+          >
+            Can&apos;t reach the RLM Studio server. What this page shows may be out of date or empty
+            until it is back; the page reconnects on its own.
+          </div>
+        )}
 
         <main className="h-0 flex-1 overflow-auto">{children}</main>
       </div>

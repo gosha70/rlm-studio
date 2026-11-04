@@ -31,8 +31,7 @@ async def get_diagnostics(
 
     * ``backend``: no I/O; the endpoint itself is the probe.
     * ``provider``: iterates in-memory ``llm_providers``. Calls
-      :func:`_compute_status` per entry. That helper's first step is an
-      in-memory ``_status_cache`` lookup. On a cache miss it reads the
+      :func:`_compute_status` per entry. For an untested provider it reads the
       SecretStore (file or keyring) once per API-key provider —
       typically <1 ms for the file store and well under 100 ms for the
       macOS keyring on already-authenticated processes. Local backends

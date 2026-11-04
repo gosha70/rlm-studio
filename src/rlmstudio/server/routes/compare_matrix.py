@@ -26,6 +26,7 @@ from rlmstudio.application.sandbox_vars import (
     MODE_RLM,
     MODE_RLM_OFFICIAL,
     MODES_RLM_INTERNAL,
+    RESULT_KEY_COST_KNOWN,
     RLM_DEFAULT_MAX_STEPS,
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
@@ -38,6 +39,7 @@ from rlmstudio.application.use_cases.run_matrix_comparison import (
     MatrixSlotResultDTO,
     RunMatrixComparisonUseCase,
 )
+from rlmstudio.infrastructure.engines.rlms_adapter import SANDBOX_TYPE_DOCKER
 from rlmstudio.infrastructure.storage.sqlite_adapter import SQLiteStorageAdapter
 from rlmstudio.server.dependencies import AppState, ExecutionRecord, get_state
 from rlmstudio.server.models import (
@@ -48,6 +50,7 @@ from rlmstudio.server.models import (
 )
 from rlmstudio.server.rag_embedding import build_rag_embedder, rag_config_for
 from rlmstudio.server.routes._helpers import _record_slot_telemetry, _SlotMeta
+from rlmstudio.server.routes.llm_providers import _compute_status
 from rlmstudio.telemetry.store import content_sha256
 
 if TYPE_CHECKING:
@@ -196,6 +199,9 @@ class CompareMatrixSlotResponse(BaseModel):
     total_decode_ms: int = 0
     median_ttft_ms: int | None = None
     cache_hit_rate: float = 0.0
+    # False when the run's price is unknown (an unpriced model): its $0 is
+    # not free, and the page must rank it last on cost like the server does.
+    cost_known: bool = True
 
 
 class CompareMatrixResponse(BaseModel):
@@ -309,7 +315,9 @@ async def _compare_matrix_v2(
         lp = state.get_llm_provider(lp_id)
         if not lp:
             raise HTTPException(status_code=404, detail=f"LLM Provider {lp_id} not found")
-        if lp.status not in ("connected", "configured"):
+        # The same status Settings shows: a provider saved without a test
+        # keeps the stored default "not_configured" but is usable.
+        if _compute_status(lp) not in ("connected", "configured"):
             raise HTTPException(
                 status_code=400,
                 detail=f"LLM Provider '{lp.name}' is not connected",
@@ -448,7 +456,7 @@ async def _compare_matrix_v2(
             )
 
     # --- Fan out -------------------------------------------------------
-    uc = RunMatrixComparisonUseCase()
+    uc = RunMatrixComparisonUseCase(serial_modes=_serial_modes(state))
     result: MatrixComparisonResultDTO = await asyncio.to_thread(
         uc.execute,
         content,
@@ -522,6 +530,7 @@ async def _compare_matrix_v2(
             total_cost=s.result.total_cost,
             elapsed_seconds=s.result.elapsed_time,
             steps=s.result.steps,
+            cost_known=s.result.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False,
             **_slot_perf_aggregates(s.result.trace),
         )
         for s in result.slots
@@ -711,7 +720,7 @@ async def compare_matrix(
             )
 
     # --- Fan out via the use case (ThreadPoolExecutor under the hood) -
-    uc = RunMatrixComparisonUseCase()
+    uc = RunMatrixComparisonUseCase(serial_modes=_serial_modes(state))
     result: MatrixComparisonResultDTO = await asyncio.to_thread(
         uc.execute,
         content,
@@ -793,6 +802,7 @@ async def compare_matrix(
             total_cost=s.result.total_cost,
             elapsed_seconds=s.result.elapsed_time,
             steps=s.result.steps,
+            cost_known=s.result.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False,
             **_slot_perf_aggregates(s.result.trace),
         )
         for s in result.slots
@@ -811,6 +821,19 @@ async def compare_matrix(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _serial_modes(state: AppState) -> frozenset[str]:
+    """Modes whose slots must run one after another in this grid.
+
+    The official engine's in-process REPL admits one run at a time and a
+    queued run gives up after a short wait, so two official cells in one grid
+    lost the second to "engine busy". With the Docker sandbox each run has its
+    own container and they can run in parallel.
+    """
+    if state.config.sandbox.type == SANDBOX_TYPE_DOCKER:
+        return frozenset()
+    return frozenset({MODE_RLM_OFFICIAL})
 
 
 def _build_slot_run_config(

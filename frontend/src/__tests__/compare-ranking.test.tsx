@@ -152,3 +152,40 @@ describe("_rankSlots — cache_hit_rate", () => {
     ]);
   });
 });
+
+describe("_rankSlots — failures, unjudged and unpriced slots", () => {
+  const ok = (id: string, extra: Partial<CompareMatrixSlotResponse> = {}) =>
+    _slot({ execution_id: id, slot_id: id, ...extra });
+  const failed = (id: string) => _slot({ execution_id: id, slot_id: id, success: false, error: "boom" });
+
+  test("judge score: unjudged successes rank above failures, judged ones first", () => {
+    // Browser pre-pass: with no judge scores, failures ranked above the three
+    // successes because Infinity - 1 === Infinity made the sort arbitrary.
+    const slots = [failed("f1"), ok("a"), failed("f2"), ok("b"), ok("c")];
+    expect(_rankSlots(slots, "judge_score", {})).toEqual([1, 3, 4, 0, 2]);
+
+    const scores = { c: { execution_id: "c", overall_score: 4.5 } } as never;
+    expect(_rankSlots(slots, "judge_score", scores)).toEqual([4, 1, 3, 0, 2]);
+  });
+
+  test("cost: an unpriced $0 run ranks after priced runs, before failures", () => {
+    const slots = [
+      ok("unpriced", { total_cost: 0, cost_known: false }),
+      failed("f"),
+      ok("priced", { total_cost: 0.02 }),
+      ok("free-local", { total_cost: 0 }),
+    ];
+    expect(_rankSlots(slots, "cost", {})).toEqual([3, 2, 0, 1]);
+  });
+
+  test("answer per cost: known-free runs first by answer length, unpriced after priced", () => {
+    const slots = [
+      ok("unpriced", { total_cost: 0, cost_known: false, answer: "x".repeat(500) }),
+      ok("priced", { total_cost: 0.01, answer: "x".repeat(100) }),
+      ok("free-short", { total_cost: 0, answer: "x".repeat(10) }),
+      ok("free-long", { total_cost: 0, answer: "x".repeat(50) }),
+      failed("f"),
+    ];
+    expect(_rankSlots(slots, "answer_per_cost", {})).toEqual([3, 2, 1, 0, 4]);
+  });
+});

@@ -211,7 +211,7 @@ The Chat page is where you run experiments.
 
 3. **Ask a question** — Type your query and press Enter (or click Send).
 
-4. **Compare responses** — Each Chat Provider's response appears in its own column. Below each response you see per-execution metrics:
+4. **Compare responses** — Each Chat Provider's response appears in its own column when its run finishes; Chat does not stream tokens in 1.0. Below each response you see per-execution metrics:
    - **Tokens** — total tokens consumed
    - **Cost** — USD cost for this execution
    - **Latency** — wall-clock time
