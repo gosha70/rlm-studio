@@ -144,14 +144,16 @@ export default function ChatPage() {
   // Callbacks captured under a stale generation bail out immediately.
   const sessionGenRef = useRef(0);
 
-  // Sort selected IDs by chip order for consistent grid column ordering
-  const orderedSelectedIds = chatProviderOrder.length > 0
-    ? [...selectedChatProviderIds].sort((a, b) => {
-        const ai = chatProviderOrder.indexOf(a);
-        const bi = chatProviderOrder.indexOf(b);
-        return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
-      })
-    : selectedChatProviderIds;
+  // Sort a turn's provider IDs by chip order for consistent grid column ordering.
+  // Each turn shows the providers it was sent to, not the current selection.
+  const inChipOrder = (ids: string[]) =>
+    chatProviderOrder.length > 0
+      ? [...ids].sort((a, b) => {
+          const ai = chatProviderOrder.indexOf(a);
+          const bi = chatProviderOrder.indexOf(b);
+          return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
+        })
+      : ids;
 
   const { data: chatProviders = [] } = useSWR<ChatProviderConfig[]>("chat-providers", getChatProviders);
   const { data: llmProviders = [] } = useSWR<LLMProviderConfig[]>("llm-providers", getLLMProviders);
@@ -291,24 +293,26 @@ export default function ChatPage() {
         if (session.conversations && Object.keys(session.conversations).length > 0) {
           // Group by conversation (chat provider)
           const turnMap = new Map<string, ChatTurn>();
+          // The Chat Providers each turn's question was sent to.
+          const sentTo = new Map<string, Set<string>>();
 
           // Iterate through each chat provider's conversation
           for (const [cpId, messages] of Object.entries(session.conversations)) {
+            // The turn of this provider's latest question: its answer belongs there.
+            let currentTurnId: string | undefined;
             for (const msg of messages) {
               let turnId: string | undefined;
 
               if (msg.role === "user") {
-                // Find or create a turn with this user message
+                // Join the turn that asked the same question of other providers
+                // (not one this provider already answered), or start a new one.
                 const existing = Array.from(turnMap.values()).find(
-                  (t) => t.userMessage.content === msg.content
+                  (t) => t.userMessage.content === msg.content && !sentTo.get(t.id)?.has(cpId),
                 );
                 turnId = existing?.id || crypto.randomUUID();
+                currentTurnId = turnId;
               } else {
-                // Assistant message — find the corresponding turn
-                const existing = Array.from(turnMap.values()).find(
-                  (t) => !t.responses[cpId]
-                );
-                turnId = existing?.id;
+                turnId = currentTurnId;
               }
 
               if (!turnId) turnId = crypto.randomUUID();
@@ -324,10 +328,13 @@ export default function ChatPage() {
               }
 
               if (msg.role === "user") {
+                const earlier = turn.userMessage.timestamp;
                 turn.userMessage = {
                   content: msg.content,
-                  timestamp: msg.timestamp,
+                  timestamp: earlier && earlier < msg.timestamp ? earlier : msg.timestamp,
                 };
+                if (!sentTo.has(turnId)) sentTo.set(turnId, new Set());
+                sentTo.get(turnId)!.add(cpId);
               } else {
                 turn.responses[cpId] = {
                   chatProviderId: cpId,
@@ -341,11 +348,18 @@ export default function ChatPage() {
             }
           }
 
-          const reconstructed = Array.from(turnMap.values());
+          // Conversations are per provider, so put the turns back in the order
+          // the questions were asked.
+          const reconstructed = Array.from(turnMap.values()).sort((a, b) =>
+            a.userMessage.timestamp.localeCompare(b.userMessage.timestamp),
+          );
           setTurns(reconstructed);
 
-          // Restore chat provider selection from the providers present in conversations
-          const sessionProviderIds = Object.keys(session.conversations);
+          // Restore the selection the latest question was sent with
+          const lastTurn = reconstructed[reconstructed.length - 1];
+          const sessionProviderIds = lastTurn
+            ? [...(sentTo.get(lastTurn.id) ?? Object.keys(lastTurn.responses))]
+            : [];
           if (sessionProviderIds.length > 0) {
             setSelectedChatProviderIds(sessionProviderIds);
           }
@@ -1103,7 +1117,9 @@ export default function ChatPage() {
           <>
             <div className="min-h-0 flex-1 overflow-auto" aria-label="Message history">
               <div className="w-full space-y-8 px-4 py-6" role="log" aria-live="polite">
-                {turns.map((turn) => (
+                {turns.map((turn) => {
+                  const turnProviderIds = inChipOrder(Object.keys(turn.responses));
+                  return (
                   <div key={turn.id} className="space-y-4">
                     {/* User message - full width */}
                     <div className="flex gap-3">
@@ -1121,10 +1137,10 @@ export default function ChatPage() {
                     <div
                       className="grid gap-4 mr-4"
                       style={{
-                        gridTemplateColumns: `repeat(${orderedSelectedIds.length}, minmax(320px, 1fr))`,
+                        gridTemplateColumns: `repeat(${turnProviderIds.length}, minmax(320px, 1fr))`,
                       }}
                     >
-                      {orderedSelectedIds.map((cpId) => {
+                      {turnProviderIds.map((cpId) => {
                         const resp = turn.responses[cpId];
                         return (
                           <div
@@ -1336,7 +1352,8 @@ export default function ChatPage() {
                       );
                     })()}
                   </div>
-                ))}
+                  );
+                })}
                 {/* Each pending response card shows its own "Generating…". */}
                 <div ref={messagesEndRef} />
               </div>

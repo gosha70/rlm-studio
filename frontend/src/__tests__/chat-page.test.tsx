@@ -226,6 +226,108 @@ describe("Sessions sidebar (M10)", () => {
   });
 });
 
+describe("Switching Chat Providers between turns (CHAT2-01)", () => {
+  const ANSWERS: Record<string, string> = { "exec-q1-cp-a": "Answer A1", "exec-q2-cp-b": "Answer B2" };
+
+  /** The turn (question + answer cards) that a question heads. */
+  const turnOf = (question: string) =>
+    screen.getByText(question).closest("div.space-y-4") as HTMLElement;
+
+  async function send(text: string) {
+    const input = await screen.findByLabelText("Message input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+  }
+
+  beforeEach(() => {
+    mocked.getChatProviders.mockResolvedValue([
+      cp({ id: "cp-a", name: "Provider A" }),
+      cp({ id: "cp-b", name: "Provider B" }),
+    ]);
+    localStorage.setItem(STORAGE_KEY_SELECTED_CHAT_PROVIDERS, JSON.stringify(["cp-a"]));
+    mocked.submitChat.mockImplementation(async (req) => ({
+      execution_id: `exec-${req.query === "Q1?" ? "q1" : "q2"}-${req.chat_provider_id}`,
+      session_id: "sess-1",
+      status: "accepted",
+    }));
+    mocked.getTrace.mockImplementation(
+      async (execId) =>
+        ({
+          execution_id: execId,
+          status: "complete",
+          started_at: "2026-11-04T10:00:00Z",
+          completed_at: "2026-11-04T10:00:02Z",
+          result: { answer: ANSWERS[execId], success: true, total_cost: 0 },
+          budget: { tokens_used: 10, cost_used: 0, steps_used: 1 },
+          steps: [],
+        }) as unknown as Awaited<ReturnType<typeof api.getTrace>>,
+    );
+    const msg = (cpId: string, role: string, content: string, ts: string, execId?: string) => ({
+      id: `${cpId}-${ts}`,
+      role,
+      content,
+      chat_provider_id: cpId,
+      chat_provider_name: cpId === "cp-a" ? "Provider A" : "Provider B",
+      execution_id: execId,
+      timestamp: ts,
+    });
+    mocked.getSession.mockResolvedValue({
+      id: "sess-1",
+      name: "Session",
+      created_at: "2026-11-04T10:00:00Z",
+      updated_at: "2026-11-04T10:01:00Z",
+      messages: [],
+      conversations: {
+        "cp-a": [
+          msg("cp-a", "user", "Q1?", "2026-11-04T10:00:00"),
+          msg("cp-a", "assistant", "Answer A1", "2026-11-04T10:00:02", "exec-q1-cp-a"),
+        ],
+        "cp-b": [
+          msg("cp-b", "user", "Q2?", "2026-11-04T10:01:00"),
+          msg("cp-b", "assistant", "Answer B2", "2026-11-04T10:01:02", "exec-q2-cp-b"),
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof api.getSession>>);
+  });
+
+  test("each turn keeps its own provider and answer, before and after reload", async () => {
+    const { unmount } = renderPage();
+    await send("Q1?");
+    await screen.findByText("Answer A1");
+
+    // Switch the selection to B only, then ask Q2.
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Provider B,/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Provider A,/ }));
+    await send("Q2?");
+    await screen.findByText("Answer B2");
+
+    // Before reload: Q1 still shows A's answer and no card for B.
+    expect(turnOf("Q1?")).toHaveTextContent("Answer A1");
+    expect(turnOf("Q1?")).not.toHaveTextContent("Provider B");
+    expect(turnOf("Q2?")).toHaveTextContent("Answer B2");
+    expect(turnOf("Q2?")).not.toHaveTextContent("Provider A");
+
+    // Reload: the session is rebuilt from the server's per-provider conversations.
+    unmount();
+    renderPage();
+    await screen.findByText("Q2?");
+    await waitFor(() => expect(turnOf("Q2?")).toHaveTextContent("Answer B2"));
+    expect(turnOf("Q1?")).toHaveTextContent("Answer A1");
+    expect(turnOf("Q1?")).not.toHaveTextContent("Answer B2");
+    expect(turnOf("Q1?")).not.toHaveTextContent("Provider B");
+    expect(turnOf("Q2?")).not.toHaveTextContent("Provider A");
+    // Questions stay in the order they were asked.
+    const q1 = screen.getByText("Q1?");
+    expect(q1.compareDocumentPosition(screen.getByText("Q2?")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The selection is the one Q2 was sent with, not every provider in the session.
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: /^Provider B,/ })).toHaveAttribute("aria-checked", "true"),
+    );
+    expect(screen.getByRole("checkbox", { name: /^Provider A,/ })).toHaveAttribute("aria-checked", "false");
+  });
+});
+
 describe("Multi-provider turn (Chat Lows)", () => {
   type Outcome = { answer: string; seconds: number; steps: number; status?: string };
 
