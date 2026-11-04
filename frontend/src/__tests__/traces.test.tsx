@@ -524,3 +524,69 @@ describe("TracesPage (M11)", () => {
     expect(screen.getByText(started.toLocaleTimeString())).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Browser pass 2 CHAT2-03 / CMP2-07: a failed trace says why it failed.
+// ---------------------------------------------------------------------------
+
+describe("TracesPage failed run (CHAT2-03, CMP2-07)", () => {
+  const failedTrace = (result: Record<string, unknown>) => ({
+    execution_id: "exec-1",
+    session_id: "sess-1",
+    query: "What is 2 + 2?",
+    mode: "rlm",
+    status: "error",
+    result: { answer: "", success: false, ...result },
+    budget: {
+      steps_used: 0,
+      steps_limit: 16,
+      tokens_used: 0,
+      tokens_limit: 0,
+      cost_used: 0,
+      cost_limit: 0,
+      max_depth_reached: 0,
+      depth_limit: 0,
+    },
+    steps: [],
+  });
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  function openTrace(trace: object) {
+    mockExecParam = "exec-1";
+    mockUseSWR.mockReturnValue({
+      data: [makeExecution({ status: "error" })],
+      isLoading: false,
+      mutate: vi.fn(),
+    } as unknown as ReturnType<typeof useSWR>);
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(trace)));
+    render(<TracesPage />);
+  }
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    mockExecParam = null;
+  });
+
+  test("shows the run's error and the answer that explains the stop", async () => {
+    openTrace(
+      failedTrace({
+        error: "Context window exceeded: 53,839 tokens > 32,768",
+        answer: "The run stopped: the document does not fit. Use RLM or a larger context window.",
+      }),
+    );
+    const reason = await screen.findByRole("region", { name: "Why this run failed" });
+    expect(reason).toHaveTextContent("Context window exceeded: 53,839 tokens > 32,768");
+    expect(reason).toHaveTextContent("Use RLM or a larger context window.");
+  });
+
+  test("an answer that only repeats the error is shown once", async () => {
+    openTrace(failedTrace({ error: "Timed out after 120 s", answer: "Timed out after 120 s" }));
+    const reason = await screen.findByRole("region", { name: "Why this run failed" });
+    expect(reason.textContent?.match(/Timed out after 120 s/g)).toHaveLength(1);
+  });
+
+  test("a successful run shows no failure panel", async () => {
+    openTrace({ ...failedTrace({ answer: "4", success: true }), status: "complete" });
+    await screen.findByText("Query");
+    expect(screen.queryByRole("region", { name: "Why this run failed" })).not.toBeInTheDocument();
+  });
+});

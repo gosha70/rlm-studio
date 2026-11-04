@@ -110,6 +110,27 @@ function TraceDetailPanel({
         </CardContent>
       </Card>
 
+      {/* A failed run says why: its error, and the answer, which carries the
+          cause and the fix for budget and timeout stops. */}
+      {!trace.result.success && (trace.result.error || trace.result.answer) && (
+        <Card className={innerBg} role="region" aria-label="Why this run failed">
+          <CardContent className="space-y-3 p-4 text-sm">
+            {trace.result.error && (
+              <div>
+                <p className="text-xs text-muted-foreground">Error</p>
+                <p className="whitespace-pre-wrap break-words text-destructive">{trace.result.error}</p>
+              </div>
+            )}
+            {trace.result.answer && trace.result.answer !== trace.result.error && (
+              <div>
+                <p className="text-xs text-muted-foreground">Answer</p>
+                <p className="whitespace-pre-wrap break-words">{trace.result.answer}</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Tabbed views */}
       <Tabs defaultValue="timeline">
         <TabsList className={innerBg}>
