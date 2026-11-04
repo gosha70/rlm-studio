@@ -42,6 +42,8 @@ interface SidebarProps {
   onRenameSession?: (id: string, name: string) => void;
 }
 
+const LOGO_SIZE_PX = 28;
+
 const NAV_ITEMS = [
   { href: "/", label: "Chat", icon: MessageSquare },
   { href: "/compare", label: "LLM Tuner", icon: SlidersHorizontal },
@@ -131,10 +133,12 @@ export function Sidebar({
           <Image
             src={`${BASE_PATH}/logo.png`}
             alt={PRODUCT_NAME}
-            width={28}
-            height={28}
+            width={LOGO_SIZE_PX}
+            height={LOGO_SIZE_PX}
             className="shrink-0 rounded-full"
-            style={{ width: "auto", height: "auto" }}
+            // Fixed display width: the unoptimized bundle serves the full-size
+            // file, which "auto" would render at its natural 671 px.
+            style={{ width: LOGO_SIZE_PX, height: "auto" }}
           />
           {!collapsed && <span className="text-sm font-semibold">{PRODUCT_NAME}</span>}
         </div>

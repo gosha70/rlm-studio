@@ -75,4 +75,9 @@ describe("Sidebar logo (owner #1)", () => {
     const src = screen.getByRole("img", { name: "RLM Studio" }).getAttribute("src") ?? "";
     expect(decodeURIComponent(src)).toContain("/studio/logo.png");
   });
+
+  test("the logo is shown at a fixed size, not the file's natural size", () => {
+    render(<Sidebar collapsed={false} onToggle={vi.fn()} />);
+    expect(screen.getByRole("img", { name: "RLM Studio" }).style.width).toBe("28px");
+  });
 });
