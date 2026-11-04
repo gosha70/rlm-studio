@@ -78,6 +78,15 @@ request model and use case imports one alias instead of repeating the set.
 ChatMode: TypeAlias = Literal["auto", "rlm", "direct", "rag", "compare", "rlm_official"]
 """Modes accepted by ``POST /api/chat``.  ``auto`` never resolves to ``rlm_official``."""
 
+MODE_DISPLAY_NAMES: Final[dict[str, str]] = {
+    MODE_DIRECT: "Direct",
+    MODE_RLM: "RLM",
+    MODE_RAG: "RAG",
+    MODE_RLM_OFFICIAL: "Official RLM (rlms)",
+}
+"""How a mode is spelled in text users read; matches the frontend's
+``MODE_DISPLAY_NAMES`` (``frontend/src/lib/constants.ts``)."""
+
 # Modes that use RLM internally (RLM run config applies)
 MODES_RLM_INTERNAL = frozenset({MODE_RLM, MODE_AUTO, MODE_COMPARE, MODE_RLM_OFFICIAL})
 

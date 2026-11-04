@@ -664,6 +664,45 @@ class TestPerSlotRLMSettings:
         # The direct slot should NOT inherit rlm_max_steps=999
         assert cfg.max_steps != 999
 
+    def test_direct_slot_gets_the_slot_max_time(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """M3: the LLM Tuner's Max time reaches Direct slots, not only RLM ones."""
+        from rlmstudio.application.use_cases import run_matrix_comparison as uc_mod
+
+        state = get_state()
+        cp = _make_chat_provider("Direct-CP")
+        cp.rlm_timeout_seconds = 5
+        state.config.chat_providers.append(cp)
+        _register_fake_adapters(state, {cp.id: "ok"})
+
+        captured_configs: list[Any] = []
+        real_execute_slot = uc_mod.RunMatrixComparisonUseCase._execute_slot
+
+        def _spy_execute_slot(
+            self: uc_mod.RunMatrixComparisonUseCase,
+            slot: uc_mod.MatrixSlotDTO,
+            content: str,
+            query: str,
+            base_config: Any,
+        ) -> Any:
+            captured_configs.append(slot.config)
+            return real_execute_slot(self, slot, content, query, base_config)
+
+        monkeypatch.setattr(uc_mod.RunMatrixComparisonUseCase, "_execute_slot", _spy_execute_slot)
+
+        resp = client.post(
+            "/api/chat/compare-matrix",
+            json={
+                "query": "q",
+                "content": "doc",
+                "chat_provider_ids": [cp.id],
+                "modes": ["direct"],
+            },
+        )
+        assert resp.status_code == 200
+        assert captured_configs[0].max_time_seconds == 5.0
+
 
 # ---------------------------------------------------------------------------
 # End-to-end: matrix → follow-up /api/chat on one of the providers

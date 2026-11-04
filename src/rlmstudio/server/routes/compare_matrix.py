@@ -848,13 +848,15 @@ def _build_slot_run_config(
     llm_provider = state.get_llm_provider(cp.llm_provider_id) if cp.llm_provider_id else None
     provider_key = (llm_provider.backend if llm_provider else None) or cp.llm_provider
     run_config = state.create_run_config(mode=mode, provider_key=provider_key)
+    # The slot's time limit (the LLM Tuner's "Max time", or the profile's)
+    # applies to every mode, not only the RLM ones.
+    run_config.max_time_seconds = float(cp.rlm_timeout_seconds)
 
     # Apply per-provider RLM knobs the same way /api/chat does.  The official
     # engine shares the step/time budgets but runs its own prompts, so the
     # profile system prompt applies to Studio's loop only.
     if mode in MODES_RLM_INTERNAL:
         run_config.max_steps = cp.rlm_max_steps
-        run_config.max_time_seconds = float(cp.rlm_timeout_seconds)
         run_config.repeat_limit = cp.rlm_repeat_limit
         run_config.nudge_at_fraction = cp.rlm_nudge_at_fraction
         if cp.profile_id and mode == MODE_RLM:
