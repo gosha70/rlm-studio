@@ -528,7 +528,7 @@ function SettingsPageInner() {
       }
     } catch (err) {
       console.error("Failed to delete chat provider:", err);
-      toast.error("Failed to delete Chat Provider");
+      toast.error(`Chat Provider not deleted: ${apiErrorMessage(err)}`);
     } finally {
       setDeletingId(null);
     }
@@ -764,15 +764,17 @@ function SettingsPageInner() {
     }
   };
 
-  const handleDeleteLLMProvider = async (id: string) => {
-    if (!confirm("Delete this LLM Provider? Any Chat Providers referencing it will stop working.")) return;
-    setDeletingLLMProviderId(id);
+  const handleDeleteLLMProvider = async (lp: LLMProviderConfig) => {
+    // The server refuses to delete a provider a Chat Provider still uses,
+    // so the dialog must not claim those Chat Providers "will stop working".
+    if (!confirm(`Delete LLM Provider "${lp.name}"? This cannot be undone.`)) return;
+    setDeletingLLMProviderId(lp.id);
     try {
-      await deleteLLMProvider(id);
+      await deleteLLMProvider(lp.id);
       mutateLLMProviders();
     } catch (err) {
       console.error("Failed to delete LLM provider:", err);
-      toast.error("Failed to delete LLM Provider");
+      toast.error(`LLM Provider not deleted: ${apiErrorMessage(err)}`);
     } finally {
       setDeletingLLMProviderId(null);
     }
@@ -1188,7 +1190,7 @@ function SettingsPageInner() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDeleteLLMProvider(lp.id)}
+                          onClick={() => handleDeleteLLMProvider(lp)}
                           disabled={deletingLLMProviderId === lp.id}
                         >
                           <Trash2 className="h-4 w-4" aria-hidden="true" />

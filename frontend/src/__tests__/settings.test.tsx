@@ -14,6 +14,7 @@ import { ProviderCard } from "@/components/settings/provider-card";
 import { ExecutionConfig } from "@/components/settings/execution-config";
 import useSWR from "swr";
 import {
+  deleteLLMProvider,
   getLLMProviderModelsForConfig,
   testLLMProviderConfig,
   testProvider,
@@ -986,6 +987,31 @@ describe("SettingsPage — Wave 3", () => {
     const option = await screen.findByRole("option", { name: new RegExp(longName) });
     expect(option).toHaveClass("wrap-anywhere");
     expect(screen.getByRole("listbox").closest("[class*='max-w-[calc(100vw-2rem)]']")).not.toBeNull();
+  });
+
+  test("deleting an LLM Provider in use shows the server's reason", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(deleteLLMProvider).mockRejectedValueOnce(
+      new Error(
+        'API error 409: {"error":{"code":"ERROR","message":"Cannot delete: referenced by Chat Provider(s): Qwen RLM","details":{}}}',
+      ),
+    );
+    vi.mocked(toast.error).mockClear();
+    stubSettingsData({ "llm-providers": [makeLLMProvider({ name: "Local Qwen" })] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    // The dialog no longer claims the Chat Providers "will stop working":
+    // the server refuses the delete instead.
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('"Local Qwen"'));
+    expect(confirmSpy).not.toHaveBeenCalledWith(expect.stringContaining("stop working"));
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "LLM Provider not deleted: Cannot delete: referenced by Chat Provider(s): Qwen RLM",
+      ),
+    );
+    confirmSpy.mockRestore();
   });
 
   test("a successful Budget save is confirmed", async () => {

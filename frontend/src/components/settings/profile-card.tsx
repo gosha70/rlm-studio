@@ -95,8 +95,8 @@ export function ProfileCard({
     try {
       await deleteProfile(profile.id);
       onDeleted?.();
-    } catch {
-      setMessage("Failed to delete profile");
+    } catch (err) {
+      setMessage(`Profile not deleted: ${apiErrorMessage(err)}`);
       setDeleting(false);
     }
   };
@@ -115,8 +115,8 @@ export function ProfileCard({
         prompt_template_name: profile.prompt_template_name,
       });
       onCloned?.();
-    } catch {
-      setMessage("Failed to clone profile");
+    } catch (err) {
+      setMessage(`Failed to clone profile: ${apiErrorMessage(err)}`);
     } finally {
       setCloning(false);
     }
@@ -620,12 +620,14 @@ export function ProfileCard({
           </div>
         )}
 
+        </CollapsibleContent>
+        {/* Outside the collapsible part: a refused delete must be visible
+            on a collapsed card, which is where the Delete button is. */}
         {message && (
           <p className="text-xs text-destructive mt-2" role="status">
             {message}
           </p>
         )}
-        </CollapsibleContent>
       </CardContent>
     </Card>
     {refining && (

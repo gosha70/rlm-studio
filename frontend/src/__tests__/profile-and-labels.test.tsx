@@ -174,6 +174,18 @@ describe("ProfileCard — read-only view", () => {
     ).toHaveClass("shrink-0");
   });
 
+  test("a refused delete is explained on the collapsed card", () => {
+    const profile = makeProfile();
+    render(
+      <ProfileCard
+        profile={profile}
+        chatProviders={[{ id: "cp-1", name: "Qwen RLM", profile_id: profile.id } as never]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: `Delete ${profile.name} profile` }));
+    expect(screen.getByRole("status")).toHaveTextContent("Cannot delete: used by Qwen RLM");
+  });
+
   test("displays the official engine's name for an rlm_official profile", () => {
     render(<ProfileCard profile={makeProfile({ strategy: MODE_RLM_OFFICIAL })} />);
     expect(screen.getByText(displayModeName(MODE_RLM_OFFICIAL))).toBeInTheDocument();
