@@ -55,9 +55,9 @@ only to keep the codebase conventions or ship the feature.
 
 ## Phase F — docs and closure (Team Lead + QA)
 
-- [ ] F1 `docs/rlm-prompt-tuning.md` section; `docs/rlm-studio-guide.md` Profiles paragraph; `CHANGELOG.md`. PROCESS (issue #78 lists documentation as a component area).
-- [ ] F2 Full backend suite and frontend suite green; lint 0. PROCESS (coding standards quality gates).
-- [ ] F3 Review summary written for the Code Review agent: files changed per phase, FR coverage table, known gaps from `spec.md` §6, and what was left out on purpose. PROCESS.
+- [x] F1 `docs/rlm-prompt-tuning.md` section; `docs/rlm-studio-guide.md` Profiles paragraph; `CHANGELOG.md`. PROCESS (issue #78 lists documentation as a component area).
+- [x] F2 Full backend suite and frontend suite green; lint 0. PROCESS (coding standards quality gates).
+- [x] F3 Review summary written for the Code Review agent: files changed per phase, FR coverage table, known gaps from `spec.md` §6, and what was left out on purpose. PROCESS. In `review-summary.md`.
 - [x] F4 File the follow-up enhancement issue (plan §6) and link it from #78. PROCESS. Done 2026-11-03: #114 filed, linked from #78. Whether #78 closes on this PR series or on #114 is still the owner's call.
 
 ## Build notes

@@ -87,6 +87,32 @@ Before shipping a prompt change, run these scenarios:
 
 The change is not ready if any of those scenarios regress materially in answer quality, step count, or completion behavior.
 
+## Evidence-Gated Refinement
+
+Settings → Profiles can propose a new RLM supplement from a profile's own failed runs and test it before anything changes. Open it with the flask button ("Refine RLM prompt") on a custom profile's card. Built-in profiles do not have it; clone one first.
+
+1. **Propose.** Tick runs of this profile to learn from: the list shows its recent RLM runs with their outcome and a "degraded" mark. Pick the Chat Provider that writes the proposal; it defaults to the one used by the newest ticked run. One model call reads a redacted digest of those runs, the profile's current RLM supplement and the fixed base prompt, and returns a candidate supplement with a short rationale. The panel shows the rationale, a diff, and the current supplement next to the candidate.
+2. **Evaluate.** Choose held-out cases from `benchmarks/longdoc-v1.yaml` (the cases tagged `holdout` are preselected), the repetitions (2–5), an evaluating Chat Provider that uses this profile, and optionally a judge. Before you start, the panel shows the run count: cases × repetitions × 2, one run with the current supplement and one with the candidate, at temperature 0. Cost is not estimated up front; it appears in telemetry afterwards. A case whose document is identical to one of the source runs is excluded automatically, so the candidate is never scored on the runs it came from.
+3. **Decide.** Results show each case's pass rate for the current and the candidate supplement, plus accuracy, judge, cost, step and outcome deltas. If the candidate passes a case with an expected answer less often than the current supplement, the case is flagged, Reject becomes the default, and Accept needs a tick to confirm. The flag is advisory: you can accept a trade-off on purpose, and the acknowledgement is recorded.
+4. **Roll back.** An accepted refinement can be rolled back while its text is still the profile's RLM prompt. Rollback restores the exact prior state; a profile that followed a prompt group follows that group again.
+
+What it guarantees:
+
+- Nothing changes the profile until you click **Accept**. Proposing, evaluating and rejecting never write it.
+- Accept refuses (409) when the profile's RLM prompt changed after the proposal was made.
+- Accept needs a complete evaluation: every chosen case and repetition ran for both supplements, and at least one case has an expected answer. Judge-only cases are reported but never gate.
+- The base prompt is never edited; only the profile's RLM supplement changes.
+- Every refinement keeps its evidence: source runs, the exact digest sent, proposal model and prompt version, case and run ids, deltas, the decision and any rollback. Download them as JSONL with **Export history** in the panel (`GET /api/profiles/{id}/refinements/export.jsonl`).
+
+Before you use it:
+
+- **Only RLM runs recorded by this version are listed.** Runs need the profile and a document hash, which older runs do not have.
+- **The digest goes to the proposal provider.** API-key and token shapes and lines like `password=…` are redacted, but a secret written in free text is not. Choose source runs and the provider accordingly; the stored digest shows exactly what was sent.
+- **Evaluation needs the benchmark dataset.** From a source checkout it is found automatically. An installed Studio needs `RLM_STUDIO_REFINEMENT_DATASET` pointing at a benchmark YAML; until then the case list and Evaluate return 503.
+- **One server process.** Refinement locks and the running-evaluation check are in-process. A restart marks a running evaluation `interrupted`; interrupted and failed refinements can only be rejected, so start a new one.
+- **Proposals are synchronous.** Under `npm run dev` a slow local model can exceed the frontend proxy timeout; the packaged app has no proxy.
+- If Accept or Roll back reports that the profile was saved but recording the decision failed, the profile holds the new text and the refinement's status is out of date. Check the "RLM prompt now" line in the panel; there is no automatic repair.
+
 ## Example Supplement
 
 ```text

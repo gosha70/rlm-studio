@@ -5,6 +5,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — evidence-gated prompt refinement for profile supplements (#78)
+
+- Settings → Profiles gets a **Refine RLM prompt** panel on custom profiles.
+  It proposes a new RLM supplement from runs of that profile that failed or
+  degraded, evaluates it against the current supplement on held-out
+  `longdoc-v1` cases, and lets you accept, reject or later roll back. See
+  `docs/rlm-prompt-tuning.md`, "Evidence-Gated Refinement".
+- **Proposal:** one model call through the versioned
+  `prompts/refine_supplement.yaml` over a redacted evidence digest, the
+  current supplement and the base prompt. The server computes the diff and
+  stores the exact digest sent.
+- **Evaluation:** baseline and candidate run through the Compare matrix path
+  at temperature 0 for 2–5 repetitions, with an optional judge. Cases whose
+  document matches a source run are excluded by content hash. A provider
+  failure leaves the evaluation incomplete instead of counting as a wrong
+  answer.
+- **Decisions:** nothing writes the profile except Accept and Rollback. Both
+  run under the config lock, re-check that the supplement is unchanged since
+  the proposal, and use a save that reports failure. A deterministic
+  regression is flagged, makes Reject the default, and needs an explicit
+  acknowledgement to accept. Rollback restores the exact prior RLM prompt
+  state, including following the prompt group again.
+- **Records and API:** a `refinements` table (telemetry migration 4, which
+  also adds `runs.profile_id` and `runs.content_sha256`) keeps each
+  proposal, evaluation, decision and rollback.
+  `/api/profiles/{id}/refinements/…` routes cover source runs, holdout cases,
+  create, list, get, evaluate, accept, reject, rollback and `export.jsonl`.
+  Benchmark dataset location for installs without a checkout:
+  `RLM_STUDIO_REFINEMENT_DATASET`.
+- Known limits of this first version (single process, no retry, no cost
+  estimate, a reported but unrepaired split-brain on a failed status write)
+  are listed in the docs; hardening is tracked in #114.
+
+### Fixed — profile edits keep custom prompts (#78)
+
+- Saving a profile card no longer sends `system_prompts: {}`, which wiped any
+  custom per-mode prompt on every unrelated edit. The card now has a custom
+  RLM prompt field; clone and export keep the prompts.
+- Profile edit and delete take the config lock and run off the event loop.
+
+### Changed — LiteLLM timeouts and connection errors are provider failures (#78)
+
+- `LiteLLMAdapter` raises `ProviderFailureError` (a `RuntimeError` subclass,
+  so existing handlers still catch it) for timeout and connection errors,
+  with the same message text as before. The result's `failure_kind` now says
+  a provider failed, so callers can tell an outage from a model answer.
+
 ### Added — batched, controller-dispatched subcalls (#77 item 3)
 
 - The v2 `subcall` action accepts `calls: [{prompt, query}, …]` as well as the

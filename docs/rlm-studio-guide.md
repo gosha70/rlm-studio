@@ -177,7 +177,8 @@ RLM Studio ships with four **built-in profiles** (marked with a lock icon, canno
 
 - **Activate** (play button) — apply the profile's settings as the new global defaults
 - **Clone** (copy button) — create an editable copy of any profile (including built-ins)
-- **Edit** (pencil button) — modify strategy, runtime settings, and budget inline (custom profiles only)
+- **Edit** (pencil button) — modify strategy, runtime settings, budget and the custom RLM prompt inline (custom profiles only). Leave the RLM prompt empty to follow the profile's prompt group.
+- **Refine RLM prompt** (flask button, custom profiles only) — propose a new RLM supplement from this profile's failed or degraded RLM runs, compare it with the current one on held-out benchmark cases, then accept, reject or later roll back. Nothing changes the profile until you accept, and every refinement's evidence is kept and exportable. See [Evidence-Gated Refinement](rlm-prompt-tuning.md#evidence-gated-refinement).
 - **Delete** (trash button) — remove a custom profile. Profiles referenced by Chat Providers cannot be deleted — reassign the Chat Providers first.
 
 ### Prompts
