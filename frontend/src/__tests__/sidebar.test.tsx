@@ -61,6 +61,30 @@ describe("Sidebar sessions (M10)", () => {
   });
 });
 
+describe("Long session names (SH2-1)", () => {
+  const LONG = "a".repeat(200);
+
+  test("no row sits inside a display:table box that grows with the name", () => {
+    renderSidebar({ sessions: [{ id: "s-long", name: LONG } as SessionSummary, SESSION] });
+    const aside = screen.getByRole("complementary");
+    for (const button of screen.getAllByRole("button", { name: /^Delete session / })) {
+      for (let el = button.parentElement; el && el !== aside; el = el.parentElement) {
+        expect(getComputedStyle(el).display).not.toBe("table");
+      }
+    }
+  });
+
+  test("a long name truncates in a shrinkable button and the full name is on hover", () => {
+    renderSidebar({ sessions: [{ id: "s-long", name: LONG } as SessionSummary] });
+    const name = screen.getByRole("button", { name: LONG });
+    expect(name.className.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "truncate"]));
+    expect(name).toHaveAttribute("title", LONG);
+    for (const label of [`Rename session ${LONG}`, `Delete session ${LONG}`]) {
+      expect(screen.getByRole("button", { name: label }).className.split(" ")).toContain("shrink-0");
+    }
+  });
+});
+
 describe("Sidebar logo (owner #1)", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

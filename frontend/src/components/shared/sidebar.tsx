@@ -23,7 +23,6 @@ import { cn } from "@/lib/utils";
 import { BASE_PATH, PRODUCT_NAME } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   getDiagnostics,
@@ -222,7 +221,9 @@ export function Sidebar({
               />
             </div>
           </div>
-          <ScrollArea className="flex-1 px-2 py-1">
+          {/* A plain scroller: Radix ScrollArea wraps content in display:table,
+              which lets a long name widen every row past the sidebar. */}
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-1">
             <div className="flex flex-col gap-0.5">
               {filteredSessions.map((s) => (
                 <div
@@ -242,13 +243,14 @@ export function Sidebar({
                         if (e.key === "Enter") commitRename();
                         if (e.key === "Escape") setEditingSessionId(null);
                       }}
-                      className="flex-1 truncate bg-transparent text-sm outline-none ring-1 ring-primary rounded px-1"
+                      className="min-w-0 flex-1 truncate bg-transparent text-sm outline-none ring-1 ring-primary rounded px-1"
                       aria-label="Rename session"
                     />
                   ) : (
                     <button
                       type="button"
                       className="min-w-0 flex-1 truncate text-left"
+                      title={s.name}
                       onClick={() => onSelectSession?.(s.id)}
                       onDoubleClick={() => startRename(s)}
                     >
@@ -297,7 +299,7 @@ export function Sidebar({
                 </p>
               )}
             </div>
-          </ScrollArea>
+          </div>
         </>
       )}
     </aside>
