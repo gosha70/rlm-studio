@@ -60,3 +60,19 @@ describe("Sidebar sessions (M10)", () => {
     expect(screen.getByRole("button", { name: "Delete session Orion notes" }).className.split(" ")).toContain("opacity-100");
   });
 });
+
+describe("Sidebar logo (owner #1)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  test("the logo URL carries the bundled UI's base path", async () => {
+    vi.stubEnv("NEXT_PUBLIC_BASE_PATH", "/studio");
+    vi.resetModules();
+    const { Sidebar: BundledSidebar } = await import("@/components/shared/sidebar");
+    render(<BundledSidebar collapsed={false} onToggle={vi.fn()} />);
+    const src = screen.getByRole("img", { name: "RLM Studio" }).getAttribute("src") ?? "";
+    expect(decodeURIComponent(src)).toContain("/studio/logo.png");
+  });
+});

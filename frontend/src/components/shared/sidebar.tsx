@@ -20,7 +20,7 @@ import {
   Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { PRODUCT_NAME } from "@/lib/branding";
+import { BASE_PATH, PRODUCT_NAME } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -129,7 +129,7 @@ export function Sidebar({
       <div className="flex h-14 items-center justify-between border-b px-3">
         <div className="flex items-center gap-2">
           <Image
-            src="/logo.png"
+            src={`${BASE_PATH}/logo.png`}
             alt={PRODUCT_NAME}
             width={28}
             height={28}
