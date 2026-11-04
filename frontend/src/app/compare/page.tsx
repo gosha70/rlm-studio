@@ -80,6 +80,7 @@ import {
   type CompareMatrixRequestV2,
 } from "@/lib/api";
 import { ALL_EXECUTION_MODES, displayModeName, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
+import { formatUsd, formatUsdTick } from "@/lib/format";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { useEngineAvailability } from "@/components/shared/use-engines";
 
@@ -1383,6 +1384,7 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
             {...(metric === "judge_score"
               ? { domain: [0, JUDGE_SCORE_MAX], ticks: JUDGE_SCORE_TICKS }
               : {})}
+            {...(metric === "cost" ? { tickFormatter: (v: number) => formatUsdTick(v) } : {})}
           />
           <YAxis
             type="category"
@@ -1416,7 +1418,7 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
               const v = Number(value);
               return [
                 metric === "cost"
-                  ? `$${v.toFixed(4)}`
+                  ? formatUsd(v)
                   : metric === "latency"
                     ? `${v.toFixed(1)}s`
                     : metric === "judge_score"

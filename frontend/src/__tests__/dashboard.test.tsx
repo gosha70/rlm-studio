@@ -526,4 +526,12 @@ describe("DashboardPage — Recent Executions", () => {
     expect(screen.getByText("Official RLM (rlms)")).toBeInTheDocument();
     expect(screen.queryByText(/rlm_official/i)).not.toBeInTheDocument();
   });
+
+  test("shows a tiny cost instead of $0.0000", () => {
+    renderDashboard({
+      ...makeMetrics(),
+      timeline: [makeTimelineEntry({ mode: "rag", cost_usd: 6e-7 })],
+    });
+    expect(screen.getByText("$0.0000006")).toBeInTheDocument();
+  });
 });

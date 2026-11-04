@@ -5,6 +5,7 @@ import { ChartContainer } from "./chart-container";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ModeSummary } from "@/lib/api";
 import { useChartTooltipStyle } from "./use-chart-tooltip";
+import { formatUsd, formatUsdTick } from "@/lib/format";
 
 interface ComparisonChartProps {
   rlmData: ModeSummary | undefined;
@@ -86,8 +87,12 @@ export function ComparisonChart({
               <BarChart width={w} height={h} data={costData} barCategoryGap="20%">
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="name" className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
-                <YAxis className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v) => `$${Number(v).toFixed(4)}`} />
+                <YAxis
+                  className="text-xs"
+                  tick={{ fill: "var(--color-muted-foreground)" }}
+                  tickFormatter={(v) => formatUsdTick(Number(v))}
+                />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v) => formatUsd(Number(v))} />
                 <Legend wrapperStyle={{ fontSize: "12px" }} />
                 {directData && <Bar dataKey="Direct" fill="#7c3aed" radius={[4, 4, 0, 0]} />}
                 {rlmData && <Bar dataKey="RLM" fill="#2563eb" radius={[4, 4, 0, 0]} />}

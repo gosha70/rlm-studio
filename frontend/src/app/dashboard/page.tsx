@@ -20,6 +20,7 @@ import { getSessions, getMetrics, getFailureMetrics, getEvaluationSummary, getSe
 import { JudgeDimensionsChart } from "@/components/metrics/judge-dimensions-chart";
 import { FailureBreakdown } from "@/components/metrics/failure-breakdown";
 import { displayModeName } from "@/lib/constants";
+import { formatUsd } from "@/lib/format";
 
 /** Shown in a summary card when there is no run to compute it from. */
 const NO_VALUE = "—";
@@ -215,7 +216,7 @@ export default function DashboardPage() {
                         {entry.tokens.toLocaleString()}
                       </TableCell>
                       <TableCell className="text-right">
-                        ${entry.cost_usd.toFixed(4)}
+                        {formatUsd(entry.cost_usd)}
                       </TableCell>
                       <TableCell className="text-right">
                         {entry.latency_seconds.toFixed(1)}s

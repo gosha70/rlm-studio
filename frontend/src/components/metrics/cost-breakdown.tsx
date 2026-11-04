@@ -5,6 +5,7 @@ import { ChartContainer } from "./chart-container";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useChartTooltipStyle } from "./use-chart-tooltip";
 import { displayProviderName } from "@/lib/constants";
+import { formatUsd } from "@/lib/format";
 
 interface CostBreakdownProps {
   data: Record<string, { queries: number; total_tokens: number; total_cost_usd: number; avg_latency_seconds: number }>;
@@ -42,7 +43,7 @@ export function CostBreakdown({ data, title = "Cost by Provider" }: CostBreakdow
                 ))}
               </Pie>
               <Tooltip
-                formatter={(value) => `$${Number(value).toFixed(4)}`}
+                formatter={(value) => formatUsd(Number(value))}
                 contentStyle={tooltipStyle}
               />
               <Legend wrapperStyle={{ fontSize: "12px" }} />
