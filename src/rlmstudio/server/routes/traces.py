@@ -154,6 +154,7 @@ async def delete_execution(
     """Delete a single execution from telemetry and in-memory state."""
     state.executions.pop(execution_id, None)
     state.telemetry.delete_run(execution_id)
+    _forget_message_metrics(state, {execution_id})
 
 
 @router.delete("/api/executions", status_code=204)
@@ -163,6 +164,29 @@ async def delete_all_executions(
     """Delete all executions from telemetry and in-memory state."""
     state.executions.clear()
     state.telemetry.delete_all_runs()
+    _forget_message_metrics(state, None)
+
+
+def _forget_message_metrics(state: AppState, execution_ids: set[str] | None) -> None:
+    """Drop the run metrics kept on chat messages for deleted executions.
+
+    The Dashboard counts an assistant message's ``metrics`` when its execution
+    has no telemetry row, so sessions from before telemetry still show. A
+    deleted execution has no row either, so without this its message was
+    counted again and the deleted run stayed on the Dashboard. The message
+    text is kept. ``None`` means every execution was deleted.
+    """
+    changed = False
+    for session in state.sessions.values():
+        for msg in session.messages:
+            exec_id = msg.get("execution_id")
+            if not exec_id or "metrics" not in msg:
+                continue
+            if execution_ids is None or exec_id in execution_ids:
+                del msg["metrics"]
+                changed = True
+    if changed:
+        state.save_sessions()
 
 
 def _trace_from_execution_record(execution: ExecutionRecord, state: AppState) -> TraceResponse:

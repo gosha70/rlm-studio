@@ -395,3 +395,62 @@ class TestFailureEndpointIntegration:
         assert data["failure_rate"] == 0.5
         cats = {c["category"]: c["count"] for c in data["by_category"]}
         assert cats["timeout"] == 1
+
+
+class TestDeletedExecutionsLeaveTheDashboard:
+    """Browser pre-pass H4: a deleted execution's chat message still carried
+    its metrics, and the Dashboard counts message metrics for executions with
+    no telemetry row (sessions from before telemetry), so the deleted run was
+    counted again and stayed in charts, timeline and failures."""
+
+    def _seed(self) -> TestClient:
+        reset_state()
+        state = get_state()
+        session = SessionRecord(id="s1", name="Test", created_at=_ts(), updated_at=_ts())
+        for run_id, ok in (("r1", True), ("r2", False)):
+            state.telemetry.record_run(
+                run_id=run_id,
+                created_at=_now(),
+                mode="direct",
+                provider="openai",
+                chat_provider_name="GPT-4o",
+                session_id="s1",
+                success=ok,
+                error=None if ok else "Request timeout",
+                answer="a" if ok else "",
+            )
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "content": "a",
+                    "execution_id": run_id,
+                    "metrics": {"total_tokens": 10, "success": ok},
+                }
+            )
+        # A message from before telemetry: no execution id, still counted.
+        session.messages.append(
+            {"role": "assistant", "content": "old", "metrics": {"total_tokens": 5}}
+        )
+        state.sessions["s1"] = session
+        state.save_sessions = lambda: None  # type: ignore[method-assign]
+        return TestClient(create_app())
+
+    def test_deleting_one_execution_removes_it_from_metrics_and_failures(self) -> None:
+        client = self._seed()
+        assert len(client.get("/api/metrics/s1").json()["timeline"]) == 3
+
+        assert client.delete("/api/executions/r2").status_code == 204
+
+        assert len(client.get("/api/metrics/s1").json()["timeline"]) == 2
+        failures = client.get("/api/metrics/failures/s1").json()
+        assert failures["total_runs"] == 2
+        assert failures["total_failures"] == 0
+
+    def test_clearing_all_executions_keeps_only_pre_telemetry_messages(self) -> None:
+        client = self._seed()
+
+        assert client.delete("/api/executions").status_code == 204
+
+        timeline = client.get("/api/metrics/s1").json()["timeline"]
+        assert len(timeline) == 1
+        assert client.get("/api/metrics/failures/s1").json()["total_failures"] == 0
