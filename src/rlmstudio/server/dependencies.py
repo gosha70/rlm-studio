@@ -254,6 +254,18 @@ class AppState:
         active = self.config.active_provider
         configs = self.config.provider_configs
 
+        # No legacy entries and the untouched default active provider: the
+        # user never configured a legacy provider, so there is nothing to
+        # repair.  Creating an entry here would make the Chat Provider
+        # migration invent an "OpenAI (gpt-4o)" provider on restart.
+        defaults = ConfigResponse.model_fields
+        if (
+            not configs
+            and active == defaults["active_provider"].default
+            and self.config.active_model == defaults["active_model"].default
+        ):
+            return
+
         # Find the active provider's entry
         active_entry: ProviderConfig | None = None
         for pc in configs:
@@ -306,8 +318,12 @@ class AppState:
 
         Also performs a second pass to replace stale model IDs that are no longer
         present in the hardcoded catalog with the provider's current default model.
+
+        Only a config that predates LLM Providers is converted: once named LLM
+        Providers exist, an empty Chat Provider list is the user's choice (for
+        example, after deleting them all) and must not be refilled.
         """
-        if not self.config.chat_providers:
+        if not self.config.chat_providers and not self.config.llm_providers:
             now = datetime.now(timezone.utc)
             for pc in self.config.provider_configs:
                 if not pc.enabled:
