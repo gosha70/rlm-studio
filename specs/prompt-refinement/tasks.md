@@ -99,5 +99,5 @@ only to keep the codebase conventions or ship the feature.
 ## Owner tasks (human)
 
 - [ ] O1 Re-baseline `longdoc-v1` on the post-#77 loop before trusting evaluation numbers.
-- [ ] O2 Confirm or swap the six holdout cases after O1.
+- [ ] O2 Confirm or swap the six holdout cases after O1. O1 and O2 are tracked in #120 (assigned to the owner) so they stay open after #78 closes.
 - [x] O3 Confirm this minimal plan before Phase A starts. Confirmed 2026-11-03, recorded in #78.
