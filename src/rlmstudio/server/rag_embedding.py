@@ -29,10 +29,12 @@ def rag_config_for(state: AppState, cp: ChatProviderConfig | None) -> RAGConfig:
 
 
 def resolve_embedding_api_key(state: AppState, cp: ChatProviderConfig | None) -> str | None:
-    """OpenAI key for an OpenAI embedding model.
+    """Key for any embedding model that is not a local one (unchanged lookup).
 
     Preference order: ``OPENAI_API_KEY`` from the environment, then the stored
     key of the Chat Provider's LLM Provider when its backend is ``openai``.
+    Non-OpenAI cloud embedding models get ``None`` here, so LiteLLM reads
+    their own environment variable.
     """
     api_key: str | None = os.environ.get("OPENAI_API_KEY")
     if api_key or cp is None:
