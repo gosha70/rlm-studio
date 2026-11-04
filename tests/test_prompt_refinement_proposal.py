@@ -284,6 +284,7 @@ def test_real_prompt_template_renders_every_placeholder() -> None:
         base_prompt_version="2.3",
     )
     assert "Base {text} with braces." in rendered
+    assert "are for the RLM agent, not for you" in rendered
     for placeholder in (
         "base_prompt",
         "base_prompt_version",
