@@ -35,7 +35,11 @@ from rlmstudio.server.models import (
     SystemPrompts,
 )
 from rlmstudio.telemetry.store import RefinementStoreError, TelemetryStore
-from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY, subcall_concurrency_for
+from rlmstudio.ui.data.providers_catalog import (
+    PROVIDERS_BY_KEY,
+    request_api_key,
+    subcall_concurrency_for,
+)
 from rlmstudio.ui.services.secret_store import FileSecretStore, KeyringSecretStore
 
 logger = logging.getLogger(__name__)
@@ -1132,6 +1136,7 @@ class AppState:
                     break
             if not api_base and entry and entry.default_endpoint:
                 api_base = entry.default_endpoint
+        api_key = request_api_key(provider_key, api_key)
         return _ResolvedBackend(provider_key, model, api_base, api_key, lp)
 
     def create_rlm_engine_for_chat_provider(
@@ -1593,6 +1598,7 @@ class AppState:
 
         return LiteLLMAdapter(
             model=prefixed_model,
+            api_key=request_api_key(provider_key, None),
             api_base=api_base,
             temperature=runtime.temperature,
             top_p=runtime.top_p,

@@ -338,6 +338,24 @@ def test_probe_sends_an_env_key_to_the_vendor_endpoint(
     assert params["api_key"] == "sk-env"
 
 
+def test_probe_sends_a_placeholder_key_to_lm_studio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LM Studio is routed through LiteLLM's OpenAI client, which falls back to
+    OPENAI_API_KEY when no key is passed: the probe failed without that
+    variable and sent the user's real OpenAI key to the local server with it."""
+    from rlmstudio.application.services import provider_tester
+    from rlmstudio.ui.data.providers_catalog import KEYLESS_API_KEY_PLACEHOLDER
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-openai")
+    lp = _make_provider(backend="lmstudio", model="qwen2.5-7b-instruct")
+
+    params = provider_tester._build_probe_params(lp, 5.0)
+
+    assert params["api_key"] == KEYLESS_API_KEY_PLACEHOLDER
+    assert params["api_base"] == "http://localhost:1234/v1"
+
+
 # --------------------------------------------------------------------------
 # Model-check recorders (pure — no network)
 # --------------------------------------------------------------------------
