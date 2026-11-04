@@ -153,6 +153,16 @@ function _isSlotFailed(slot: CompareMatrixSlotResponse): boolean {
   return a.startsWith("\u26a0\ufe0f") || a.startsWith("Error:");
 }
 
+/**
+ * The slot's label with its mode spelled for people. The server builds
+ * labels as "<provider> · <mode id>", which shows `rlm_official` raw.
+ */
+function _slotLabel(slot: CompareMatrixSlotResponse): string {
+  const rawSuffix = ` · ${slot.mode}`;
+  if (!slot.label.endsWith(rawSuffix)) return slot.label;
+  return `${slot.label.slice(0, -rawSuffix.length)} · ${displayModeName(slot.mode)}`;
+}
+
 /** Human-friendly error message — strip raw JSON/stack traces. */
 function _friendlyError(slot: CompareMatrixSlotResponse): string {
   // Markdown emphasis from the server's message is noise in plain text.
@@ -1149,7 +1159,7 @@ function ResultsPanel({
             <div className="flex items-center gap-2">
               <Trophy className="h-4 w-4 text-amber-500" />
               <span className="font-medium">Best:</span>
-              <span>{bestSlot.label}</span>
+              <span>{_slotLabel(bestSlot)}</span>
             </div>
           ) : (
             <div className="text-destructive">No successful slots</div>
@@ -1216,7 +1226,7 @@ function ResultsPanel({
           <JudgeDimensionsChart
             judgeScores={Object.values(judgeScores)}
             providerNames={Object.fromEntries(
-              result.slots.map((s) => [s.chat_provider_id, s.label])
+              result.slots.map((s) => [s.chat_provider_id, _slotLabel(s)])
             )}
           />
         )}
@@ -1319,7 +1329,7 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
       }
       const failed = _isSlotFailed(s);
       return {
-        name: s.label,
+        name: _slotLabel(s),
         failed,
         value: failed ? null : value,
         success: !failed,
@@ -1453,7 +1463,7 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
           ) : rank === 1 ? (
             <Trophy className="h-4 w-4 text-amber-500" />
           ) : null}
-          <span className="text-sm font-semibold">{slot.label}</span>
+          <span className="text-sm font-semibold">{_slotLabel(slot)}</span>
           <EngineBadge mode={slot.mode} />
         </div>
         {rank !== null && (

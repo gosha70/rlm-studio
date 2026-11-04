@@ -274,9 +274,9 @@ describe("Judge Score chart", () => {
 
   test("a failed or unjudged slot shows no score, not 0.0/5", async () => {
     const tooltip = await judgeAndRankByScore();
-    expect(tooltip).toHaveTextContent("Ollama Llama · direct: 4.5/5");
-    expect(tooltip).toHaveTextContent("LM Studio Qwen · direct: Not judged");
-    expect(tooltip).toHaveTextContent("Mock vLLM · direct: Failed — no result");
+    expect(tooltip).toHaveTextContent("Ollama Llama · Direct: 4.5/5");
+    expect(tooltip).toHaveTextContent("LM Studio Qwen · Direct: Not judged");
+    expect(tooltip).toHaveTextContent("Mock vLLM · Direct: Failed — no result");
     expect(tooltip).not.toHaveTextContent("0.0/5");
   });
 
@@ -285,5 +285,23 @@ describe("Judge Score chart", () => {
     const axis = screen.getAllByTestId("chart-value-axis")[0];
     expect(JSON.parse(axis.dataset.domain!)).toEqual([0, 5]);
     expect(JSON.parse(axis.dataset.ticks!)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+});
+
+describe("Slot labels", () => {
+  test("spell the official engine for people, never as rlm_official", async () => {
+    const official = makeSlot({ mode: "rlm_official", label: "LM Studio Qwen · rlm_official" });
+    await runWith([official]);
+
+    const label = "LM Studio Qwen · Official RLM (rlms)";
+    expect(within(card(official)).getByText(label)).toBeInTheDocument();
+    expect(screen.getByTestId("chart-tooltip")).toHaveTextContent(label);
+    expect(document.body.textContent).not.toMatch(/rlm_official/i);
+  });
+
+  test("leave a label the server already spelled alone", async () => {
+    const custom = makeSlot({ label: "My custom slot" });
+    await runWith([custom]);
+    expect(within(card(custom)).getByText("My custom slot")).toBeInTheDocument();
   });
 });

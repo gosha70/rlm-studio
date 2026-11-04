@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { getSessions, getMetrics, getFailureMetrics, getEvaluationSummary, getSessionEvaluations, resetSessionEvaluations, type SessionSummary, type MetricsResponse, type FailureMetricsResponse, type EvaluationSummaryResponse, type SessionEvaluations } from "@/lib/api";
 import { JudgeDimensionsChart } from "@/components/metrics/judge-dimensions-chart";
 import { FailureBreakdown } from "@/components/metrics/failure-breakdown";
+import { displayModeName } from "@/lib/constants";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -180,7 +181,7 @@ export default function DashboardPage() {
                     >
                       <TableCell>{i + 1}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{entry.mode.toUpperCase()}</Badge>
+                        <Badge variant="outline">{displayModeName(entry.mode)}</Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">
                         {entry.chat_provider_name || entry.provider || "—"}

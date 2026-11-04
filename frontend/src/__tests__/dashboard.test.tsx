@@ -443,3 +443,28 @@ describe("FailureBreakdown", () => {
     expect(screen.getByText(/2 of 5 runs failed/i)).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Dashboard page — wording and empty states
+// ---------------------------------------------------------------------------
+
+function renderDashboard(metrics: MetricsResponse | undefined, sessions = makeSessions()) {
+  mockUseSWR
+    .mockReturnValueOnce({ data: sessions, isLoading: false } as ReturnType<typeof useSWR>)
+    .mockReturnValueOnce({ data: metrics, isLoading: false } as ReturnType<typeof useSWR>)
+    .mockReturnValueOnce(noData) // failureMetrics
+    .mockReturnValueOnce(noData) // evalSummary
+    .mockReturnValueOnce(noData); // evalDetail
+  return render(<DashboardPage />);
+}
+
+describe("DashboardPage — Recent Executions", () => {
+  test("labels the official engine's runs by name, not RLM_OFFICIAL", () => {
+    renderDashboard({
+      ...makeMetrics(),
+      timeline: [makeTimelineEntry({ mode: "rlm_official", chat_provider_name: "Official Llama" })],
+    });
+    expect(screen.getByText("Official RLM (rlms)")).toBeInTheDocument();
+    expect(screen.queryByText(/rlm_official/i)).not.toBeInTheDocument();
+  });
+});
