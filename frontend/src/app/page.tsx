@@ -93,14 +93,9 @@ export default function ChatPage() {
   // which would reset the selection to the first available provider.
   const [hydrated, setHydrated] = useState(false);
 
-  // Hydrate from localStorage after mount to avoid SSR/client mismatch
-  // Track whether the provider-filter effect has seen the hydrated selection.
-  // Without this, React may batch setSelectedChatProviderIds and setHydrated
-  // together, causing the filter effect to see hydrated=true but still the
-  // initial empty [] for selectedChatProviderIds — then it overwrites the
-  // restored selection with the first available provider.
-  const selectionHydratedRef = useRef(false);
-
+  // Hydrate from localStorage after mount to avoid SSR/client mismatch.
+  // The restored selection and `hydrated` are set in the same effect, so they
+  // reach the provider-cleanup effect below in the same render.
   useEffect(() => {
     try {
       migrateLegacyStorageKeys();
@@ -115,7 +110,6 @@ export default function ChatPage() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setSelectedChatProviderIds(parsed);
-          selectionHydratedRef.current = true;
         }
       }
     } catch {}
@@ -249,17 +243,12 @@ export default function ChatPage() {
   // IDs whose backing LLM provider is now offline/unconfigured (mirrors the
   // availability filter in ChatProviderSelector).
   // Guard: skip until localStorage has been read so we don't clobber the
-  // persisted selection with an empty initial state.
+  // persisted selection with an empty initial state. Runs again whenever the
+  // selection changes (localStorage, a reopened session), so a provider that
+  // went offline can never stay selected and run.
   useEffect(() => {
     if (!hydrated) return;
     if (chatProviders.length === 0) return;
-    // On the first run after hydration, if a selection was restored from
-    // localStorage, skip the filter — React may not have flushed the
-    // hydrated selection into selectedChatProviderIds yet.
-    if (selectionHydratedRef.current) {
-      selectionHydratedRef.current = false;
-      return;
-    }
     let availableIds: Set<string>;
     if (llmProviders.length > 0) {
       const providerMap = new Map(llmProviders.map((p) => [p.id, p]));
@@ -278,10 +267,14 @@ export default function ChatPage() {
     const filtered = selectedChatProviderIds.filter((id) => availableIds.has(id));
     if (filtered.length !== selectedChatProviderIds.length || filtered.length === 0) {
       const first = [...availableIds][0];
-      setSelectedChatProviderIds(filtered.length > 0 ? filtered : first ? [first] : []);
+      const next = filtered.length > 0 ? filtered : first ? [first] : [];
+      // Only set a different selection: this effect depends on it.
+      const unchanged =
+        next.length === selectedChatProviderIds.length &&
+        next.every((id, i) => id === selectedChatProviderIds[i]);
+      if (!unchanged) setSelectedChatProviderIds(next);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatProviders, llmProviders, hydrated]);
+  }, [chatProviders, llmProviders, hydrated, selectedChatProviderIds]);
 
   // Load session messages and reconstruct turns
   useEffect(() => {

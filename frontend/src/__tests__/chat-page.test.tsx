@@ -3,10 +3,12 @@
  *
  * - M7: upload rejections carry the server's reason; empty and oversized
  *   files are refused before any bytes are sent.
+ * - M8: a Chat Provider whose LLM provider went offline is dropped from the
+ *   selection restored from localStorage, so it cannot run.
  */
 
 import React from "react";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { vi, describe, test, expect, beforeEach } from "vitest";
 
@@ -32,6 +34,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 import { toast } from "sonner";
 import * as api from "@/lib/api";
 import ChatPage from "@/app/page";
+import { STORAGE_KEY_SELECTED_CHAT_PROVIDERS } from "@/lib/branding";
 import type { ChatProviderConfig, LLMProviderConfig } from "@/lib/api";
 
 const mocked = vi.mocked(api);
@@ -150,5 +153,46 @@ describe("uploadFile error reason (M7)", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("Chat Provider selection (M8)", () => {
+  async function sendMessage(text: string) {
+    const input = await screen.findByLabelText("Message input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+  }
+
+  beforeEach(() => {
+    mocked.submitChat.mockResolvedValue({ execution_id: "exec-1", session_id: "sess-1", status: "accepted" });
+    mocked.getTrace.mockReturnValue(new Promise(() => {}));
+    mocked.getChatProviders.mockResolvedValue([
+      cp({ id: "cp-on", name: "Online", llm_provider_id: "llmp-on" }),
+      cp({ id: "cp-off", name: "Offline", llm_provider_id: "llmp-off" }),
+      cp({ id: "cp-on2", name: "Online 2", llm_provider_id: "llmp-on" }),
+    ]);
+    mocked.getLLMProviders.mockResolvedValue([
+      llm({ id: "llmp-on", status: "connected" }),
+      llm({ id: "llmp-off", status: "offline" }),
+    ]);
+  });
+
+  test("a saved provider that went offline is not used to run", async () => {
+    localStorage.setItem(STORAGE_KEY_SELECTED_CHAT_PROVIDERS, JSON.stringify(["cp-off"]));
+    renderPage();
+    await sendMessage("hello");
+    await waitFor(() => expect(mocked.submitChat).toHaveBeenCalled());
+    const used = mocked.submitChat.mock.calls.map(([req]) => req.chat_provider_id);
+    expect(used).not.toContain("cp-off");
+    expect(used).toEqual(["cp-on"]);
+  });
+
+  test("a saved online selection is kept, not reset to the first provider", async () => {
+    localStorage.setItem(STORAGE_KEY_SELECTED_CHAT_PROVIDERS, JSON.stringify(["cp-on2"]));
+    renderPage();
+    await sendMessage("hello");
+    await waitFor(() => expect(mocked.submitChat).toHaveBeenCalled());
+    expect(mocked.submitChat.mock.calls.map(([req]) => req.chat_provider_id)).toEqual(["cp-on2"]);
   });
 });
