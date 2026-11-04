@@ -5,8 +5,8 @@
  * and the Traces page.
  */
 
-import { render, screen, fireEvent } from "@testing-library/react";
-import { vi, describe, test, expect } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
 import { CodeBlock } from "@/components/trace/code-block";
 import { Timeline } from "@/components/trace/timeline";
 import { TraceTree } from "@/components/trace/trace-tree";
@@ -18,10 +18,12 @@ import type { TraceStep, ExecutionSummary } from "@/lib/api";
 // ---------------------------------------------------------------------------
 
 const mockRouterPush = vi.fn();
+const mockRouterReplace = vi.fn();
+let mockExecParam: string | null = null;
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: mockRouterPush }),
-  useSearchParams: () => ({ get: () => null }),
+  useRouter: () => ({ push: mockRouterPush, replace: mockRouterReplace }),
+  useSearchParams: () => ({ get: (key: string) => (key === "exec" ? mockExecParam : null) }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -435,5 +437,90 @@ describe("TracesPage", () => {
     fireEvent.keyDown(button, { key: " " });
 
     expect(screen.queryByText(/Loading trace/i)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Browser pre-pass M11: Delete N confirms, the open trace is in the URL, and
+// each run shows when it started.
+// ---------------------------------------------------------------------------
+
+describe("TracesPage (M11)", () => {
+  const TRACE = {
+    execution_id: "exec-1",
+    session_id: "sess-1",
+    query: "What is 2 + 2?",
+    mode: "rlm",
+    status: "complete",
+    result: { answer: "4", success: true },
+    budget: {
+      steps_used: 1,
+      steps_limit: 16,
+      tokens_used: 300,
+      tokens_limit: 0,
+      cost_used: 0,
+      cost_limit: 0,
+      max_depth_reached: 0,
+      depth_limit: 0,
+    },
+    steps: [],
+  };
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let confirmSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockExecParam = null;
+    mockRouterReplace.mockClear();
+    mockUseSWR.mockReturnValue({ data: [makeExecution()], isLoading: false, mutate: vi.fn() } as unknown as ReturnType<
+      typeof useSWR
+    >);
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(TRACE)));
+    confirmSpy = vi.spyOn(window, "confirm");
+  });
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    confirmSpy.mockRestore();
+    mockExecParam = null;
+  });
+
+  const deleteRequests = () =>
+    fetchSpy.mock.calls.filter((call: unknown[]) => (call[1] as RequestInit | undefined)?.method === "DELETE");
+
+  test("Delete N asks first and deletes nothing when cancelled", () => {
+    confirmSpy.mockReturnValue(false);
+    render(<TracesPage />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Select trace: What is 2 \+ 2/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Delete 1/ }));
+    expect(confirmSpy).toHaveBeenCalledWith("Delete 1 selected trace? This cannot be undone.");
+    expect(deleteRequests()).toHaveLength(0);
+  });
+
+  test("Delete N deletes once confirmed", async () => {
+    confirmSpy.mockReturnValue(true);
+    render(<TracesPage />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Select trace: What is 2 \+ 2/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Delete 1/ }));
+    await waitFor(() => expect(deleteRequests()).toHaveLength(1));
+  });
+
+  test("opening a trace puts its id in the URL", async () => {
+    render(<TracesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /Expand trace for: What is 2 \+ 2/ }));
+    await waitFor(() => expect(mockRouterReplace).toHaveBeenCalledWith("/traces?exec=exec-1", { scroll: false }));
+  });
+
+  test("a trace named in the URL opens on load without the URL being cleared", async () => {
+    mockExecParam = "exec-1";
+    render(<TracesPage />);
+    expect(await screen.findByRole("button", { name: /Collapse trace for: What is 2 \+ 2/ })).toBeInTheDocument();
+    expect(mockRouterReplace).not.toHaveBeenCalled();
+  });
+
+  test("each run shows when it started", () => {
+    render(<TracesPage />);
+    expect(screen.getByRole("columnheader", { name: "Started" })).toBeInTheDocument();
+    const started = new Date("2024-01-01T00:00:00Z");
+    expect(screen.getByText(started.toLocaleDateString())).toBeInTheDocument();
+    expect(screen.getByText(started.toLocaleTimeString())).toBeInTheDocument();
   });
 });

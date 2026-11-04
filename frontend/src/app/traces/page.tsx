@@ -68,7 +68,9 @@ function TraceDetailPanel({
     ? "data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:ring-1 data-[state=active]:ring-zinc-400 dark:data-[state=active]:bg-zinc-700 dark:data-[state=active]:ring-zinc-500"
     : "data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:ring-1 data-[state=active]:ring-zinc-400 dark:data-[state=active]:bg-zinc-950 dark:data-[state=active]:ring-zinc-600";
   return (
-    <div className="flex flex-col gap-4">
+    // Inline-size containment: long code or output scrolls or truncates inside
+    // the panel instead of widening the table and pushing columns out of view.
+    <div className="flex flex-col gap-4 [contain:inline-size]">
       {/* Summary bar */}
       <Card className={innerBg}>
         <CardContent className="flex flex-wrap items-center gap-4 p-4">
@@ -236,12 +238,17 @@ function PerformanceTab({ steps }: { steps: TraceStep[] }) {
   );
 }
 
+/** Query parameter holding the open trace's execution id (also used by Dashboard links). */
+const EXEC_PARAM = "exec";
+
 function TracesPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [trace, setTrace] = useState<TraceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Start in the loading state when the URL names a trace, so the URL sync
+  // below does not drop the id before the mount effect has loaded it.
+  const [loading, setLoading] = useState(() => Boolean(searchParams.get(EXEC_PARAM)));
   const [selectedStep, setSelectedStep] = useState<TraceStep | null>(null);
   const [filterProviderId, setFilterProviderId] = useState<string>("");
   const [filterSessionId, setFilterSessionId] = useState<string>("");
@@ -301,6 +308,8 @@ function TracesPageInner() {
 
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
+    const count = selectedIds.size;
+    if (!window.confirm(`Delete ${count} selected trace${count === 1 ? "" : "s"}? This cannot be undone.`)) return;
     setDeleting(true);
     try {
       await Promise.all([...selectedIds].map((id) => deleteExecution(id)));
@@ -350,12 +359,24 @@ function TracesPageInner() {
 
   // Auto-load trace when navigated from Dashboard with ?exec=<id>
   useEffect(() => {
-    const execId = searchParams.get("exec");
+    const execId = searchParams.get(EXEC_PARAM);
     if (execId) {
       handleSelectExecution(execId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep the open trace in the URL, so a reload or coming Back to this page
+  // reopens it (the effect above reads it on mount).
+  const openExecutionId = trace?.execution_id ?? null;
+  useEffect(() => {
+    if (loading) return;
+    if (searchParams.get(EXEC_PARAM) === openExecutionId) return;
+    router.replace(
+      openExecutionId ? `/traces?${EXEC_PARAM}=${encodeURIComponent(openExecutionId)}` : "/traces",
+      { scroll: false },
+    );
+  }, [openExecutionId, loading, router, searchParams]);
 
   return (
     <AppShell>
@@ -445,6 +466,7 @@ function TracesPageInner() {
                       />
                     </TableHead>
                     <TableHead>Query</TableHead>
+                    <TableHead>Started</TableHead>
                     <TableHead>Chat Provider</TableHead>
                     <TableHead>Mode</TableHead>
                     <TableHead>Status</TableHead>
@@ -510,6 +532,16 @@ function TracesPageInner() {
                       <TableCell className="max-w-[300px] truncate font-medium">
                         {exec.query}
                       </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                        {exec.started_at ? (
+                          <>
+                            <div>{new Date(exec.started_at).toLocaleDateString()}</div>
+                            <div>{new Date(exec.started_at).toLocaleTimeString()}</div>
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {exec.chat_provider_name || "—"}
                       </TableCell>
@@ -569,7 +601,7 @@ function TracesPageInner() {
                           className={stripeClass}
                         >
                           <TableCell
-                            colSpan={8}
+                            colSpan={9}
                             className="p-4"
                             // Don't let clicks inside the detail bubble
                             // up to the row click handler and toggle
