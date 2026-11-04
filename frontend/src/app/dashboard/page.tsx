@@ -19,7 +19,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { getSessions, getMetrics, getFailureMetrics, getEvaluationSummary, getSessionEvaluations, resetSessionEvaluations, type SessionSummary, type MetricsResponse, type FailureMetricsResponse, type EvaluationSummaryResponse, type SessionEvaluations } from "@/lib/api";
 import { JudgeDimensionsChart } from "@/components/metrics/judge-dimensions-chart";
 import { FailureBreakdown } from "@/components/metrics/failure-breakdown";
-import { displayModeName } from "@/lib/constants";
+import { displayModeName, displayProviderName } from "@/lib/constants";
+import { providerColorMap } from "@/components/metrics/series-colors";
 import { formatUsd } from "@/lib/format";
 
 /** Shown in a summary card when there is no run to compute it from. */
@@ -89,6 +90,19 @@ export default function DashboardPage() {
   // failures out), so with none of those there is nothing to show — not 0.
   const hasUsableRuns = Object.values(metrics?.by_mode ?? {}).some((m) => (m?.queries ?? 0) > 0);
 
+  const costData =
+    metrics?.by_chat_provider && Object.keys(metrics.by_chat_provider).length > 0
+      ? metrics.by_chat_provider
+      : metrics?.by_provider ?? {};
+  // One colour per Chat Provider across every chart on the page, so a
+  // provider is not blue in the cost pie and green in the trend line.
+  const providerColors = providerColorMap([
+    ...Object.keys(costData).map(displayProviderName),
+    ...(metrics?.timeline ?? []).map((e) => e.chat_provider_name || e.provider || "unknown"),
+    ...Object.keys(failureMetrics?.by_provider ?? {}),
+    ...Object.values(providerNames),
+  ]);
+
   return (
     <AppShell>
       <div className="mx-auto max-w-[1200px] space-y-6 p-6">
@@ -154,12 +168,7 @@ export default function DashboardPage() {
               ragData={metrics.by_mode.rag}
               officialData={metrics.by_mode.rlm_official}
             />
-            <CostBreakdown
-              data={metrics.by_chat_provider && Object.keys(metrics.by_chat_provider).length > 0
-                ? metrics.by_chat_provider
-                : metrics.by_provider}
-              title="Cost by Chat Provider"
-            />
+            <CostBreakdown data={costData} title="Cost by Chat Provider" colors={providerColors} />
           </div>
         )}
 
@@ -172,12 +181,12 @@ export default function DashboardPage() {
 
         {/* Performance trend */}
         {metrics && metrics.timeline.length > 0 && (
-          <PerformanceTrend timeline={metrics.timeline} />
+          <PerformanceTrend timeline={metrics.timeline} colors={providerColors} />
         )}
 
         {/* Failure breakdown */}
         {failureMetrics && (
-          <FailureBreakdown data={failureMetrics} />
+          <FailureBreakdown data={failureMetrics} colors={providerColors} />
         )}
 
         {/* Recent executions table */}
@@ -234,6 +243,7 @@ export default function DashboardPage() {
           <JudgeDimensionsChart
             judgeScores={evalDetail.judge_scores}
             providerNames={providerNames}
+            colors={providerColors}
           />
         )}
 

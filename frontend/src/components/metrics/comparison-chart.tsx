@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ModeSummary } from "@/lib/api";
 import { useChartTooltipStyle } from "./use-chart-tooltip";
 import { formatUsd, formatUsdTick } from "@/lib/format";
+import { MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL } from "@/lib/constants";
+import { MODE_COLORS } from "./series-colors";
 
 interface ComparisonChartProps {
   rlmData: ModeSummary | undefined;
@@ -73,11 +75,11 @@ export function ComparisonChart({
                 <YAxis className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Legend wrapperStyle={{ fontSize: "12px" }} />
-                {directData && <Bar dataKey="Direct" fill="#7c3aed" radius={[4, 4, 0, 0]} />}
-                {rlmData && <Bar dataKey="RLM" fill="#2563eb" radius={[4, 4, 0, 0]} />}
-                {ragData && <Bar dataKey="RAG" fill="#10b981" radius={[4, 4, 0, 0]} />}
+                {directData && <Bar dataKey="Direct" fill={MODE_COLORS[MODE_DIRECT]} radius={[4, 4, 0, 0]} />}
+                {rlmData && <Bar dataKey="RLM" fill={MODE_COLORS[MODE_RLM]} radius={[4, 4, 0, 0]} />}
+                {ragData && <Bar dataKey="RAG" fill={MODE_COLORS[MODE_RAG]} radius={[4, 4, 0, 0]} />}
                 {officialData && (
-                  <Bar dataKey={OFFICIAL_SERIES} fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey={OFFICIAL_SERIES} fill={MODE_COLORS[MODE_RLM_OFFICIAL]} radius={[4, 4, 0, 0]} />
                 )}
               </BarChart>
             )}
@@ -94,11 +96,11 @@ export function ComparisonChart({
                 />
                 <Tooltip contentStyle={tooltipStyle} formatter={(v) => formatUsd(Number(v))} />
                 <Legend wrapperStyle={{ fontSize: "12px" }} />
-                {directData && <Bar dataKey="Direct" fill="#7c3aed" radius={[4, 4, 0, 0]} />}
-                {rlmData && <Bar dataKey="RLM" fill="#2563eb" radius={[4, 4, 0, 0]} />}
-                {ragData && <Bar dataKey="RAG" fill="#10b981" radius={[4, 4, 0, 0]} />}
+                {directData && <Bar dataKey="Direct" fill={MODE_COLORS[MODE_DIRECT]} radius={[4, 4, 0, 0]} />}
+                {rlmData && <Bar dataKey="RLM" fill={MODE_COLORS[MODE_RLM]} radius={[4, 4, 0, 0]} />}
+                {ragData && <Bar dataKey="RAG" fill={MODE_COLORS[MODE_RAG]} radius={[4, 4, 0, 0]} />}
                 {officialData && (
-                  <Bar dataKey={OFFICIAL_SERIES} fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey={OFFICIAL_SERIES} fill={MODE_COLORS[MODE_RLM_OFFICIAL]} radius={[4, 4, 0, 0]} />
                 )}
               </BarChart>
             )}

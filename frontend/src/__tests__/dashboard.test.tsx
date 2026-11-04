@@ -28,17 +28,23 @@ vi.mock("recharts", () => {
     PieChart: Passthrough,
     // Marks which series a chart actually drew, keyed by dataKey.  Renders no
     // text, so it cannot collide with a getByText assertion.
-    Bar: ({ dataKey }: { dataKey?: string | number }) => (
-      <div data-testid={`bar-series-${String(dataKey)}`} />
+    Bar: ({ dataKey, fill }: { dataKey?: string | number; fill?: string }) => (
+      <div data-testid={`bar-series-${String(dataKey)}`} data-fill={fill} />
     ),
-    Line: () => null,
+    Line: ({ dataKey, stroke }: { dataKey?: string; stroke?: string }) => (
+      <div data-testid={`line-series-${dataKey}`} data-stroke={stroke} />
+    ),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Pie: ({ data }: { data?: Array<{ name: string; value: number }>; [k: string]: any }) => {
+    Pie: ({ data, children }: { data?: Array<{ name: string; value: number }>; [k: string]: any }) => {
       if (!data || data.length === 0) return null;
+      // The page colours each slice with a <Cell fill> child, in data order.
+      const fills = React.Children.toArray(children).map(
+        (c) => (c as React.ReactElement<{ fill?: string }>).props.fill,
+      );
       return (
         <div data-testid="pie-cells">
-          {data.map((entry) => (
-            <span key={entry.name} data-testid={`pie-entry-${entry.name}`}>
+          {data.map((entry, i) => (
+            <span key={entry.name} data-testid={`pie-entry-${entry.name}`} data-fill={fills[i]}>
               {entry.name}
             </span>
           ))}
@@ -310,8 +316,9 @@ describe("CostBreakdown", () => {
 // ---------------------------------------------------------------------------
 
 import useSWR from "swr";
-import type { MetricsResponse, SessionSummary } from "@/lib/api";
+import type { FailureMetricsResponse, MetricsResponse, SessionSummary } from "@/lib/api";
 import DashboardPage from "@/app/dashboard/page";
+import { MODE_COLORS, PROVIDER_PALETTE, providerColorMap } from "@/components/metrics/series-colors";
 
 const mockUseSWR = vi.mocked(useSWR);
 
@@ -460,11 +467,15 @@ describe("FailureBreakdown", () => {
 // Dashboard page — wording and empty states
 // ---------------------------------------------------------------------------
 
-function renderDashboard(metrics: MetricsResponse | undefined, sessions = makeSessions()) {
+function renderDashboard(
+  metrics: MetricsResponse | undefined,
+  sessions = makeSessions(),
+  failures?: FailureMetricsResponse,
+) {
   mockUseSWR
     .mockReturnValueOnce({ data: sessions, isLoading: false } as ReturnType<typeof useSWR>)
     .mockReturnValueOnce({ data: metrics, isLoading: false } as ReturnType<typeof useSWR>)
-    .mockReturnValueOnce(noData) // failureMetrics
+    .mockReturnValueOnce({ data: failures, isLoading: false } as ReturnType<typeof useSWR>)
     .mockReturnValueOnce(noData) // evalSummary
     .mockReturnValueOnce(noData); // evalDetail
   return render(<DashboardPage />);
@@ -545,5 +556,55 @@ describe("DashboardPage — Recent Executions", () => {
       timeline: [makeTimelineEntry({ mode: "rag", cost_usd: 6e-7 })],
     });
     expect(screen.getByText("$0.0000006")).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard chart colours", () => {
+  test("a provider's colour does not depend on the order a chart lists it", () => {
+    expect(providerColorMap(["Qwen RAG", "Qwen Direct", "Qwen RLM"])).toEqual(
+      providerColorMap(["Qwen RLM", "Qwen Direct", "Qwen RAG", "Qwen RAG"]),
+    );
+  });
+
+  test("providers never take a mode's colour", () => {
+    for (const modeColor of Object.values(MODE_COLORS)) {
+      expect(PROVIDER_PALETTE).not.toContain(modeColor);
+    }
+  });
+
+  test("each Chat Provider has the same colour in the cost pie, trend and failure charts", () => {
+    const provider = { queries: 1, total_tokens: 100, total_cost_usd: 0.01, avg_latency_seconds: 1 };
+    // Each source lists the providers in a different order.
+    const metrics: MetricsResponse = {
+      ...makeMetrics(),
+      by_chat_provider: { "Qwen RAG": provider, "Qwen RLM": provider, "Qwen Direct": provider },
+      timeline: [
+        makeTimelineEntry({ chat_provider_name: "Qwen Direct", mode: "direct" }),
+        makeTimelineEntry({ chat_provider_name: "Qwen RLM", mode: "rlm" }),
+        makeTimelineEntry({ chat_provider_name: "Qwen RAG", mode: "rag" }),
+      ],
+    };
+    const failures: FailureMetricsResponse = {
+      session_id: "sess-1",
+      total_runs: 3,
+      total_failures: 2,
+      failure_rate: 0.67,
+      by_category: [{ category: "timeout", count: 2 }],
+      by_mode: {},
+      by_provider: {
+        "Qwen RLM": [{ category: "timeout", count: 1 }],
+        "Qwen RAG": [{ category: "timeout", count: 1 }],
+      },
+    };
+    renderDashboard(metrics, makeSessions(), failures);
+
+    for (const name of ["Qwen RAG", "Qwen RLM", "Qwen Direct"]) {
+      const pie = screen.getByTestId(`pie-entry-${name}`).dataset.fill;
+      expect(pie).toBeTruthy();
+      expect(screen.getByTestId(`line-series-${name} (latency)`).dataset.stroke).toBe(pie);
+      if (name !== "Qwen Direct") {
+        expect(screen.getByTestId(`bar-series-${name}`).dataset.fill).toBe(pie);
+      }
+    }
   });
 });

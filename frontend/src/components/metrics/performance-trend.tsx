@@ -5,24 +5,15 @@ import { ChartContainer } from "./chart-container";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { TimelineEntry } from "@/lib/api";
 import { useChartTooltipStyle } from "./use-chart-tooltip";
+import { providerColorMap } from "./series-colors";
 
 interface PerformanceTrendProps {
   timeline: TimelineEntry[];
+  /** Provider name → colour, shared across the page's charts. */
+  colors?: Record<string, string>;
 }
 
-// Same palette as other dashboard charts
-const PROVIDER_COLORS = [
-  "#10b981", // emerald
-  "#6366f1", // indigo
-  "#a855f7", // purple
-  "#f97316", // orange
-  "#3b82f6", // blue
-  "#ec4899", // pink
-  "#14b8a6", // teal
-  "#eab308", // yellow
-];
-
-export function PerformanceTrend({ timeline }: PerformanceTrendProps) {
+export function PerformanceTrend({ timeline, colors }: PerformanceTrendProps) {
   const tooltipStyle = useChartTooltipStyle();
 
   // Group timeline entries by chat provider, then build one data point
@@ -30,6 +21,7 @@ export function PerformanceTrend({ timeline }: PerformanceTrendProps) {
   const providers = [...new Set(
     timeline.map((e) => e.chat_provider_name || e.provider || "unknown"),
   )];
+  const colorOf = { ...providerColorMap(providers), ...colors };
 
   // Build per-provider sequences: each provider gets its own query counter
   const providerCounters: Record<string, number> = {};
@@ -99,26 +91,26 @@ export function PerformanceTrend({ timeline }: PerformanceTrendProps) {
               />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend wrapperStyle={{ fontSize: "12px" }} />
-              {providers.map((name, i) => (
+              {providers.map((name) => (
                 <Line
                   key={`${name}-latency`}
                   yAxisId="latency"
                   type="monotone"
                   dataKey={`${name} (latency)`}
-                  stroke={PROVIDER_COLORS[i % PROVIDER_COLORS.length]}
+                  stroke={colorOf[name]}
                   strokeWidth={2}
                   dot={timeline.length < 30}
                   connectNulls
                   name={`${name} (latency)`}
                 />
               ))}
-              {providers.map((name, i) => (
+              {providers.map((name) => (
                 <Line
                   key={`${name}-tokens`}
                   yAxisId="tokens"
                   type="monotone"
                   dataKey={`${name} (tokens)`}
-                  stroke={PROVIDER_COLORS[i % PROVIDER_COLORS.length]}
+                  stroke={colorOf[name]}
                   strokeWidth={2}
                   strokeDasharray="5 5"
                   dot={false}

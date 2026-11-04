@@ -6,10 +6,13 @@ import { ChartContainer } from "./chart-container";
 import { CheckCircle2, Lightbulb } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useChartTooltipStyle } from "./use-chart-tooltip";
+import { providerColorMap } from "./series-colors";
 import type { FailureMetricsResponse, FailureCategory } from "@/lib/api";
 
 interface FailureBreakdownProps {
   data: FailureMetricsResponse;
+  /** Provider name → colour, shared across the page's charts. */
+  colors?: Record<string, string>;
 }
 
 // Exported so tests can assert on category coverage without reaching
@@ -30,19 +33,7 @@ export const ALL_CATEGORIES: FailureCategory[] = [
   "general_error",
 ];
 
-// Provider colors — same palette as judge-dimensions-chart
-const PROVIDER_COLORS = [
-  "#10b981", // emerald
-  "#6366f1", // indigo
-  "#a855f7", // purple
-  "#f97316", // orange
-  "#3b82f6", // blue
-  "#ec4899", // pink
-  "#14b8a6", // teal
-  "#eab308", // yellow
-];
-
-export function FailureBreakdown({ data }: FailureBreakdownProps) {
+export function FailureBreakdown({ data, colors }: FailureBreakdownProps) {
   const tooltipStyle = useChartTooltipStyle();
   const { total_runs, total_failures, failure_rate, by_provider, by_category } =
     data;
@@ -50,6 +41,7 @@ export function FailureBreakdown({ data }: FailureBreakdownProps) {
   // Build grouped chart data: one row per error category, one bar per provider.
   // Shape: [{ category: "Timeout", "vLLM-RLM": 1, "DIRECT-ANTHROPIC": 0, ... }, ...]
   const providers = Object.keys(by_provider);
+  const colorOf = { ...providerColorMap(providers), ...colors };
 
   const chartData = ALL_CATEGORIES
     .map((cat) => {
@@ -107,12 +99,12 @@ export function FailureBreakdown({ data }: FailureBreakdownProps) {
                     />
                     <Tooltip contentStyle={tooltipStyle} />
                     <Legend />
-                    {providers.map((provider, i) => (
+                    {providers.map((provider) => (
                       <Bar
                         key={provider}
                         dataKey={provider}
                         name={provider}
-                        fill={PROVIDER_COLORS[i % PROVIDER_COLORS.length]}
+                        fill={colorOf[provider]}
                         radius={[4, 4, 0, 0]}
                       />
                     ))}
