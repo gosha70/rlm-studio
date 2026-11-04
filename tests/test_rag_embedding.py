@@ -70,13 +70,30 @@ def test_lm_studio_embeddings_get_the_placeholder_key_and_default_endpoint(
     assert embedder._api_base == "http://localhost:1234/v1"
 
 
-def test_openai_embeddings_keep_the_openai_key_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("model", ["text-embedding-3-small", "openai/text-embedding-3-small"])
+def test_openai_embeddings_keep_the_openai_key_lookup(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-openai")
     state = _state_with()
 
-    embedder = rag_embedding.build_rag_embedder(
-        state, _cp(), RAGConfig(embedding_model="text-embedding-3-small")
-    )
+    embedder = rag_embedding.build_rag_embedder(state, _cp(), RAGConfig(embedding_model=model))
 
     assert embedder._api_key == "sk-real-openai"
     assert embedder._api_base is None
+
+
+@pytest.mark.parametrize(
+    "model", ["cohere/embed-english-v3.0", "gemini/text-embedding-004", "mistral/mistral-embed"]
+)
+def test_other_cloud_embeddings_never_get_the_openai_key(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """The embedding model is free text: a Cohere, Gemini or Mistral model
+    must not be handed the user's OpenAI key."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-openai")
+    state = _state_with()
+
+    embedder = rag_embedding.build_rag_embedder(state, _cp(), RAGConfig(embedding_model=model))
+
+    assert embedder._api_key is None
