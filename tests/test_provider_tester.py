@@ -514,3 +514,23 @@ def test_error_str_label_keeps_a_different_detail() -> None:
         result = test_provider(provider, timeout_s=5.0)
 
     assert result.error_message == "Bad gateway. upstream closed the connection"
+
+
+def test_a_masked_rejected_key_is_not_echoed_or_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """OpenAI's prefix + last-four echo must reach neither the result nor the DEBUG log."""
+    provider = _make_provider()
+    exc = RuntimeError(
+        "AuthenticationError - Incorrect API key provided: "
+        "sk-proj-********************************ERzz."
+    )
+
+    with (
+        caplog.at_level("DEBUG", logger="rlmstudio.application.provider_tester"),
+        patch("litellm.completion", side_effect=exc),
+    ):
+        result = test_provider(provider, timeout_s=5.0)
+
+    assert result.error_message is not None
+    for text in (result.error_message, caplog.text):
+        assert "sk-proj" not in text
+        assert "ERzz" not in text

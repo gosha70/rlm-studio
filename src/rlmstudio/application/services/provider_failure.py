@@ -47,6 +47,9 @@ SECRET_PLACEHOLDER = "<redacted>"  # nosec B105
 # the run path and the probe now surface auth failures to users, so the
 # patterns live here with the classifier rather than in one caller.
 _API_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # A key the provider already masked, e.g. OpenAI's rejected-key echo
+    # "sk-proj-****…ERzz": its prefix and last four still identify the key.
+    re.compile(r"[A-Za-z0-9_-]*\*{4,}[A-Za-z0-9_-]*"),
     # OpenAI-style sk-..., sk-proj-..., etc.
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
     # Anthropic-style

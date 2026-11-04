@@ -179,6 +179,18 @@ def test_redacts_every_known_key_shape(secret: str) -> None:
     assert SECRET_PLACEHOLDER in out
 
 
+def test_redacts_a_key_the_provider_masked() -> None:
+    """OpenAI echoes a rejected key as prefix + last four; neither may be shown."""
+    out = redact_secrets(
+        "Incorrect API key provided: sk-proj-********************************ERzz. "
+        "You can find your API key at https://platform.openai.com/account/api-keys."
+    )
+
+    assert "sk-proj" not in out
+    assert "ERzz" not in out
+    assert "Incorrect API key provided: <redacted>." in out
+
+
 def test_every_fix_names_the_llm_providers_tab() -> None:
     """The Settings tab is "LLM Providers"; there is no "Providers" tab."""
     for kind in ProviderFailureKind:
