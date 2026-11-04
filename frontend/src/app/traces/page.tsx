@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { AppShell } from "@/components/shared/app-shell";
-import { SESSIONS_SWR_KEY } from "@/lib/constants";
+import { SESSIONS_SWR_KEY, TRACE_EXEC_PARAM, displayModeName } from "@/lib/constants";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { PERF_UI_ENABLED } from "@/lib/branding";
 import { Timeline } from "@/components/trace/timeline";
@@ -78,7 +78,7 @@ function TraceDetailPanel({
             <p className="text-xs text-muted-foreground">Query</p>
             <p className="truncate font-medium">{trace.query}</p>
           </div>
-          <Badge variant="outline">{trace.mode.toUpperCase()}</Badge>
+          <Badge variant="outline">{displayModeName(trace.mode)}</Badge>
           <EngineBadge mode={trace.mode} />
           {trace.chat_provider_name && (
             <>
@@ -239,7 +239,7 @@ function PerformanceTab({ steps }: { steps: TraceStep[] }) {
 }
 
 /** Query parameter holding the open trace's execution id (also used by Dashboard links). */
-const EXEC_PARAM = "exec";
+const EXEC_PARAM = TRACE_EXEC_PARAM;
 
 function TracesPageInner() {
   const router = useRouter();
@@ -547,7 +547,7 @@ function TracesPageInner() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline">{exec.mode.toUpperCase()}</Badge>
+                          <Badge variant="outline">{displayModeName(exec.mode)}</Badge>
                           <EngineBadge mode={exec.mode} />
                         </div>
                       </TableCell>

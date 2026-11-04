@@ -209,6 +209,13 @@ describe("apiErrorMessage", () => {
     expect(apiErrorMessage(err)).toBe("already uses this candidate");
   });
 
+  test("formats a FastAPI validation (422) body as field: message", () => {
+    const err = new Error(
+      'API error 422: {"detail": [{"type": "greater_than", "loc": ["body", "context_window"], "msg": "Input should be greater than 0"}]}',
+    );
+    expect(apiErrorMessage(err)).toBe("context_window: Input should be greater than 0");
+  });
+
   test("falls back to the raw text", () => {
     expect(apiErrorMessage(new Error("network down"))).toBe("network down");
   });

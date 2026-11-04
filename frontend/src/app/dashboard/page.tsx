@@ -19,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { getSessions, getMetrics, getFailureMetrics, getEvaluationSummary, getSessionEvaluations, resetSessionEvaluations, type SessionSummary, type MetricsResponse, type FailureMetricsResponse, type EvaluationSummaryResponse, type SessionEvaluations } from "@/lib/api";
 import { JudgeDimensionsChart } from "@/components/metrics/judge-dimensions-chart";
 import { FailureBreakdown } from "@/components/metrics/failure-breakdown";
-import { displayModeName, displayProviderName } from "@/lib/constants";
+import { TRACE_EXEC_PARAM, displayModeName, displayProviderName } from "@/lib/constants";
 import { providerColorMap } from "@/components/metrics/series-colors";
 import { formatUsd } from "@/lib/format";
 
@@ -212,7 +212,7 @@ export default function DashboardPage() {
                     <TableRow
                       key={i}
                       className={entry.execution_id ? "cursor-pointer hover:bg-muted/50" : undefined}
-                      onClick={entry.execution_id ? () => router.push(`/traces?exec=${entry.execution_id}`) : undefined}
+                      onClick={entry.execution_id ? () => router.push(`/traces?${TRACE_EXEC_PARAM}=${entry.execution_id}`) : undefined}
                     >
                       <TableCell>{i + 1}</TableCell>
                       <TableCell>

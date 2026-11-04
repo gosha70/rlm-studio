@@ -257,6 +257,7 @@ export interface TraceResponse {
       | "connection"
       | "timeout"
       | "rate_limit"
+      | "server_error"
       | null;
     input_tokens?: number;
     output_tokens?: number;
@@ -1298,6 +1299,15 @@ function serverErrorMessage(text: string): string | null {
     const body = JSON.parse(text.slice(brace));
     const message = body?.error?.message ?? body?.detail;
     if (typeof message === "string" && message) return message;
+    // FastAPI request validation (422): {"detail": [{"loc": [..., "field"], "msg": "..."}]}
+    if (Array.isArray(message) && message.length > 0) {
+      return message
+        .map((d: { loc?: unknown[]; msg?: string }) => {
+          const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : undefined;
+          return field ? `${String(field)}: ${d.msg ?? ""}` : (d.msg ?? "");
+        })
+        .join("; ");
+    }
   } catch {
     // not JSON
   }

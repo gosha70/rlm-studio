@@ -52,6 +52,8 @@ async def upload_file(
 
     # Read content; enforce cap to avoid OOM on oversized uploads
     raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="The file is empty.")
     if len(raw) > _MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,

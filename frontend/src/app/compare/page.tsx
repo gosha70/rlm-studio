@@ -79,7 +79,7 @@ import {
   type RAGConfig,
   type CompareMatrixRequestV2,
 } from "@/lib/api";
-import { ALL_EXECUTION_MODES, displayModeName, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
+import { ALL_EXECUTION_MODES, displayModeName, EMBEDDING_MODEL_DEFAULT, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
 import { formatUsd, formatUsdTick } from "@/lib/format";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { useEngineAvailability } from "@/components/shared/use-engines";
@@ -246,7 +246,7 @@ const DEFAULT_CONFIG: InlineConfig = {
   chunk_size: 1000,
   chunk_overlap: 150,
   top_k: 5,
-  embedding_model: "text-embedding-3-small",
+  embedding_model: EMBEDDING_MODEL_DEFAULT,
 };
 
 // ---------------------------------------------------------------------------

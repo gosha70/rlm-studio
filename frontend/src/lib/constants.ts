@@ -152,6 +152,9 @@ export function displayProviderName(key: string): string {
  * back to the identifier so a server that grows a mode ahead of the UI still
  * renders something.
  */
+/** Query parameter that opens one execution on the Traces page. */
+export const TRACE_EXEC_PARAM = "exec";
+
 export function displayModeName(key: string): string {
   return MODE_DISPLAY_NAMES[key] ?? key;
 }

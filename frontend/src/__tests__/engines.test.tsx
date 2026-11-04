@@ -260,7 +260,9 @@ describe("Traces engine badge", () => {
 
     // One row is rlm_official, the other is Studio's own RLM: exactly one badge.
     expect(screen.getAllByText("official rlms 0.1.3")).toHaveLength(1);
-    expect(screen.getByText("RLM_OFFICIAL")).toBeInTheDocument();
+    // M22: the readable mode name, not the raw RLM_OFFICIAL id.
+    expect(screen.getByText("Official RLM (rlms)")).toBeInTheDocument();
+    expect(screen.queryByText("RLM_OFFICIAL")).not.toBeInTheDocument();
   });
 
   test("shows no engine badge when every run used a built-in mode", () => {
