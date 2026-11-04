@@ -78,14 +78,27 @@ request model and use case imports one alias instead of repeating the set.
 ChatMode: TypeAlias = Literal["auto", "rlm", "direct", "rag", "compare", "rlm_official"]
 """Modes accepted by ``POST /api/chat``.  ``auto`` never resolves to ``rlm_official``."""
 
+MODE_RLM_OFFICIAL_LABEL: Final = "Official RLM (rlms)"
+"""How ``rlm_official`` is spelled in text users read (never the raw id)."""
+
 MODE_DISPLAY_NAMES: Final[dict[str, str]] = {
     MODE_DIRECT: "Direct",
     MODE_RLM: "RLM",
     MODE_RAG: "RAG",
-    MODE_RLM_OFFICIAL: "Official RLM (rlms)",
+    MODE_RLM_OFFICIAL: MODE_RLM_OFFICIAL_LABEL,
 }
 """How a mode is spelled in text users read; matches the frontend's
 ``MODE_DISPLAY_NAMES`` (``frontend/src/lib/constants.ts``)."""
+
+
+def slot_mode_label(mode: str) -> str:
+    """The mode as written in a server-built slot label ("<name> · <mode>").
+
+    Only the official engine's id is replaced; the other ids already read
+    as words and existing labels keep them.
+    """
+    return MODE_RLM_OFFICIAL_LABEL if mode == MODE_RLM_OFFICIAL else mode
+
 
 # Modes that use RLM internally (RLM run config applies)
 MODES_RLM_INTERNAL = frozenset({MODE_RLM, MODE_AUTO, MODE_COMPARE, MODE_RLM_OFFICIAL})

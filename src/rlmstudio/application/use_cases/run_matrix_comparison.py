@@ -33,6 +33,7 @@ from rlmstudio.application.sandbox_vars import (
     MODE_RLM_OFFICIAL,
     RESULT_KEY_COST_KNOWN,
     ExecutionMode,
+    slot_mode_label,
 )
 from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
 from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
@@ -508,7 +509,7 @@ def _copy_config_for_slot(base: RunConfigDTO, mode: str) -> RunConfigDTO:
 def _default_label(slot: MatrixSlotDTO) -> str:
     parts = [p for p in (slot.provider, slot.model) if p]
     base = "/".join(parts) if parts else slot.slot_id
-    return f"{base} · {slot.mode}"
+    return f"{base} · {slot_mode_label(slot.mode)}"
 
 
 def _timed_out_slot_result(

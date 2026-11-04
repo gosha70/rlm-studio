@@ -218,3 +218,21 @@ class TestSerialModes:
         RunMatrixComparisonUseCase().execute("doc", "q", self._slots())
 
         assert _OverlapProbe.peak > 1
+
+
+def test_default_slot_label_names_the_official_engine_not_its_id() -> None:
+    """M22: a server-built label never shows the raw ``rlm_official`` id."""
+    slots = [
+        MatrixSlotDTO(
+            slot_id="o",
+            mode=MODE_RLM_OFFICIAL,
+            llm=_FakeLLM(),
+            provider="openai",
+            model="gpt-4o",
+            engine=FakeRLMEngine(),
+        )
+    ]
+    out = RunMatrixComparisonUseCase().execute("doc", "q", slots)
+
+    assert out.slots[0].label == "openai/gpt-4o · Official RLM (rlms)"
+    assert out.slots[0].mode == MODE_RLM_OFFICIAL

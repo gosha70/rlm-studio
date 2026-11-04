@@ -32,6 +32,7 @@ from rlmstudio.application.sandbox_vars import (
     RLM_DEFAULT_REPEAT_LIMIT,
     RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS,
     ExecutionMode,
+    slot_mode_label,
 )
 from rlmstudio.application.use_cases.run_matrix_comparison import (
     MatrixComparisonResultDTO,
@@ -266,7 +267,7 @@ def _get_or_create_ephemeral_cp(
     name is removed from the provider list first.
     """
     now = datetime.now(timezone.utc)
-    name = f"{EPHEMERAL_CP_PREFIX}{lp.name} \u00b7 {mode}"
+    name = f"{EPHEMERAL_CP_PREFIX}{lp.name} \u00b7 {slot_mode_label(mode)}"
 
     # Remove stale ephemeral with the same name (dedup / garbage-collect).
     state.config.chat_providers = [
@@ -430,7 +431,7 @@ async def _compare_matrix_v2(
                     sandbox=sandbox,
                     embedder=embedder,
                     storage=storage,
-                    label=f"{lp.name} \u00b7 {mode}",
+                    label=f"{lp.name} \u00b7 {slot_mode_label(mode)}",
                     provider=backend,
                     model=model_name,
                     config=slot_config,
@@ -689,7 +690,7 @@ async def compare_matrix(
                     sandbox=sandbox,
                     embedder=embedder,
                     storage=storage,
-                    label=f"{cp.name} · {mode}",
+                    label=f"{cp.name} · {slot_mode_label(mode)}",
                     provider=backend,
                     model=model_name,
                     config=slot_config,
