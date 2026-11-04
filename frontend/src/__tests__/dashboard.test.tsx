@@ -6,7 +6,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { vi, describe, test, expect } from "vitest";
 import { Hash } from "lucide-react";
 import { MetricCard } from "@/components/metrics/metric-card";
@@ -53,7 +53,9 @@ vi.mock("recharts", () => {
     },
     Cell: () => null,
     XAxis: () => null,
-    YAxis: () => null,
+    YAxis: ({ interval, width }: { interval?: unknown; width?: number }) => (
+      <div data-testid="y-axis" data-interval={String(interval)} data-width={String(width)} />
+    ),
     CartesianGrid: () => null,
     Tooltip: () => null,
     Legend: () => null,
@@ -195,6 +197,16 @@ describe("ComparisonChart", () => {
     for (const absent of ["Direct", "RLM", "RAG"]) {
       expect(screen.queryByTestId(`bar-series-${absent}`)).not.toBeInTheDocument();
     }
+  });
+
+  test("draws every Y tick, so the steps stay even, and leaves room for sub-cent ticks", () => {
+    render(<ComparisonChart rlmData={makeModeSummary()} directData={makeModeSummary()} />);
+    const axes = screen.getAllByTestId("y-axis");
+    expect(axes).toHaveLength(2);
+    // interval 0 = no tick dropped (the default dropped one: 0, 1000, 2000, 4000).
+    for (const axis of axes) expect(axis.dataset.interval).toBe("0");
+    const costAxis = within(screen.getByRole("img", { name: /mode cost/ })).getByTestId("y-axis");
+    expect(Number(costAxis.dataset.width)).toBeGreaterThanOrEqual(96);
   });
 
   test("draws all four mode series side by side when every mode has runs", () => {

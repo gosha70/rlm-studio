@@ -19,6 +19,17 @@ interface ComparisonChartProps {
 
 const OFFICIAL_SERIES = "Official RLM";
 
+/**
+ * Draw every Y tick. In these short charts Recharts' default
+ * ("preserveEnd") dropped one tick, leaving uneven steps (0, 1000, 2000,
+ * 4000).
+ */
+const ALL_TICKS = 0;
+
+/** Room for sub-cent ticks such as "$0.00000015"; the 60px default clipped them. */
+const COST_AXIS_WIDTH = 96;
+const COST_TICK_FONT_SIZE = 12;
+
 export function ComparisonChart({
   rlmData,
   directData,
@@ -72,7 +83,7 @@ export function ComparisonChart({
               <BarChart width={w} height={h} data={tokenData} barCategoryGap="20%">
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="name" className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
-                <YAxis className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
+                <YAxis className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} interval={ALL_TICKS} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Legend wrapperStyle={{ fontSize: "12px" }} />
                 {directData && <Bar dataKey="Direct" fill={MODE_COLORS[MODE_DIRECT]} radius={[4, 4, 0, 0]} />}
@@ -91,7 +102,9 @@ export function ComparisonChart({
                 <XAxis dataKey="name" className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
                 <YAxis
                   className="text-xs"
-                  tick={{ fill: "var(--color-muted-foreground)" }}
+                  tick={{ fill: "var(--color-muted-foreground)", fontSize: COST_TICK_FONT_SIZE }}
+                  interval={ALL_TICKS}
+                  width={COST_AXIS_WIDTH}
                   tickFormatter={(v) => formatUsdTick(Number(v))}
                 />
                 <Tooltip contentStyle={tooltipStyle} formatter={(v) => formatUsd(Number(v))} />
