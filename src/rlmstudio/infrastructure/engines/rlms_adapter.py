@@ -160,6 +160,22 @@ BUSY_REASON = (
     "environment can use at a time. Select the Docker sandbox in Settings to run "
     "official slots side by side."
 )
+BUSY_AFTER_TIMEOUT_REASON = (
+    "A previous official RLM run timed out but is still finishing in the background: "
+    "the engine cannot be stopped mid-step, so it keeps the in-process REPL until its "
+    "current step ends. Try again shortly, or select the Docker sandbox in Settings to "
+    "run official runs side by side."
+)
+
+
+class _ExclusiveHolder:
+    """When the official run holding the in-process REPL runs out of time.
+
+    ``None`` while no official run holds it.  Past the deadline, that run's
+    caller has given up on it and only its abandoned thread is left.
+    """
+
+    deadline: float | None = None
 
 
 def _installed_version() -> str | None:
@@ -428,12 +444,23 @@ class RlmsEngineAdapter:
         if not acquire_exclusive(timeout=self._lock_wait(config)):
             logger.warning("Official RLM engine busy: in-process cell state still held")
             # ``queued_at`` so the failed slot reports the time it spent waiting.
-            return self._failed(BUSY_REASON, queued_at, environment, config)
+            return self._failed(self._busy_reason(), queued_at, environment, config)
+        budget = config.max_time_seconds
+        _ExclusiveHolder.deadline = None if budget is None else queued_at + budget
         try:
             queued_config = self._config_after_queueing(config, queued_at)
             return self._run_engine(content, query, queued_config, environment, environment_kwargs)
         finally:
+            _ExclusiveHolder.deadline = None
             release_exclusive()
+
+    @staticmethod
+    def _busy_reason() -> str:
+        """Why the REPL is still taken: an abandoned timed-out run, or any other holder."""
+        deadline = _ExclusiveHolder.deadline
+        if deadline is not None and time.time() >= deadline:
+            return BUSY_AFTER_TIMEOUT_REASON
+        return BUSY_REASON
 
     @staticmethod
     def _lock_wait(config: RunConfigDTO) -> float:

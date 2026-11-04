@@ -45,6 +45,7 @@ from rlmstudio.application.services.outcome_classifier import (
 )
 from rlmstudio.envs.in_process_state import acquire_exclusive, release_exclusive
 from rlmstudio.infrastructure.engines.rlms_adapter import (
+    BUSY_AFTER_TIMEOUT_REASON,
     BUSY_REASON,
     MAX_TRACE_RECURSION_DEPTH,
     NOTE_COST_UNKNOWN,
@@ -1105,6 +1106,72 @@ class TestLocalEnvironmentIsSerialised:
         assert classify_execution_outcome(result.success, result.error, result.answer).category is (
             OutcomeCategory.GENERAL_ERROR
         )
+
+    def test_busy_behind_a_timed_out_run_says_that_run_is_still_finishing(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        """CMP2-02: the engine cannot be interrupted, so a run whose caller
+        timed out keeps the REPL on its abandoned thread.  The next run must
+        say that, not just "busy … use Docker"."""
+        holder_budget = 0.05
+        release = threading.Event()
+        started = threading.Event()
+
+        def block(**_: Any) -> None:
+            started.set()
+            release.wait(timeout=10.0)
+
+        fake_rlm.on_completion = block
+        holder = threading.Thread(
+            target=lambda: _adapter(sandbox_type="restricted").run(
+                "d", "q", dataclasses.replace(_CONFIG, max_time_seconds=holder_budget)
+            ),
+            daemon=True,
+        )
+        holder.start()
+        try:
+            assert started.wait(timeout=10.0)
+            time.sleep(holder_budget * 2)  # the holder's caller has given up by now
+            result = _adapter(sandbox_type="restricted").run(
+                "d", "q", dataclasses.replace(_CONFIG, max_time_seconds=0.4)
+            )
+        finally:
+            release.set()
+            holder.join(timeout=10.0)
+
+        assert not result.success
+        assert result.error == BUSY_AFTER_TIMEOUT_REASON
+        assert "timed out" in result.answer
+        assert "Try again shortly" in result.answer
+
+    def test_busy_behind_a_run_within_its_budget_keeps_the_general_reason(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        release = threading.Event()
+        started = threading.Event()
+
+        def block(**_: Any) -> None:
+            started.set()
+            release.wait(timeout=10.0)
+
+        fake_rlm.on_completion = block
+        holder = threading.Thread(
+            target=lambda: _adapter(sandbox_type="restricted").run(
+                "d", "q", dataclasses.replace(_CONFIG, max_time_seconds=60.0)
+            ),
+            daemon=True,
+        )
+        holder.start()
+        try:
+            assert started.wait(timeout=10.0)
+            result = _adapter(sandbox_type="restricted").run(
+                "d", "q", dataclasses.replace(_CONFIG, max_time_seconds=0.4)
+            )
+        finally:
+            release.set()
+            holder.join(timeout=10.0)
+
+        assert result.error == BUSY_REASON
 
     def test_a_run_that_waited_is_charged_for_the_wait(self, fake_rlm: _FakeRlm) -> None:
         """Queueing spends budget, so the engine gets what is left, not the lot.
