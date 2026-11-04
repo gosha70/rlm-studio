@@ -469,7 +469,7 @@ LLM-as-judge is an optional scoring layer: a dedicated judge LLM rates every ans
 
 ### Picking a judge provider
 
-Under **Settings → Providers**, designate one Chat Provider as the **judge**. The judge config lives at the app level (`judge_chat_provider_id`), so every execution across the app that gets scored uses the same judge. Picking a strong model (e.g. `claude-sonnet-4-6` or `gpt-4o`) gives more reliable scores than a small local model; the judge cost is separate from the scored run's cost.
+Under **Settings → Chat Providers**, designate one Chat Provider as the **judge**. The judge config lives at the app level (`judge_chat_provider_id`), so every execution across the app that gets scored uses the same judge. Picking a strong model (e.g. `claude-sonnet-4-6` or `gpt-4o`) gives more reliable scores than a small local model; the judge cost is separate from the scored run's cost.
 
 ### Pointwise rubric (v2.0)
 
@@ -514,7 +514,7 @@ This keeps `judge_score` sortable across a mix of successes and failures without
 
 ### Comparing RLM vs Direct for a Large Document
 
-1. Go to **Settings > Providers** and configure at least one LLM provider (e.g., Anthropic)
+1. Go to **Settings > LLM Providers** and configure at least one LLM provider (e.g., Anthropic)
 2. Go to **Settings > Chat Providers** and create two:
    - "Claude Direct" — Anthropic / claude-sonnet-4-6 / Profile: Accurate
    - "Claude RLM" — Anthropic / claude-sonnet-4-6 / Profile: RLM deep
@@ -577,7 +577,7 @@ export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Or enter them in **Settings > Providers** in the UI (saved to `.env`).
+Or enter them in **Settings > LLM Providers** in the UI (stored in the OS keyring when available, otherwise in a local file).
 
 ### Docker / Playwright MCP
 

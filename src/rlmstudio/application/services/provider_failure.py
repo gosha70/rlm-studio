@@ -238,7 +238,7 @@ def describe_provider_failure(
             cause=f"The API key{where} was rejected.",
             fix=(
                 "Check the key has not been revoked or regenerated, then update "
-                "it in Settings → Providers."
+                "it in Settings → LLM Providers."
             ),
         )
 
@@ -255,7 +255,7 @@ def describe_provider_failure(
             ),
             fix=(
                 "Pick a model from the provider's current list in "
-                "Settings → Providers, which is fetched from your account."
+                "Settings → LLM Providers, which is fetched from your account."
             ),
         )
 
@@ -302,7 +302,7 @@ def describe_provider_failure(
     return ProviderFailure(
         kind=ProviderFailureKind.UNKNOWN,
         cause="The provider call failed.",
-        fix="See the detail below; if it is not clear, check Settings → Providers.",
+        fix="See the detail below; if it is not clear, check Settings → LLM Providers.",
     )
 
 

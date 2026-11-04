@@ -179,6 +179,12 @@ def test_redacts_every_known_key_shape(secret: str) -> None:
     assert SECRET_PLACEHOLDER in out
 
 
+def test_every_fix_names_the_llm_providers_tab() -> None:
+    """The Settings tab is "LLM Providers"; there is no "Providers" tab."""
+    for kind in ProviderFailureKind:
+        assert "Settings → Providers" not in describe_provider_failure(kind).fix
+
+
 def test_redaction_leaves_ordinary_text_alone() -> None:
     text = "model: claude-sonnet-4-20250514 not found"
     assert redact_secrets(text) == text
