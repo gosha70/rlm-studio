@@ -25,7 +25,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
-import { Loader2, Trophy, Hash, DollarSign, Clock, Upload, X, ChevronDown, ChevronUp, Ban, Sparkles } from "lucide-react";
+import { Loader2, Trophy, Hash, DollarSign, Clock, Footprints, Upload, X, ChevronDown, ChevronUp, Ban, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -1441,22 +1441,25 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
         )}
       </div>
 
-      {!failed && (
-        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1" title="Total tokens">
-            <Hash className="h-3 w-3" />
-            {slot.total_tokens.toLocaleString()}
-          </span>
-          <span className="flex items-center gap-1" title="Cost (USD)">
-            <DollarSign className="h-3 w-3" />
-            {slot.total_cost.toFixed(4)}
-          </span>
-          <span className="flex items-center gap-1" title="Elapsed seconds">
-            <Clock className="h-3 w-3" />
-            {slot.elapsed_seconds.toFixed(1)}s
-          </span>
-        </div>
-      )}
+      {/* A failed run still spent tokens and time; show them like Chat does. */}
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1" title="Total tokens">
+          <Hash className="h-3 w-3" />
+          {slot.total_tokens.toLocaleString()}
+        </span>
+        <span className="flex items-center gap-1" title="Cost (USD)">
+          <DollarSign className="h-3 w-3" />
+          {slot.total_cost.toFixed(4)}
+        </span>
+        <span className="flex items-center gap-1" title="Elapsed seconds">
+          <Clock className="h-3 w-3" />
+          {slot.elapsed_seconds.toFixed(1)}s
+        </span>
+        <span className="flex items-center gap-1" title="Steps">
+          <Footprints className="h-3 w-3" />
+          {slot.steps} {slot.steps === 1 ? "step" : "steps"}
+        </span>
+      </div>
 
       {/* Judge score inline display */}
       {!failed && judgeScore && judgeScore.overall_score > 0 && (
@@ -1467,9 +1470,20 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
       )}
 
       {failed ? (
-        <div className="max-h-32 overflow-auto break-words rounded bg-destructive/10 p-2 text-sm text-destructive">
-          {_friendlyError(slot)}
-        </div>
+        slot.answer.trim() ? (
+          // The server's answer for a failed run is the user-facing message:
+          // what went wrong, how to fix it, and any partial answer.
+          <div
+            className="prose prose-sm dark:prose-invert max-h-60 max-w-none overflow-auto break-words rounded border-l-4 border-destructive bg-destructive/10 p-2"
+            data-testid="slot-failure-detail"
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{slot.answer}</ReactMarkdown>
+          </div>
+        ) : (
+          <div className="max-h-32 overflow-auto break-words rounded bg-destructive/10 p-2 text-sm text-destructive">
+            {_friendlyError(slot)}
+          </div>
+        )
       ) : (
         <>
           <div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto rounded bg-muted/40 p-2">
