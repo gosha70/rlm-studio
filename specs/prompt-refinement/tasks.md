@@ -71,6 +71,7 @@ only to keep the codebase conventions or ship the feature.
 - B2 (review fix): each evidence field is redacted whole and then clipped; clipping first cut a key straddling the limit into a fragment the patterns could not match.
 - B4 (spec change, owner 2026-11-03): source runs are `mode = rlm` only, in both the list and proposal creation; FR-2 updated.
 - B4: a failed or unusable proposal returns 502 and stores nothing; recorded as a known gap in spec §6.
+- F (origin check, 2026-11-04): the first origin-alignment record found one unapproved gap: #78 asks for the proposal call to run over the base prompt, but FR-3 sent only its version. Owner chose option A (rescope). `refine_supplement.yaml` 1.1 now carries the base prompt text in a `BASE_PROMPT` block; the route passes `get_default_system_prompt()`, the same text whose sha256 the proposal record stores. Proposals cost about 13,000 more input characters.
 - C3: the service lives at `server/refinement_eval.py`, beside `judge.py` and `quality.py`; there is no `server/services/` package. Pure summary logic (completeness, regression, deltas) is in `application/services/refinement_evaluation.py`.
 - C3: temperature 0 is applied through a new optional `temperature` argument on `AppState.create_llm_adapter_for_chat_provider`; `RunConfigDTO.temperature` does not reach the RLM loop.
 - C3: evaluation arm runs are recorded with `profile_id = None`. They are not runs of the profile's real prompt, so they must never come back as refinement sources (FR-1 nuance).

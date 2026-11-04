@@ -18,6 +18,7 @@ from rlmstudio.application.refinement_constants import (
     REFINEMENT_MAX_SOURCE_RUNS,
     REFINEMENT_STATUS_PROPOSAL_READY,
 )
+from rlmstudio.prompts import get_default_system_prompt
 from rlmstudio.server.dependencies import AppState, get_state
 from rlmstudio.server.models import ChatProviderConfig
 from rlmstudio.telemetry.store import content_sha256
@@ -176,7 +177,7 @@ class TestCreateProposal:
         assert proposal["candidate"] == "Read the document index first."
         assert proposal["rationale"] == "Runs skipped it."
         assert "+Read the document index first." in proposal["diff"]
-        assert proposal["prompt_version"] == "1.0"
+        assert proposal["prompt_version"] == "1.1"
         assert proposal["provider"] == "openai"
         assert proposal["model"] == "fake-model"
         evidence = proposal["evidence"]
@@ -188,6 +189,12 @@ class TestCreateProposal:
         assert len(setup.llm.prompts) == 1
         assert evidence["text"] in setup.llm.prompts[0]
         assert template_rlm in setup.llm.prompts[0]
+        base_prompt = get_default_system_prompt()
+        assert base_prompt in setup.llm.prompts[0]
+        assert (
+            proposal["base"]["base_prompt_sha256"]
+            == hashlib.sha256(base_prompt.encode()).hexdigest()
+        )
 
         # AC-1: proposing writes nothing to the profile or the config.
         assert setup.saves == []
