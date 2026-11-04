@@ -25,6 +25,7 @@ import {
   deleteProfile,
   updateProfile,
   getPromptTemplates,
+  apiErrorMessage,
   type RunProfile,
   type ChatProviderConfig,
   type SystemPromptTemplate,
@@ -32,7 +33,7 @@ import {
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Trash2, Lock, Edit2, Copy, Download, ChevronDown, ChevronUp, FlaskConical } from "lucide-react";
-import { MODE_RLM, displayModeName } from "@/lib/constants";
+import { MAX_OUTPUT_TOKENS_LIMIT, MODE_RLM, displayModeName } from "@/lib/constants";
 import { StrategySelectItems } from "./strategy-select-items";
 import { RefinementPanel } from "./refinement-panel";
 
@@ -198,8 +199,8 @@ export function ProfileCard({
       setMessage("Top P must be between 0 and 1");
       return;
     }
-    if (isNaN(maxTokens) || maxTokens < 1) {
-      setMessage("Max Tokens must be at least 1");
+    if (isNaN(maxTokens) || maxTokens < 1 || maxTokens > MAX_OUTPUT_TOKENS_LIMIT) {
+      setMessage(`Max Tokens must be between 1 and ${MAX_OUTPUT_TOKENS_LIMIT.toLocaleString()}`);
       return;
     }
     if (isNaN(timeout) || timeout < MIN_TIMEOUT_SECONDS) {
@@ -212,6 +213,14 @@ export function ProfileCard({
     }
     if (isNaN(maxCost) || maxCost < 0) {
       setMessage("Max Cost must be 0 or greater");
+      return;
+    }
+    if (isNaN(maxTokensBudget) || maxTokensBudget < 1) {
+      setMessage("Max Tokens (budget) must be at least 1");
+      return;
+    }
+    if (isNaN(maxRecursion) || maxRecursion < 0) {
+      setMessage("Max Recursion Depth must be 0 or greater");
       return;
     }
     if (isNaN(repeatLimit) || repeatLimit < 1) {
@@ -251,10 +260,10 @@ export function ProfileCard({
         },
         budget: {
           max_steps: maxSteps,
-          max_tokens: isNaN(maxTokensBudget) ? 0 : maxTokensBudget,
+          max_tokens: maxTokensBudget,
           max_cost_usd: maxCost,
           max_time_seconds: maxTime,
-          max_recursion_depth: isNaN(maxRecursion) ? 0 : maxRecursion,
+          max_recursion_depth: maxRecursion,
           repeat_limit: repeatLimit,
           nudge_at_fraction: nudgeFraction,
         },
@@ -263,8 +272,8 @@ export function ProfileCard({
       });
       toast.success("Profile saved");
       onUpdated?.();
-    } catch {
-      setMessage("Failed to update profile");
+    } catch (err) {
+      setMessage(`Failed to update profile: ${apiErrorMessage(err)}`);
     } finally {
       setSaving(false);
     }

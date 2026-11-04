@@ -39,6 +39,7 @@ import {
   testLLMProvider,
   testLLMProviderConfig,
   getLLMProviderModelsForConfig,
+  apiErrorMessage,
   type AppConfig,
   type RunProfile,
   type ChatProviderConfig,
@@ -71,6 +72,9 @@ import {
   MODE_RLM,
   MODE_RAG,
   EMBEDDING_MODEL_DEFAULT,
+  CONTEXT_WINDOW_MAX_TOKENS,
+  CONNECTION_TEST_INTERVAL_MAX_MINUTES,
+  isWholeNumber,
   defaultEmbeddingModelFor,
   isDefaultEmbeddingModel,
   displayModeName,
@@ -180,6 +184,7 @@ function SettingsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
+  const [intervalError, setIntervalError] = useState<string | null>(null);
   const [newProfileName, setNewProfileName] = useState("");
   const [newProfileStrategy, setNewProfileStrategy] = useState<string>(MODE_DIRECT);
   const [newProfileDescription, setNewProfileDescription] = useState("");
@@ -372,8 +377,10 @@ function SettingsPageInner() {
     try {
       const updated = await updateConfig({ budget });
       mutateConfig(updated, false);
+      toast.success("Budget limits saved");
     } catch (err) {
       console.error("Failed to save budget:", err);
+      toast.error(`Budget limits not saved: ${apiErrorMessage(err)}`);
     } finally {
       setSaving(false);
     }
@@ -395,8 +402,10 @@ function SettingsPageInner() {
         connection_test_interval_minutes: minutes,
       });
       mutateConfig(updated, false);
+      toast.success("Connection-test interval saved");
     } catch (err) {
       console.error("Failed to save connection-test interval:", err);
+      toast.error(`Interval not saved: ${apiErrorMessage(err)}`);
     } finally {
       setSaving(false);
     }
@@ -647,22 +656,21 @@ function SettingsPageInner() {
   // Build the request payload from the current form state. Used by
   // both save and test paths so the two always see the same values.
   const buildLLMProviderRequest = (): LLMProviderCreateRequest => {
-    const parsedCtxWindow = llmProviderForm.context_window.trim()
-      ? parseInt(llmProviderForm.context_window.trim(), 10)
-      : null;
+    const ctx = llmProviderForm.context_window.trim();
     return {
       name: llmProviderForm.name.trim(),
       backend: llmProviderForm.backend,
       model: llmProviderForm.model.trim(),
       api_key: llmProviderForm.api_key.trim() || null,
       endpoint: llmProviderForm.endpoint.trim() || null,
-      context_window:
-        parsedCtxWindow && parsedCtxWindow > 0 ? parsedCtxWindow : null,
+      // Only a valid value is sent; Save is blocked while the field is invalid.
+      context_window: ctx && !contextWindowError ? Number(ctx) : null,
     };
   };
 
   const handleSaveLLMProvider = async () => {
     if (!llmProviderForm.name.trim() || !llmProviderForm.model.trim()) return;
+    if (contextWindowError) return;
     setSavingLLMProvider(true);
     try {
       const req = buildLLMProviderRequest();
@@ -699,7 +707,7 @@ function SettingsPageInner() {
       toast.success(editingLLMProviderId ? "LLM Provider updated" : "LLM Provider created");
     } catch (err) {
       console.error("Failed to save LLM provider:", err);
-      toast.error("Failed to save LLM Provider");
+      toast.error(`Failed to save LLM Provider: ${apiErrorMessage(err)}`);
     } finally {
       setSavingLLMProvider(false);
     }
@@ -808,6 +816,16 @@ function SettingsPageInner() {
   const modelSourceLabel = isLocalFormBackend
     ? llmProviderForm.endpoint.trim() || "the endpoint"
     : (BACKEND_DISPLAY_NAMES[llmProviderForm.backend] ?? llmProviderForm.backend);
+  // Context window: blank means auto-discover; anything else must be a
+  // whole number of tokens.  parseInt used to read "1e3" as 1 and drop "-5".
+  const ctxText = llmProviderForm.context_window.trim();
+  const contextWindowError =
+    ctxText === ""
+      ? null
+      : !isWholeNumber(ctxText) || Number(ctxText) < 1 || Number(ctxText) > CONTEXT_WINDOW_MAX_TOKENS
+        ? `Enter a whole number of tokens from 1 to ${CONTEXT_WINDOW_MAX_TOKENS.toLocaleString()}, or leave it blank to auto-discover.`
+        : null;
+
   // A saved model the endpoint does not serve — the old value would
   // otherwise survive Save behind an empty Select trigger.
   const staleModel =
@@ -1016,16 +1034,29 @@ function SettingsPageInner() {
                     <FieldLabel htmlFor="llmp-context-window" tooltip="Total context window in tokens (input + output). Auto-discovered from the model endpoint when left blank. Set manually to override, e.g. 8192 for Qwen 7B. Profile max_tokens will be capped to 75% of this value.">Context Window (tokens)</FieldLabel>
                     <Input
                       id="llmp-context-window"
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="Auto-discover (e.g. 8192)"
                       value={llmProviderForm.context_window}
                       onChange={(e) => setLLMProviderForm({ ...llmProviderForm, context_window: e.target.value })}
+                      aria-invalid={contextWindowError ? true : undefined}
+                      aria-describedby={contextWindowError ? "llmp-context-window-error" : undefined}
                     />
+                    {contextWindowError && (
+                      <p id="llmp-context-window-error" className="text-xs text-destructive">
+                        {contextWindowError}
+                      </p>
+                    )}
                   </div>
                   <div className="flex gap-2">
                     <Button
                       onClick={handleSaveLLMProvider}
-                      disabled={savingLLMProvider || !llmProviderForm.name.trim() || !llmProviderForm.model.trim()}
+                      disabled={
+                        savingLLMProvider ||
+                        !llmProviderForm.name.trim() ||
+                        !llmProviderForm.model.trim() ||
+                        !!contextWindowError
+                      }
                     >
                       {editingLLMProviderId ? "Save" : "Create"}
                     </Button>
@@ -1720,16 +1751,29 @@ function SettingsPageInner() {
                     step={1}
                     className="w-32"
                     defaultValue={config?.connection_test_interval_minutes ?? 0}
+                    onChange={() => setIntervalError(null)}
                     onBlur={(e) => {
-                      const raw = Number(e.target.value);
-                      const clamped = Number.isFinite(raw)
-                        ? Math.max(0, Math.min(1440, Math.floor(raw)))
-                        : 0;
-                      if (clamped !== (config?.connection_test_interval_minutes ?? 0)) {
-                        handleSaveConnectionTestInterval(clamped);
+                      // An out-of-range value used to be clamped and saved
+                      // while the field kept showing what was typed.
+                      const text = e.target.value.trim();
+                      const minutes = Number(text);
+                      if (
+                        !isWholeNumber(text) ||
+                        minutes > CONNECTION_TEST_INTERVAL_MAX_MINUTES
+                      ) {
+                        setIntervalError(
+                          `Enter a whole number of minutes from 0 to ${CONNECTION_TEST_INTERVAL_MAX_MINUTES}. Not saved.`,
+                        );
+                        return;
+                      }
+                      setIntervalError(null);
+                      if (minutes !== (config?.connection_test_interval_minutes ?? 0)) {
+                        handleSaveConnectionTestInterval(minutes);
                       }
                     }}
                     disabled={saving}
+                    aria-invalid={intervalError ? true : undefined}
+                    aria-describedby={intervalError ? "connection-test-interval-error" : undefined}
                   />
                   <span className="text-sm text-muted-foreground">
                     {(config?.connection_test_interval_minutes ?? 0) === 0
@@ -1737,6 +1781,11 @@ function SettingsPageInner() {
                       : `every ${config?.connection_test_interval_minutes}m`}
                   </span>
                 </div>
+                {intervalError && (
+                  <p id="connection-test-interval-error" className="text-xs text-destructive" role="alert">
+                    {intervalError}
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">
                   Range: 0-1440 minutes (24 hours). The first cycle runs after the full
                   interval elapses, not at server startup.

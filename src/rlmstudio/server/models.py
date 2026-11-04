@@ -32,6 +32,17 @@ from rlmstudio.application.sandbox_vars import (
     ExecutionMode,
 )
 
+# Bounds for settings a user types in.  Enforced on request models only, so a
+# config file saved before these existed still loads.  Mirrored in
+# frontend/src/lib/constants.ts.
+CONTEXT_WINDOW_MAX_TOKENS = 10_000_000
+MAX_OUTPUT_TOKENS_LIMIT = 1_000_000
+RUNTIME_MAX_TEMPERATURE = 2.0
+RUNTIME_MIN_TIMEOUT_SECONDS = 5
+BUDGET_MIN_TIME_SECONDS = 10
+NUDGE_AT_FRACTION_MIN = 0.1
+NUDGE_AT_FRACTION_MAX = 1.0
+
 # ---------------------------------------------------------------------------
 # Error
 # ---------------------------------------------------------------------------
@@ -491,6 +502,21 @@ class RuntimeSettings(BaseModel):
     timeout_seconds: int = RUNTIME_DEFAULT_TIMEOUT_SECONDS
 
 
+class RuntimeSettingsInput(RuntimeSettings):
+    """Runtime settings as a request sends them: out-of-range values are a 422."""
+
+    temperature: float = Field(
+        default=RUNTIME_DEFAULT_TEMPERATURE, ge=0, le=RUNTIME_MAX_TEMPERATURE
+    )
+    top_p: float = Field(default=RUNTIME_DEFAULT_TOP_P, ge=0, le=1)
+    max_output_tokens: int = Field(
+        default=RUNTIME_DEFAULT_MAX_OUTPUT_TOKENS, ge=1, le=MAX_OUTPUT_TOKENS_LIMIT
+    )
+    timeout_seconds: int = Field(
+        default=RUNTIME_DEFAULT_TIMEOUT_SECONDS, ge=RUNTIME_MIN_TIMEOUT_SECONDS
+    )
+
+
 # ---------------------------------------------------------------------------
 # Providers
 # ---------------------------------------------------------------------------
@@ -621,8 +647,9 @@ class LLMProviderCreateRequest(BaseModel):
     model: str
     api_key: str | None = None  # persisted to SecretStore, not stored in config
     endpoint: str | None = None
-    runtime_settings: RuntimeSettings | None = None
-    context_window: int | None = None  # manual override; auto-discovered if omitted
+    runtime_settings: RuntimeSettingsInput | None = None
+    # Manual override; auto-discovered if omitted.
+    context_window: int | None = Field(default=None, gt=0, le=CONTEXT_WINDOW_MAX_TOKENS)
 
 
 class LLMProviderUpdateRequest(BaseModel):
@@ -630,8 +657,9 @@ class LLMProviderUpdateRequest(BaseModel):
     model: str | None = None
     api_key: str | None = None
     endpoint: str | None = None
-    runtime_settings: RuntimeSettings | None = None
-    context_window: int | None = None
+    runtime_settings: RuntimeSettingsInput | None = None
+    # 0 clears a manual override (see the update route).
+    context_window: int | None = Field(default=None, ge=0, le=CONTEXT_WINDOW_MAX_TOKENS)
 
 
 class LLMProviderModelsRequest(BaseModel):
@@ -674,6 +702,22 @@ class BudgetConfig(BaseModel):
     max_recursion_depth: int = RLM_DEFAULT_MAX_RECURSION_DEPTH
     repeat_limit: int = RLM_DEFAULT_REPEAT_LIMIT
     nudge_at_fraction: float = RLM_DEFAULT_NUDGE_AT_FRACTION
+
+
+class BudgetConfigInput(BudgetConfig):
+    """Budget limits as a request sends them: out-of-range values are a 422."""
+
+    max_steps: int = Field(default=RLM_DEFAULT_MAX_STEPS, ge=1)
+    max_tokens: int = Field(default=RLM_DEFAULT_MAX_TOKENS_BUDGET, ge=1)
+    max_cost_usd: float = Field(default=RLM_DEFAULT_MAX_COST_USD, ge=0)
+    max_time_seconds: int = Field(
+        default=RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS, ge=BUDGET_MIN_TIME_SECONDS
+    )
+    max_recursion_depth: int = Field(default=RLM_DEFAULT_MAX_RECURSION_DEPTH, ge=0)
+    repeat_limit: int = Field(default=RLM_DEFAULT_REPEAT_LIMIT, ge=1)
+    nudge_at_fraction: float = Field(
+        default=RLM_DEFAULT_NUDGE_AT_FRACTION, ge=NUDGE_AT_FRACTION_MIN, le=NUDGE_AT_FRACTION_MAX
+    )
 
 
 class SandboxConfig(BaseModel):
@@ -843,7 +887,7 @@ class ConfigResponse(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     # Note: active_provider/active_model are set exclusively via
     # PUT /api/providers/{name} to prevent dual-save-path corruption.
-    budget: BudgetConfig | None = None
+    budget: BudgetConfigInput | None = None
     sandbox: SandboxConfig | None = None
     appearance: AppearanceConfig | None = None
     provider_configs: list[ProviderConfig] | None = None
@@ -886,8 +930,8 @@ class RunProfileCreate(BaseModel):
     strategy: str = MODE_DIRECT
     default_provider: str | None = None
     providers_enabled: list[str] = Field(default_factory=list)
-    runtime_settings: RuntimeSettings = Field(default_factory=RuntimeSettings)
-    budget: BudgetConfig = Field(default_factory=BudgetConfig)
+    runtime_settings: RuntimeSettingsInput = Field(default_factory=RuntimeSettingsInput)
+    budget: BudgetConfigInput = Field(default_factory=BudgetConfigInput)
     system_prompts: dict[str, str] = Field(default_factory=dict)
     prompt_template_name: str | None = None
 
@@ -900,8 +944,8 @@ class RunProfileUpdate(BaseModel):
     strategy: str | None = None
     default_provider: str | None = None
     providers_enabled: list[str] | None = None
-    runtime_settings: RuntimeSettings | None = None
-    budget: BudgetConfig | None = None
+    runtime_settings: RuntimeSettingsInput | None = None
+    budget: BudgetConfigInput | None = None
     system_prompts: dict[str, str] | None = None
     prompt_template_name: str | None = None
 

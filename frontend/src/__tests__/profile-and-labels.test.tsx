@@ -260,6 +260,18 @@ describe("ProfileCard — editing form", () => {
     expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
   });
 
+  test("rejects an absurd Max Tokens instead of saving it", async () => {
+    const { updateProfile } = await import("@/lib/api");
+    vi.mocked(updateProfile).mockClear();
+    openEditor();
+    fireEvent.change(screen.getByLabelText("Max Tokens"), {
+      target: { value: "99999999999999" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(screen.getByRole("status")).toHaveTextContent(/Max Tokens must be between 1 and 1,000,000/);
+    expect(vi.mocked(updateProfile)).not.toHaveBeenCalled();
+  });
+
   test("Cancel closes the edit form", () => {
     openEditor();
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));

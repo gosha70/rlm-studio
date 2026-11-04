@@ -17,8 +17,10 @@ import {
   getLLMProviderModelsForConfig,
   testLLMProviderConfig,
   testProvider,
+  updateConfig,
   type ProviderTestResponse,
 } from "@/lib/api";
+import { toast } from "sonner";
 import SettingsPage from "@/app/settings/page";
 import type { BudgetConfig as BudgetConfigType, ModelInfo, ProviderInfo } from "@/lib/api";
 
@@ -35,6 +37,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     // Keep the Settings form's debounced model discovery off the network.
     getProviderModels: vi.fn().mockResolvedValue([]),
     testLLMProviderConfig: vi.fn(),
+    updateConfig: vi.fn(),
+    deleteLLMProvider: vi.fn(),
     getLLMProviderModelsForConfig: vi.fn().mockResolvedValue({
       models: [],
       source: "unavailable",
@@ -45,6 +49,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 vi.mock("swr", () => ({
   default: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
 
 vi.mock("next-themes", () => ({
@@ -185,6 +193,19 @@ describe("BudgetConfig", () => {
       repeat_limit: 2,
       nudge_at_fraction: 0.6,
     });
+  });
+
+  test.each([
+    ["Max Tokens", "-5", /Max Tokens must be a whole number of at least 1/],
+    ["Max Tokens", "", /Max Tokens must be a whole number of at least 1/],
+    ["Max Cost (USD)", "-1", /Max Cost must be 0 or more/],
+  ])("refuses to save %s = %j and says why", (label, value, message) => {
+    const onChange = vi.fn();
+    render(<BudgetConfig config={DEFAULT_CONFIG} onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   test("Reset to Defaults updates displayed values", () => {
@@ -860,5 +881,81 @@ describe("SettingsPage — Wave 3", () => {
     await user.clear(embedding);
     await user.type(embedding, "ollama/mxbai-embed-large");
     expect(embedding.value).toBe("ollama/mxbai-embed-large");
+  });
+
+  test.each(["1e3", "-5", "0", "12abc"])(
+    "an LLM Provider context window of %j is refused with a reason",
+    async (value) => {
+      stubSettingsData({ "llm-providers": [] });
+      render(<SettingsPage />);
+      const user = await setupUser();
+      await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+      await user.type(screen.getByLabelText("Name"), "Local");
+      await user.type(screen.getByLabelText("Model"), "llama3.2");
+      await user.type(screen.getByLabelText("Context Window (tokens)"), value);
+
+      expect(screen.getByText(/Enter a whole number of tokens from 1 to/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+    },
+  );
+
+  test("a valid context window is accepted", async () => {
+    stubSettingsData({ "llm-providers": [] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+    await user.type(screen.getByLabelText("Name"), "Local");
+    await user.type(screen.getByLabelText("Model"), "llama3.2");
+    await user.type(screen.getByLabelText("Context Window (tokens)"), "8192");
+
+    expect(screen.queryByText(/Enter a whole number of tokens/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+
+  test("a negative connection-test interval is refused, not clamped and saved", async () => {
+    vi.mocked(updateConfig).mockClear();
+    stubSettingsData({});
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "General" }));
+    const input = await screen.findByLabelText(/Interval/i);
+    await user.clear(input);
+    await user.type(input, "-3");
+    await user.tab();
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/from 0 to 1440\. Not saved\./);
+    expect(vi.mocked(updateConfig)).not.toHaveBeenCalled();
+  });
+
+  test("a failed Budget save says so with the server's reason", async () => {
+    vi.mocked(updateConfig).mockRejectedValueOnce(
+      new Error('API error 422: {"detail":"max_tokens must be at least 1"}'),
+    );
+    vi.mocked(toast.error).mockClear();
+    stubSettingsData({});
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Budget" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "Budget limits not saved: max_tokens must be at least 1",
+      ),
+    );
+  });
+
+  test("a successful Budget save is confirmed", async () => {
+    vi.mocked(updateConfig).mockResolvedValueOnce(MOCK_CONFIG as never);
+    vi.mocked(toast.success).mockClear();
+    stubSettingsData({});
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Budget" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.success)).toHaveBeenCalledWith("Budget limits saved"),
+    );
   });
 });

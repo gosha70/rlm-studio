@@ -22,18 +22,35 @@ const DEFAULTS: BudgetConfigType = {
   nudge_at_fraction: 0.6,
 };
 
+/** Why `budget` cannot be saved, or null when it can. Mirrors the API bounds. */
+function budgetError(budget: BudgetConfigType): string | null {
+  if (!Number.isInteger(budget.max_tokens) || budget.max_tokens < 1) {
+    return "Max Tokens must be a whole number of at least 1.";
+  }
+  if (!Number.isFinite(budget.max_cost_usd) || budget.max_cost_usd < 0) {
+    return "Max Cost must be 0 or more.";
+  }
+  return null;
+}
+
 export function BudgetConfig({ config, onChange }: BudgetConfigProps) {
   const [local, setLocal] = useState(config);
+  const [error, setError] = useState<string | null>(null);
 
   const update = <K extends keyof BudgetConfigType>(key: K, value: BudgetConfigType[K]) => {
+    setError(null);
     setLocal((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleSave = () => {
+    const problem = budgetError(local);
+    setError(problem);
+    if (problem) return;
     onChange(local);
   };
 
   const handleReset = () => {
+    setError(null);
     setLocal(DEFAULTS);
     onChange(DEFAULTS);
   };
@@ -67,7 +84,7 @@ export function BudgetConfig({ config, onChange }: BudgetConfigProps) {
       </div>
 
       <div className="space-y-2">
-        <FieldLabel htmlFor="max-cost" tooltip="Dollar limit per query execution. The query is terminated if this cost is exceeded. Set to 0 for local models.">Max Cost (USD)</FieldLabel>
+        <FieldLabel htmlFor="max-cost" tooltip="Dollar limit per query execution. The query is stopped once this cost is reached. Local models cost nothing, so keep it above 0.">Max Cost (USD)</FieldLabel>
         <Input
           id="max-cost"
           type="number"
@@ -106,6 +123,12 @@ export function BudgetConfig({ config, onChange }: BudgetConfigProps) {
           aria-valuetext={`${local.max_recursion_depth} levels`}
         />
       </div>
+
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {error} Not saved.
+        </p>
+      )}
 
       <div className="flex gap-2">
         <Button onClick={handleSave}>Save</Button>
