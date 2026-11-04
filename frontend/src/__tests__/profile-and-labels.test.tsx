@@ -335,6 +335,7 @@ describe("ProfileCard — system_prompts persistence", () => {
 
 describe("ProfileCard — refinement", () => {
   beforeEach(() => {
+    panelProps.onProfileChanged = undefined;
     mockUseSWR.mockReturnValue({
       data: MOCK_TEMPLATES,
       error: undefined,

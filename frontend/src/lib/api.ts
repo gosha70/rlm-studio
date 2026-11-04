@@ -1266,6 +1266,13 @@ export const rollbackRefinement = (profileId: string, refinementId: string) =>
 export const refinementExportUrl = (profileId: string) =>
   `${API_BASE}${refinementsPath(profileId)}/export.jsonl`;
 
+/** HTTP status of a `fetchJSON` error (`API error 409: …`), or 0 when there is none. */
+export function apiErrorStatus(err: unknown): number {
+  const text = err instanceof Error ? err.message : String(err);
+  const match = /^API error (\d{3})\b/.exec(text);
+  return match ? Number(match[1]) : 0;
+}
+
 /**
  * The server's message from an `fetchJSON` error (`API error 409: {"error": {"message": …}}`),
  * falling back to the raw text.

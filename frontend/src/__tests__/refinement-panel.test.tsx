@@ -196,6 +196,13 @@ beforeEach(() => {
   mocked.getHoldoutCases.mockResolvedValue([]);
 });
 
+describe("apiErrorStatus", () => {
+  test("reads the HTTP status from an API error", () => {
+    expect(api.apiErrorStatus(new Error('API error 500: {"error": {}}'))).toBe(500);
+    expect(api.apiErrorStatus(new Error("network down"))).toBe(0);
+  });
+});
+
 describe("apiErrorMessage", () => {
   test("extracts the server message from an API error", () => {
     const err = new Error('API error 409: {"error": {"code": "ERROR", "message": "already uses this candidate"}}');
@@ -326,6 +333,32 @@ describe("Evaluation", () => {
     });
   });
 
+  test("a failed start shows the server's reason", async () => {
+    showRefinement(refinement());
+    mocked.getHoldoutCases.mockResolvedValue([
+      { id: "alpha", query: "q", tags: ["holdout"], size: "small", holdout: true, deterministic: true, materialisable: true, skip_reason: null },
+    ]);
+    mocked.evaluateRefinement.mockRejectedValue(
+      new Error('API error 503: {"error": {"message": "Evaluation dataset not found; set RLM_STUDIO_REFINEMENT_DATASET"}}'),
+    );
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Run 4 evaluation runs" }));
+    expect(await screen.findByText(/set RLM_STUDIO_REFINEMENT_DATASET/)).toBeInTheDocument();
+  });
+
+  test("polls while evaluating and stops once results arrive", async () => {
+    const running = refinement({ status: REFINEMENT_STATUS_EVALUATING, progress: { done: 1, total: 2 } });
+    const done = refinement({ status: REFINEMENT_STATUS_EVALUATED, evaluation: evaluation() });
+    mocked.listRefinements.mockResolvedValue([running]);
+    mocked.getRefinement.mockResolvedValueOnce(running).mockResolvedValue(done);
+    renderPanel();
+    expect(await screen.findByText(/1 of 2 case × repetition pairs done/)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Accept" }, { timeout: 5000 })).toBeInTheDocument();
+    const callsWhenDone = mocked.getRefinement.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(mocked.getRefinement.mock.calls.length).toBe(callsWhenDone);
+  });
+
   test("progress with nothing to run never divides by zero", async () => {
     showRefinement(refinement({ status: REFINEMENT_STATUS_EVALUATING, progress: { done: 0, total: 0 } }));
     renderPanel();
@@ -402,6 +435,17 @@ describe("Decisions", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Accept" }));
     expect(await screen.findByText(/recording the accept failed/)).toBeInTheDocument();
     await waitFor(() => expect(onProfileChanged).toHaveBeenCalledTimes(1));
+  });
+
+  test("a refused accept leaves the profile and any edit alone", async () => {
+    showRefinement(refinement({ status: REFINEMENT_STATUS_EVALUATED, evaluation: evaluation() }));
+    mocked.acceptRefinement.mockRejectedValue(
+      new Error('API error 409: {"error": {"message": "The profile\'s RLM prompt changed after this proposal"}}'),
+    );
+    const onProfileChanged = renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Accept" }));
+    expect(await screen.findByText(/changed after this proposal/)).toBeInTheDocument();
+    expect(onProfileChanged).not.toHaveBeenCalled();
   });
 
   test("rejects with a reason without touching the profile", async () => {

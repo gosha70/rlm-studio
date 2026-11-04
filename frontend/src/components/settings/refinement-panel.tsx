@@ -42,6 +42,7 @@ import {
 import {
   acceptRefinement,
   apiErrorMessage,
+  apiErrorStatus,
   createRefinement,
   evaluateRefinement,
   getHoldoutCases,
@@ -424,9 +425,10 @@ function RefinementDetail({
       setMessage(apiErrorMessage(err));
       await mutate();
       onChanged();
-      // A split-brain accept or rollback (500 after a successful save) did
-      // change the profile, so refresh it on failure too.
-      if (changesProfile) onProfileChanged();
+      // A split-brain accept or rollback (5xx after a successful save) did
+      // change the profile, so refresh it. A 4xx was refused before any
+      // write: leave the card, and any edit in progress, alone.
+      if (changesProfile && apiErrorStatus(err) >= 500) onProfileChanged();
     } finally {
       setBusy(false);
     }
@@ -640,10 +642,14 @@ function EvaluateForm({
 
   const selectedCases =
     picked ?? new Set(cases.filter((c) => c.holdout && c.materialisable).map((c) => c.id));
+  // One list drives both the run count and the request, so they cannot disagree.
+  const chosenCaseIds = cases
+    .filter((c) => c.materialisable && selectedCases.has(c.id))
+    .map((c) => c.id);
   const repCount = Number.parseInt(reps, 10);
   const repsValid =
     Number.isInteger(repCount) && repCount >= REFINEMENT_MIN_REPS && repCount <= REFINEMENT_MAX_REPS;
-  const runCount = repsValid ? selectedCases.size * repCount * 2 : 0;
+  const runCount = repsValid ? chosenCaseIds.length * repCount * 2 : 0;
 
   const toggle = (id: string) => {
     const next = new Set(selectedCases);
@@ -658,7 +664,7 @@ function EvaluateForm({
     setMessage(null);
     try {
       await evaluateRefinement(profile.id, refinement.id, {
-        case_ids: cases.filter((c) => selectedCases.has(c.id)).map((c) => c.id),
+        case_ids: chosenCaseIds,
         reps: repCount,
         chat_provider_id: evaluator,
         ...(judgeId !== CONFIGURED_JUDGE ? { judge_chat_provider_id: judgeId } : {}),
@@ -768,7 +774,7 @@ function EvaluateForm({
 
       <p className="text-xs text-muted-foreground">
         {repsValid
-          ? `${runCount} RLM run${runCount === 1 ? "" : "s"} (${selectedCases.size} cases × ${repCount} repetitions × baseline and candidate) on ${evaluatorName ?? "—"} at temperature 0. Cost appears in telemetry afterwards; it is not estimated here.`
+          ? `${runCount} RLM run${runCount === 1 ? "" : "s"} (${chosenCaseIds.length} cases × ${repCount} repetitions × baseline and candidate) on ${evaluatorName ?? "—"} at temperature 0. Cost appears in telemetry afterwards; it is not estimated here.`
           : `Repetitions must be between ${REFINEMENT_MIN_REPS} and ${REFINEMENT_MAX_REPS}.`}
       </p>
       {message && (
@@ -779,7 +785,7 @@ function EvaluateForm({
       <Button
         size="sm"
         onClick={start}
-        disabled={busy || !evaluator || !repsValid || selectedCases.size === 0}
+        disabled={busy || !evaluator || !repsValid || chosenCaseIds.length === 0}
       >
         {busy ? "Starting…" : `Run ${runCount} evaluation runs`}
       </Button>
