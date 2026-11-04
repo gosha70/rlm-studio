@@ -338,7 +338,7 @@ describe("ChatProviderSelector", () => {
     expect(screen.getByRole("button", { name: "Select all providers" })).toBeInTheDocument();
   });
 
-  test("toggle button shows '1' when all selected", () => {
+  test("toggle button reads 'First only' (not a bare '1') when all selected", () => {
     const cp1 = makeCP({ id: "cp-1", name: "GPT-4o Direct", llm_provider_id: "llmp-1" });
     const cp2 = makeCP({ id: "cp-2", name: "Claude Direct", llm_provider_id: "llmp-2" });
     const lp1 = makeLLMProvider({ id: "llmp-1" });
@@ -353,7 +353,37 @@ describe("ChatProviderSelector", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Select first only" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select first only" })).toHaveTextContent(/^First only$/);
+  });
+
+  test("the mode badge letter is explained: chip name and badge tooltip say the mode", () => {
+    const cp1 = makeCP({ id: "cp-1", name: "Qwen RLM", execution_mode: "rlm" });
+    render(
+      <ChatProviderSelector
+        chatProviders={[cp1]}
+        llmProviders={[makeLLMProvider()]}
+        selectedIds={["cp-1"]}
+        onSelectionChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("checkbox", { name: "Qwen RLM, RLM mode (connected)" })).toBeInTheDocument();
+    expect(screen.getByText("R")).toHaveAttribute("title", "RLM mode");
+  });
+
+  test("a long provider name truncates inside its chip (M13)", () => {
+    const longName = "ChatProvLongName" + "a".repeat(140);
+    render(
+      <ChatProviderSelector
+        chatProviders={[makeCP({ name: longName })]}
+        llmProviders={[makeLLMProvider()]}
+        selectedIds={["cp-1"]}
+        onSelectionChange={vi.fn()}
+      />
+    );
+    const chip = screen.getByRole("checkbox", { name: new RegExp(longName) });
+    expect(chip).toHaveAttribute("title", expect.stringContaining(longName));
+    const nameSpan = screen.getByText(longName);
+    expect(nameSpan.className.split(" ")).toEqual(expect.arrayContaining(["truncate", "min-w-0"]));
   });
 
   test("calls onSelectionChange when a provider chip is clicked", () => {

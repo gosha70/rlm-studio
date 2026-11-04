@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { type ChatProviderConfig, type LLMProviderConfig } from "@/lib/api";
-import { MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL } from "@/lib/constants";
+import { MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL, displayModeName } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
 interface ChatProviderSelectorProps {
@@ -102,7 +102,7 @@ export function ChatProviderSelector({
   return (
     <div
       className={cn(
-        "flex flex-wrap gap-2 rounded-lg border bg-muted p-2",
+        "flex min-w-0 flex-wrap gap-2 rounded-lg border bg-muted p-2",
         disabled && "opacity-50",
       )}
       role="group"
@@ -127,13 +127,14 @@ export function ChatProviderSelector({
           )}
           aria-label={selectedIds.length === sortedProviders.length ? "Select first only" : "Select all providers"}
         >
-          {selectedIds.length === sortedProviders.length ? "1" : "All"}
+          {selectedIds.length === sortedProviders.length ? "First only" : "All"}
         </button>
       )}
       {sortedProviders.map((cp) => {
         const isSelected = selectedIds.includes(cp.id);
         const { status, color } = getProviderStatus(cp.llm_provider_id);
         const modeBadge = MODE_BADGES[cp.execution_mode] || "?";
+        const modeName = displayModeName(cp.execution_mode);
         const isDragOver = dragOverId === cp.id;
 
         return (
@@ -141,7 +142,8 @@ export function ChatProviderSelector({
             key={cp.id}
             role="checkbox"
             aria-checked={isSelected}
-            aria-label={`${cp.name} (${status})`}
+            aria-label={`${cp.name}, ${modeName} mode (${status})`}
+            title={`${cp.name}${cp.profile_name ? ` · ${cp.profile_name}` : ""} — ${modeName} mode`}
             disabled={disabled || (isSelected && selectedIds.length === 1)}
             onClick={() => toggle(cp.id)}
             draggable={!!onOrderChange && !disabled}
@@ -150,7 +152,7 @@ export function ChatProviderSelector({
             onDragLeave={() => setDragOverId(null)}
             onDrop={(e) => handleDrop(cp.id, e)}
             className={cn(
-              "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+              "flex min-w-0 max-w-full items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
               "disabled:cursor-not-allowed",
               isSelected
                 ? "bg-background text-foreground shadow-sm"
@@ -158,8 +160,8 @@ export function ChatProviderSelector({
               isDragOver && "ring-2 ring-primary/50",
             )}
           >
-            {/* Provider name + profile */}
-            <span>
+            {/* Provider name + profile; long names truncate (full text in the title) */}
+            <span className="min-w-0 max-w-[16rem] truncate">
               {cp.name}
               {cp.profile_name && (
                 <span className="ml-1 font-normal opacity-60">{cp.profile_name}</span>
@@ -167,13 +169,17 @@ export function ChatProviderSelector({
             </span>
 
             {/* Mode badge */}
-            <span className="rounded bg-muted px-1 py-0.5 text-xs font-semibold text-muted-foreground">
+            <span
+              className="shrink-0 rounded bg-muted px-1 py-0.5 text-xs font-semibold text-muted-foreground"
+              title={`${modeName} mode`}
+              aria-hidden="true"
+            >
               {modeBadge}
             </span>
 
             {/* Status dot */}
             <span
-              className={cn("inline-block h-2 w-2 rounded-full", color)}
+              className={cn("inline-block h-2 w-2 shrink-0 rounded-full", color)}
               title={status}
               aria-label={`Provider status: ${status}`}
             />
