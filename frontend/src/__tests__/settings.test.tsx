@@ -11,6 +11,7 @@ import { BudgetConfig } from "@/components/settings/budget-config";
 import { ModelSelector } from "@/components/settings/model-selector";
 import { ConnectionTester } from "@/components/settings/connection-tester";
 import { ProviderCard } from "@/components/settings/provider-card";
+import { ExecutionConfig } from "@/components/settings/execution-config";
 import useSWR from "swr";
 import {
   getLLMProviderModelsForConfig,
@@ -230,6 +231,30 @@ describe("BudgetConfig", () => {
       (s) => s.getAttribute("aria-valuenow") === "5"
     );
     expect(depthSlider).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ExecutionConfig
+// ---------------------------------------------------------------------------
+
+describe("ExecutionConfig", () => {
+  test("offers no Default Mode control: nothing reads default_mode", () => {
+    render(
+      <ExecutionConfig
+        config={{
+          enabled_modes: ["direct", "rlm"],
+          default_mode: "auto",
+          rag_config: { chunk_size: 1000, chunk_overlap: 200, top_k: 5, embedding_model: "text-embedding-3-small" },
+          rlm_max_steps: 16,
+          rlm_timeout_seconds: 600,
+        }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Default Mode")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Default mode" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/system decides/)).not.toBeInTheDocument();
   });
 });
 
