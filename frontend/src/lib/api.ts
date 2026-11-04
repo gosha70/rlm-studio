@@ -112,6 +112,8 @@ export interface CompareMatrixSlotResponse {
   total_decode_ms?: number;
   median_ttft_ms?: number | null;
   cache_hit_rate?: number;
+  /** False when the run's price is unknown: its $0 is not free. */
+  cost_known?: boolean;
 }
 
 export interface CompareMatrixResponse {

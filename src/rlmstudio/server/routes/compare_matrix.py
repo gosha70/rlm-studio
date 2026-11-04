@@ -26,6 +26,7 @@ from rlmstudio.application.sandbox_vars import (
     MODE_RLM,
     MODE_RLM_OFFICIAL,
     MODES_RLM_INTERNAL,
+    RESULT_KEY_COST_KNOWN,
     RLM_DEFAULT_MAX_STEPS,
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
@@ -196,6 +197,9 @@ class CompareMatrixSlotResponse(BaseModel):
     total_decode_ms: int = 0
     median_ttft_ms: int | None = None
     cache_hit_rate: float = 0.0
+    # False when the run's price is unknown (an unpriced model): its $0 is
+    # not free, and the page must rank it last on cost like the server does.
+    cost_known: bool = True
 
 
 class CompareMatrixResponse(BaseModel):
@@ -522,6 +526,7 @@ async def _compare_matrix_v2(
             total_cost=s.result.total_cost,
             elapsed_seconds=s.result.elapsed_time,
             steps=s.result.steps,
+            cost_known=s.result.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False,
             **_slot_perf_aggregates(s.result.trace),
         )
         for s in result.slots
@@ -793,6 +798,7 @@ async def compare_matrix(
             total_cost=s.result.total_cost,
             elapsed_seconds=s.result.elapsed_time,
             steps=s.result.steps,
+            cost_known=s.result.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False,
             **_slot_perf_aggregates(s.result.trace),
         )
         for s in result.slots
