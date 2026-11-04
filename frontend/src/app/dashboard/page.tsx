@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR, { useSWRConfig } from "swr";
 import { Hash, DollarSign, Clock, Activity, Star, ThumbsUp, ThumbsDown, Trophy, Trash2 } from "lucide-react";
@@ -72,7 +73,16 @@ export default function DashboardPage() {
     <AppShell>
       <div className="mx-auto max-w-[1200px] space-y-6 p-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-semibold">Dashboard</h2>
+          <div>
+            <h2 className="text-2xl font-semibold">Dashboard</h2>
+            <p className="text-sm text-muted-foreground" data-testid="dashboard-tuner-note">
+              LLM Tuner runs are not counted here; find them in{" "}
+              <Link href="/traces" className="underline hover:text-foreground">
+                Traces
+              </Link>
+              .
+            </p>
+          </div>
           <Select value={effectiveSession} onValueChange={setSelectedSession}>
             <SelectTrigger className="w-56" aria-label="Select session">
               <SelectValue placeholder="Select session..." />

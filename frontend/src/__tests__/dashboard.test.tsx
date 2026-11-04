@@ -458,6 +458,16 @@ function renderDashboard(metrics: MetricsResponse | undefined, sessions = makeSe
   return render(<DashboardPage />);
 }
 
+describe("DashboardPage — LLM Tuner note", () => {
+  test("says LLM Tuner runs are not counted and points to Traces", () => {
+    renderDashboard(makeMetrics());
+    expect(screen.getByTestId("dashboard-tuner-note")).toHaveTextContent(
+      "LLM Tuner runs are not counted here; find them in Traces.",
+    );
+    expect(screen.getByRole("link", { name: "Traces" })).toHaveAttribute("href", "/traces");
+  });
+});
+
 describe("DashboardPage — Recent Executions", () => {
   test("labels the official engine's runs by name, not RLM_OFFICIAL", () => {
     renderDashboard({
