@@ -1014,6 +1014,35 @@ describe("SettingsPage — Wave 3", () => {
     confirmSpy.mockRestore();
   });
 
+  test("the edit form says a key is already stored", async () => {
+    stubSettingsData({
+      "llm-providers": [
+        makeLLMProvider({ id: "lp-k", name: "Keyed", backend: "openai", model: "gpt-4o", api_key_stored: true }),
+      ],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const keyInput = screen.getByLabelText("API Key");
+    expect(keyInput).toHaveAttribute("placeholder", "Key stored (hidden)");
+    expect(screen.getByText(/A key is stored for this provider/)).toBeInTheDocument();
+  });
+
+  test("the edit form makes no stored-key claim without a key", async () => {
+    stubSettingsData({
+      "llm-providers": [
+        makeLLMProvider({ id: "lp-n", name: "Keyless", backend: "openai", model: "gpt-4o", api_key_stored: false }),
+      ],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("placeholder", "sk-...");
+    expect(screen.queryByText(/A key is stored for this provider/)).not.toBeInTheDocument();
+  });
+
   test("a successful Budget save is confirmed", async () => {
     vi.mocked(updateConfig).mockResolvedValueOnce(MOCK_CONFIG as never);
     vi.mocked(toast.success).mockClear();

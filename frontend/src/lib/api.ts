@@ -336,6 +336,8 @@ export interface LLMProviderConfig {
   model_check_alternatives?: string[] | null;
   model_checked_at?: string | null;
   consecutive_failures?: number;
+  /** Whether a key is saved for this provider (the key is never returned). */
+  api_key_stored?: boolean;
 }
 
 export interface LLMProviderCreateRequest {

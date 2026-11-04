@@ -822,6 +822,11 @@ function SettingsPageInner() {
   const modelSourceLabel = isLocalFormBackend
     ? llmProviderForm.endpoint.trim() || "the endpoint"
     : (BACKEND_DISPLAY_NAMES[llmProviderForm.backend] ?? llmProviderForm.backend);
+  // The edit form never shows the stored key, so say that one exists.
+  const editingKeyStored =
+    !!editingLLMProviderId &&
+    !!llmProviders.find((lp) => lp.id === editingLLMProviderId)?.api_key_stored;
+
   // Context window: blank means auto-discover; anything else must be a
   // whole number of tokens.  parseInt used to read "1e3" as 1 and drop "-5".
   const ctxText = llmProviderForm.context_window.trim();
@@ -1030,10 +1035,17 @@ function SettingsPageInner() {
                       <Input
                         id="llmp-apikey"
                         type="password"
-                        placeholder="sk-..."
+                        placeholder={editingKeyStored ? "Key stored (hidden)" : "sk-..."}
                         value={llmProviderForm.api_key}
                         onChange={(e) => setLLMProviderForm({ ...llmProviderForm, api_key: e.target.value })}
+                        aria-describedby={editingKeyStored ? "llmp-apikey-stored" : undefined}
                       />
+                      {editingKeyStored && (
+                        <p id="llmp-apikey-stored" className="text-xs text-muted-foreground">
+                          A key is stored for this provider. Leave the field blank to keep it, or
+                          enter a new key to replace it.
+                        </p>
+                      )}
                     </div>
                   )}
                   <div className="space-y-2">

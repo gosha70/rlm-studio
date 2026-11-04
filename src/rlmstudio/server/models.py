@@ -641,6 +641,17 @@ class LLMProviderConfig(BaseModel):
     consecutive_failures: int = 0
 
 
+class LLMProviderView(LLMProviderConfig):
+    """An LLM Provider as the list and get routes return it.
+
+    ``api_key_stored`` says whether a key is saved for this instance, so the
+    edit form can say so; the key itself is never returned.  Computed per
+    request, not persisted.
+    """
+
+    api_key_stored: bool = False
+
+
 class LLMProviderCreateRequest(BaseModel):
     name: str
     backend: str  # catalog key: "openai", "anthropic", "ollama", "lmstudio"
