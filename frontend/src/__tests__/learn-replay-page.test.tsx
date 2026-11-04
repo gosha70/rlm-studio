@@ -24,8 +24,9 @@ import type { LearnReplay } from "@/lib/api";
 // the widget internals — those have their own suite.
 // ---------------------------------------------------------------------------
 
+let mockSearch: Record<string, string> = { id: "exec-123" };
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams({ id: "exec-123" }),
+  useSearchParams: () => new URLSearchParams(mockSearch),
 }));
 
 vi.mock("swr", () => ({ default: vi.fn() }));
@@ -152,5 +153,18 @@ describe("ReplayPage", () => {
     render(<ReplayPage />);
     const back = screen.getByRole("link", { name: /Back to Learn/i });
     expect(back).toHaveAttribute("href", "/learn");
+  });
+
+  test("without an id it says so and links to Traces instead of loading forever (M18)", () => {
+    mockSearch = {};
+    try {
+      mockUseSWR.mockReturnValue({ data: undefined, error: undefined } as ReturnType<typeof useSWR>);
+      render(<ReplayPage />);
+      expect(screen.queryByText(/Loading replay/i)).not.toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent(/No execution chosen to replay/);
+      expect(screen.getByRole("link", { name: "Traces" })).toHaveAttribute("href", "/traces");
+    } finally {
+      mockSearch = { id: "exec-123" };
+    }
   });
 });

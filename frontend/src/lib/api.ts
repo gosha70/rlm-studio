@@ -3,6 +3,7 @@
  */
 
 import type { RefinementStatus } from "./constants";
+import { BASE_PATH } from "./branding";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -753,11 +754,12 @@ export interface LearnReplay {
 }
 
 // Bundled replays live under frontend/public/learn/replays/<id>.json so
-// they ship with the static asset pipeline.
+// they ship with the static asset pipeline. In the bundled UI they are
+// served under the base path (/studio), which fetch() does not add.
 const BUNDLED_REPLAY_PATH = "/learn/replays/bundled-rlm-demo.json";
 
 export async function getBundledReplay(): Promise<LearnReplay> {
-  const resp = await fetch(BUNDLED_REPLAY_PATH);
+  const resp = await fetch(`${BASE_PATH}${BUNDLED_REPLAY_PATH}`);
   if (!resp.ok) {
     throw new Error(`Bundled replay fetch failed: ${resp.status}`);
   }
