@@ -156,6 +156,9 @@ rlmstudio = ["rlm_studio_config.default.yaml", "py.typed"]
 # under `_ui/` (HTML, JS, CSS, fonts, images, the Next.js `_next/`
 # build manifest) ships in the wheel when the frontend has been built.
 "rlmstudio._ui" = ["**/*"]
+# Bundled copy of docs/ for the Learn tab — copied in at release time like
+# `_ui/`; an installed wheel has no repository docs/ to read.
+"rlmstudio._docs" = ["**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -28,11 +28,22 @@ from rlmstudio.server.models import (
 router = APIRouter()
 
 
-# Project root: resolve up from …/src/rlmstudio/server/routes/docs.py to
-# the repo root four parents above. parents[0]=routes, parents[1]=server,
-# parents[2]=rlmstudio, parents[3]=src, parents[4]=<repo root>.
-_PROJECT_ROOT: Path = Path(__file__).resolve().parents[4]
-_DOCS_DIR: Path = _PROJECT_ROOT / "docs"
+def _resolve_docs_dir(module_file: Path | None = None) -> Path:
+    """The packaged ``rlmstudio/_docs/`` copy when present, else the repo's ``docs/``.
+
+    An installed wheel has no repository ``docs/``: the release build copies it
+    into ``rlmstudio/_docs/`` (see ``RELEASING.md``). A source checkout keeps
+    only the placeholder there and reads ``docs/`` four parents above this file
+    (parents[0]=routes, [1]=server, [2]=rlmstudio, [3]=src, [4]=<repo root>).
+    """
+    here = (module_file or Path(__file__)).resolve()
+    packaged = here.parents[2] / "_docs"
+    if (packaged / "troubleshoot.yaml").is_file():
+        return packaged
+    return here.parents[4] / "docs"
+
+
+_DOCS_DIR: Path = _resolve_docs_dir()
 
 # Slug must match this regex before any lookup. Defense in depth against
 # an accidentally loose allowlist; keeps slugs URL-clean.

@@ -15,6 +15,11 @@ build/
 src/rlmstudio/_ui/*
 !src/rlmstudio/_ui/__init__.py
 
+# Bundled copy of docs/ for the Learn tab, copied in at the release cut the
+# same way (see RELEASING.md). `__init__.py` stays tracked for the same reason.
+src/rlmstudio/_docs/*
+!src/rlmstudio/_docs/__init__.py
+
 # Test / coverage artifacts
 .coverage
 htmlcov/

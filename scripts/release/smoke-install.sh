@@ -4,7 +4,8 @@
 #
 # What it does, per Python version:
 #   1. builds the bundled Studio UI (npm run build:bundle) and ships it into
-#      src/rlmstudio/_ui/, exactly as RELEASING.md describes;
+#      src/rlmstudio/_ui/, and copies docs/ into src/rlmstudio/_docs/,
+#      exactly as RELEASING.md describes;
 #   2. builds the wheel + sdist with `uv build`;
 #   3. asserts the wheel's contents (bundled UI present, no legacy rlmkit/
 #      paths, correct console-script entry point);
@@ -81,6 +82,12 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     check "bundle copied into src/rlmstudio/_ui/" test -f src/rlmstudio/_ui/index.html
     check "_ui package marker survived the copy" test -f src/rlmstudio/_ui/__init__.py
 
+    # Learn reads docs from the package in an install (no repo docs/ there).
+    find src/rlmstudio/_docs -mindepth 1 -not -name __init__.py -delete
+    cp -r docs/. src/rlmstudio/_docs/
+    check "docs copied into src/rlmstudio/_docs/" test -f src/rlmstudio/_docs/troubleshoot.yaml
+    check "_docs package marker survived the copy" test -f src/rlmstudio/_docs/__init__.py
+
     rm -rf dist
     if ! uv build >"$WORK/build.log" 2>&1; then
         bad "uv build (see $WORK/build.log)"; tail -5 "$WORK/build.log"; exit 1
@@ -104,6 +111,8 @@ whl = sys.argv[1]
 z = zipfile.ZipFile(whl); names = z.namelist()
 assert "rlmstudio/_ui/index.html" in names, "bundled UI missing from wheel"
 assert "rlmstudio/_ui/__init__.py" in names, "_ui package marker missing"
+assert "rlmstudio/_docs/rlm-concepts.md" in names, "bundled docs missing from wheel"
+assert "rlmstudio/_docs/troubleshoot.yaml" in names, "troubleshoot source missing from wheel"
 assert any(n.startswith("rlmstudio/prompts/") and n.endswith(".yaml") for n in names), "prompts missing"
 legacy = [n for n in names if n.startswith("rlmkit/")]
 assert not legacy, f"legacy rlmkit/ paths in wheel: {legacy[:5]}"
@@ -190,6 +199,12 @@ PY
             bad "no hashed _next asset referenced by the page"
         fi
 
+        for doc in rlm-concepts hosts-lmstudio troubleshoot; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/docs/$doc")
+            [[ "$code" == "200" ]] && ok "Learn doc '$doc' serves from the package (200)" \
+                                   || bad "Learn doc '$doc' returned $code"
+        done
+
         # The isolated state dir proves RLM_STUDIO_DIR is honoured.
         [[ -d "$STATE" ]] && ok "RLM_STUDIO_DIR honoured (state in $STATE)" \
                           || bad "RLM_STUDIO_DIR ignored — nothing written to $STATE"
@@ -217,9 +232,9 @@ head_ "Summary"
 printf '  %d passed, %d failed\n' "$PASSES" "$FAILURES"
 if [[ $FAILURES -eq 0 ]]; then
     printf '  \033[32mAll install-path checks passed.\033[0m\n'
-    printf '  Reminder: src/rlmstudio/_ui/ now holds a built bundle — it must NOT be\n'
-    printf '  committed. Restore it with:\n'
-    printf '    find src/rlmstudio/_ui -mindepth 1 -not -name __init__.py -delete\n\n'
+    printf '  Reminder: src/rlmstudio/_ui/ and _docs/ now hold build copies — they must\n'
+    printf '  NOT be committed. Restore them with:\n'
+    printf '    find src/rlmstudio/_ui src/rlmstudio/_docs -mindepth 1 -not -name __init__.py -delete\n\n'
     exit 0
 fi
 printf '  \033[31mSome checks failed — logs under %s\033[0m\n\n' "$WORK"

@@ -81,6 +81,12 @@ jobs:
           cp -r frontend/out/. src/rlmstudio/_ui/
           test -f src/rlmstudio/_ui/__init__.py
           test -f src/rlmstudio/_ui/index.html
+      - name: Ship the docs inside the package
+        run: |
+          find src/rlmstudio/_docs -mindepth 1 -not -name __init__.py -delete
+          cp -r docs/. src/rlmstudio/_docs/
+          test -f src/rlmstudio/_docs/__init__.py
+          test -f src/rlmstudio/_docs/troubleshoot.yaml
       - name: uv build
         run: uv build
       - name: Verify wheel contents
@@ -90,6 +96,8 @@ jobs:
           whl = glob.glob("dist/*.whl")[0]
           z = zipfile.ZipFile(whl); names = z.namelist()
           assert "rlmstudio/_ui/index.html" in names, "bundled UI missing"
+          assert "rlmstudio/_docs/rlm-concepts.md" in names, "bundled docs missing"
+          assert "rlmstudio/_docs/troubleshoot.yaml" in names, "troubleshoot source missing"
           assert not [n for n in names if n.startswith("rlmkit/")], "legacy paths in wheel"
           ep = [n for n in names if n.endswith("entry_points.txt")][0]
           assert "rlm-studio = rlmstudio.cli.main:main" in z.read(ep).decode()
