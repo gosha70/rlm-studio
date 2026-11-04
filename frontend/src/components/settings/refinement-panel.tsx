@@ -425,22 +425,25 @@ function RefinementDetail({
     setBusy(true);
     setMessage(null);
     // Refresh the profile before re-reading the refinement, so a stale edit
-    // form on the card is closed whatever happens to that read.
+    // form on the card is closed whatever happens to that read. Stay busy
+    // through the re-read so the buttons cannot send a second request.
     try {
-      await action();
-      toast.success(success);
-      if (changesProfile) onProfileChanged();
-    } catch (err) {
-      setMessage(apiErrorMessage(err));
-      // A split-brain accept or rollback (5xx after a successful save) did
-      // change the profile, so refresh it. A 4xx was refused before any
-      // write: leave the card, and any edit in progress, alone.
-      if (changesProfile && apiErrorStatus(err) >= 500) onProfileChanged();
+      try {
+        await action();
+        toast.success(success);
+        if (changesProfile) onProfileChanged();
+      } catch (err) {
+        setMessage(apiErrorMessage(err));
+        // A split-brain accept or rollback (5xx after a successful save) did
+        // change the profile, so refresh it. A 4xx was refused before any
+        // write: leave the card, and any edit in progress, alone.
+        if (changesProfile && apiErrorStatus(err) >= 500) onProfileChanged();
+      }
+      await mutate();
+      onChanged();
     } finally {
       setBusy(false);
     }
-    await mutate();
-    onChanged();
   };
 
   const evaluation = refinement.evaluation;

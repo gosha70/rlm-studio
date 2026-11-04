@@ -490,6 +490,28 @@ describe("Decisions", () => {
     await waitFor(() => expect(onProfileChanged).toHaveBeenCalledTimes(1));
   });
 
+  test("Accept stays disabled until the refinement is re-read", async () => {
+    const evaluated = refinement({ status: REFINEMENT_STATUS_EVALUATED, evaluation: evaluation() });
+    let finishRead: (r: Refinement) => void = () => {};
+    mocked.listRefinements.mockResolvedValue([evaluated]);
+    mocked.getRefinement
+      .mockResolvedValueOnce(evaluated)
+      .mockImplementationOnce(() => new Promise<Refinement>((resolve) => (finishRead = resolve)));
+    mocked.acceptRefinement.mockResolvedValue(refinement({ status: REFINEMENT_STATUS_ACCEPTED }));
+    const onProfileChanged = renderPanel();
+
+    const accept = await screen.findByRole("button", { name: "Accept" });
+    fireEvent.click(accept);
+    await waitFor(() => expect(onProfileChanged).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocked.getRefinement).toHaveBeenCalledTimes(2));
+    expect(accept).toBeDisabled();
+    fireEvent.click(accept);
+    expect(mocked.acceptRefinement).toHaveBeenCalledTimes(1);
+
+    finishRead(refinement({ status: REFINEMENT_STATUS_ACCEPTED }));
+    expect(await screen.findByRole("button", { name: "Roll back" })).toBeEnabled();
+  });
+
   test("a refused accept leaves the profile and any edit alone", async () => {
     showRefinement(refinement({ status: REFINEMENT_STATUS_EVALUATED, evaluation: evaluation() }));
     mocked.acceptRefinement.mockRejectedValue(
