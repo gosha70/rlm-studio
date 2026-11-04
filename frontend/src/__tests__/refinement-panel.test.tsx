@@ -5,7 +5,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { vi, describe, test, expect, beforeEach } from "vitest";
 import { RefinementPanel } from "@/components/settings/refinement-panel";
@@ -359,6 +359,18 @@ describe("Evaluation", () => {
     expect(mocked.getRefinement.mock.calls.length).toBe(callsWhenDone);
   });
 
+  test("the history badge follows the evaluation to its end", async () => {
+    const running = refinement({ status: REFINEMENT_STATUS_EVALUATING, progress: { done: 1, total: 2 } });
+    const done = refinement({ status: REFINEMENT_STATUS_EVALUATED, evaluation: evaluation() });
+    mocked.listRefinements.mockResolvedValueOnce([running]).mockResolvedValue([done]);
+    mocked.getRefinement.mockResolvedValueOnce(running).mockResolvedValue(done);
+    renderPanel();
+    const history = await screen.findByRole("navigation", { name: "Refinement history" });
+    expect(await within(history).findByText("Evaluating")).toBeInTheDocument();
+    expect(await within(history).findByText("Evaluated", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(within(history).queryByText("Evaluating")).not.toBeInTheDocument();
+  });
+
   test("progress with nothing to run never divides by zero", async () => {
     showRefinement(refinement({ status: REFINEMENT_STATUS_EVALUATING, progress: { done: 0, total: 0 } }));
     renderPanel();
@@ -424,6 +436,18 @@ describe("Decisions", () => {
     renderPanel();
     expect(await screen.findByRole("button", { name: "Accept" })).toBeDisabled();
     expect(screen.getByText(/provider failure \(timeout\)/)).toBeInTheDocument();
+  });
+
+  test("a judge-only evaluation cannot be accepted and says why", async () => {
+    showRefinement(
+      refinement({
+        status: REFINEMENT_STATUS_EVALUATED,
+        evaluation: evaluation({ deterministic_case_count: 0 }),
+      }),
+    );
+    renderPanel();
+    expect(await screen.findByRole("button", { name: "Accept" })).toBeDisabled();
+    expect(screen.getByText(/None of the evaluated cases has an expected answer/)).toBeInTheDocument();
   });
 
   test("a failed accept shows the server's message and still refreshes the profile", async () => {

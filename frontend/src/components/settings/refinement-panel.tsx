@@ -9,7 +9,7 @@
  * through the server's checked, locked decision endpoints.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Download } from "lucide-react";
@@ -389,12 +389,21 @@ function RefinementDetail({
   onChanged: () => void;
   onProfileChanged: () => void;
 }) {
+  const lastStatus = useRef<RefinementStatus | null>(null);
   const { data: refinement, error, mutate } = useSWR(
     ["refinement", profile.id, refinementId],
     () => getRefinement(profile.id, refinementId),
     {
       refreshInterval: (latest) =>
         latest?.status === REFINEMENT_STATUS_EVALUATING ? REFINEMENT_POLL_MS : 0,
+      // Only this view polls, so refresh the history list when a poll sees
+      // the evaluation end; otherwise its badge stays on "Evaluating".
+      onSuccess: (latest) => {
+        if (lastStatus.current === REFINEMENT_STATUS_EVALUATING && latest.status !== REFINEMENT_STATUS_EVALUATING) {
+          onChanged();
+        }
+        lastStatus.current = latest.status;
+      },
     },
   );
   const [busy, setBusy] = useState(false);
@@ -582,6 +591,14 @@ function RefinementDetail({
               An incomplete evaluation cannot be accepted.
             </p>
           )}
+          {status === REFINEMENT_STATUS_EVALUATED &&
+            evaluation?.complete &&
+            evaluation.deterministic_case_count === 0 && (
+              <p className="text-xs text-muted-foreground">
+                None of the evaluated cases has an expected answer, so this evaluation cannot be
+                accepted.
+              </p>
+            )}
         </div>
       )}
 
