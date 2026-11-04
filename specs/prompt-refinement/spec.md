@@ -194,6 +194,11 @@ here before the phase closes.
   repo-docs case file are not in the wheel. An installed Studio without a
   checkout gets 503 from the holdout and evaluate routes until
   `RLM_STUDIO_REFINEMENT_DATASET` points at a dataset. Found in Phase C.
+- **Profile edits still use the unchecked save.** `PUT` and `DELETE /api/profiles/{id}`
+  now hold `_config_lock`, but they keep the pre-existing `save_config()`,
+  which logs a failed write and returns. A failed edit therefore leaves the
+  in-memory profile changed but not on disk. Accept and rollback use the
+  checked save and are not affected. Pre-dates #78; found in Phase D.
 - **Failed proposals leave no record.** A proposal call that fails at the
   provider or returns an unusable reply returns 502 and stores no
   refinement row, so that paid call and the digest it sent appear only in

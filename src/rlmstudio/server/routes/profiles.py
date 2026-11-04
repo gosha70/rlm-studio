@@ -132,12 +132,17 @@ async def create_profile(
 
 
 @router.put("/api/profiles/{profile_id}")
-async def update_profile(
+def update_profile(
     profile_id: str,
     req: RunProfileUpdate,
     state: AppState = Depends(get_state),
 ) -> RunProfile:
-    """Update a user profile. Cannot modify builtins."""
+    """Update a user profile. Cannot modify builtins.
+
+    A plain ``def`` on purpose: it waits on ``_config_lock``, which an
+    accept or rollback can hold across a disk write, so FastAPI must run it
+    in its thread pool rather than on the event loop.
+    """
     # Check builtins
     for bp in BUILTIN_PROFILES:
         if bp.id == profile_id:
@@ -153,39 +158,45 @@ async def update_profile(
                     detail=f"Profile with name '{req.name}' already exists",
                 )
 
-    # Find user profile
-    for profile in state.user_profiles:
-        if profile.id == profile_id:
-            if req.name is not None:
-                profile.name = req.name
-            if req.description is not None:
-                profile.description = req.description
-            if req.strategy is not None:
-                profile.strategy = req.strategy
-            if req.default_provider is not None:
-                profile.default_provider = req.default_provider
-            if req.providers_enabled is not None:
-                profile.providers_enabled = req.providers_enabled
-            if req.runtime_settings is not None:
-                profile.runtime_settings = req.runtime_settings
-            if req.budget is not None:
-                profile.budget = req.budget
-            if req.system_prompts is not None:
-                profile.system_prompts = req.system_prompts
-            if req.prompt_template_name is not None:
-                profile.prompt_template_name = req.prompt_template_name
-            state.save_config()
-            return profile
+    # Find user profile.  Mutate and save under the config lock so an edit
+    # cannot interleave with a prompt-refinement accept or rollback (#78
+    # FR-9/FR-10a), which hold the same lock across their own check and save.
+    with state._config_lock:
+        for profile in state.user_profiles:
+            if profile.id == profile_id:
+                if req.name is not None:
+                    profile.name = req.name
+                if req.description is not None:
+                    profile.description = req.description
+                if req.strategy is not None:
+                    profile.strategy = req.strategy
+                if req.default_provider is not None:
+                    profile.default_provider = req.default_provider
+                if req.providers_enabled is not None:
+                    profile.providers_enabled = req.providers_enabled
+                if req.runtime_settings is not None:
+                    profile.runtime_settings = req.runtime_settings
+                if req.budget is not None:
+                    profile.budget = req.budget
+                if req.system_prompts is not None:
+                    profile.system_prompts = req.system_prompts
+                if req.prompt_template_name is not None:
+                    profile.prompt_template_name = req.prompt_template_name
+                state.save_config()
+                return profile
 
     raise HTTPException(status_code=404, detail=f"Profile not found: {profile_id}")
 
 
 @router.delete("/api/profiles/{profile_id}", status_code=204)
-async def delete_profile(
+def delete_profile(
     profile_id: str,
     state: AppState = Depends(get_state),
 ) -> None:
-    """Delete a user profile. Cannot delete builtins or profiles in use."""
+    """Delete a user profile. Cannot delete builtins or profiles in use.
+
+    A plain ``def`` for the same reason as :func:`update_profile`.
+    """
     for bp in BUILTIN_PROFILES:
         if bp.id == profile_id:
             raise HTTPException(status_code=400, detail="Cannot delete built-in profiles")
@@ -198,10 +209,11 @@ async def delete_profile(
             detail=f"Cannot delete: profile is used by Chat Providers: {names}",
         )
 
-    for i, profile in enumerate(state.user_profiles):
-        if profile.id == profile_id:
-            state.user_profiles.pop(i)
-            state.save_config()
-            return
+    with state._config_lock:
+        for i, profile in enumerate(state.user_profiles):
+            if profile.id == profile_id:
+                state.user_profiles.pop(i)
+                state.save_config()
+                return
 
     raise HTTPException(status_code=404, detail=f"Profile not found: {profile_id}")

@@ -385,3 +385,40 @@ def supplement_sha256(text: str) -> str:
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Decision record (refinements.decision_json, spec FR-9..FR-11, AC-7)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RollbackRecord:
+    """What a rollback restored, so the history shows the profile's state."""
+
+    rolled_back_at: float
+    restored_rlm_key_present: bool
+    restored_rlm_key_value: str | None
+
+
+@dataclass(frozen=True)
+class DecisionRecord:
+    """An explicit accept or reject, plus a later rollback of an accept."""
+
+    decision: str
+    decided_at: float
+    reason: str | None
+    regression: bool
+    acknowledge_regression: bool
+    rollback: RollbackRecord | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready form stored in ``refinements.decision_json``."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DecisionRecord:
+        """Rebuild a record written by :meth:`to_dict`."""
+        values = dict(data)
+        values["rollback"] = RollbackRecord(**values["rollback"]) if values["rollback"] else None
+        return cls(**values)

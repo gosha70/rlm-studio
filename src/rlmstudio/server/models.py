@@ -8,6 +8,7 @@ from typing import Any, Literal, TypeAlias
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from rlmstudio.application.refinement_constants import (
+    REFINEMENT_DECISION_REASON_MAX_CHARS,
     REFINEMENT_MAX_REPS,
     REFINEMENT_MAX_SOURCE_RUNS,
     REFINEMENT_MIN_REPS,
@@ -1099,6 +1100,19 @@ class RefinementEvaluateRequest(BaseModel):
     reps: int = Field(default=REFINEMENT_MIN_REPS, ge=REFINEMENT_MIN_REPS, le=REFINEMENT_MAX_REPS)
     chat_provider_id: str | None = None
     judge_chat_provider_id: str | None = None
+
+
+class RefinementAcceptRequest(BaseModel):
+    """Body of ``POST …/refinements/{rid}/accept`` (spec FR-9)."""
+
+    acknowledge_regression: bool = False
+    reason: str | None = Field(default=None, max_length=REFINEMENT_DECISION_REASON_MAX_CHARS)
+
+
+class RefinementRejectRequest(BaseModel):
+    """Body of ``POST …/refinements/{rid}/reject`` (spec FR-10)."""
+
+    reason: str | None = Field(default=None, max_length=REFINEMENT_DECISION_REASON_MAX_CHARS)
 
 
 class RefinementEvaluateResponse(BaseModel):

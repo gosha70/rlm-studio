@@ -98,3 +98,6 @@ REFINEMENT_ARM_BASELINE = "baseline"
 
 REFINEMENT_ARM_CANDIDATE = "candidate"
 """Evaluation arm that runs the proposed supplement."""
+
+REFINEMENT_DECISION_REASON_MAX_CHARS = 2_000
+"""Longest free-text reason an accept or reject may record."""
