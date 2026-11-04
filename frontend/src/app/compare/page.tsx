@@ -270,6 +270,7 @@ export default function ComparePage() {
   const [uploadedFile, setUploadedFile] = useState<FileUploadResponse | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedLLMProviderIds, setSelectedLLMProviderIds] = useState<string[]>([]);
   const [selectedModes, setSelectedModes] = useState<Set<MatrixSlotMode>>(
     new Set([MODE_DIRECT]),
@@ -560,10 +561,12 @@ export default function ComparePage() {
                     rows={4}
                     disabled={isRunning}
                   />
-                  <label
-                    className={`inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent ${
-                      uploadingFile ? "opacity-50" : ""
-                    }`}
+                  {/* A real button, so Tab reaches it; it opens the hidden picker. */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingFile || isRunning}
+                    className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {uploadingFile ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -571,17 +574,19 @@ export default function ComparePage() {
                       <Upload className="h-4 w-4" />
                     )}
                     <span>{uploadingFile ? "Uploading…" : "Upload file"}</span>
-                    <input
-                      type="file"
-                      hidden
-                      disabled={uploadingFile || isRunning}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleFileUpload(file);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    data-testid="compare-file-input"
+                    disabled={uploadingFile || isRunning}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleFileUpload(file);
+                      e.target.value = "";
+                    }}
+                  />
                   {uploadError && (
                     <div className="text-sm text-destructive">{uploadError}</div>
                   )}

@@ -6,6 +6,7 @@
  */
 
 import { render, screen, fireEvent, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, describe, test, expect, afterEach } from "vitest";
 import useSWR from "swr";
 
@@ -285,6 +286,26 @@ describe("Judge Score chart", () => {
     const axis = screen.getAllByTestId("chart-value-axis")[0];
     expect(JSON.parse(axis.dataset.domain!)).toEqual([0, 5]);
     expect(JSON.parse(axis.dataset.ticks!)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+});
+
+describe("LLM Tuner upload", () => {
+  test("Upload file is reachable with Tab and opens the file picker from the keyboard", async () => {
+    mockSWR();
+    render(<ComparePage />);
+    const user = userEvent.setup();
+    const pickerOpened = vi.spyOn(HTMLInputElement.prototype, "click");
+
+    // Tab from the content box lands on the upload control.
+    screen.getByPlaceholderText(/Paste text content here/).focus();
+    await user.tab();
+    const upload = screen.getByRole("button", { name: "Upload file" });
+    expect(upload).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(pickerOpened).toHaveBeenCalled();
+    expect(pickerOpened.mock.contexts[0]).toBe(screen.getByTestId("compare-file-input"));
+    pickerOpened.mockRestore();
   });
 });
 
