@@ -48,10 +48,10 @@ only to keep the codebase conventions or ship the feature.
 
 ## Phase E — UI (Frontend)
 
-- [ ] E1 `lib/api.ts` functions and types for every route. FR-18 (CLAUDE.md: use the shared API client).
-- [ ] E2 `refinement-panel.tsx`: source-run table, proposal CP select defaulted from newest selected run, Propose, diff + rationale, holdout list + reps + run-count confirm, progress polling, results table (per case/rep/arm, deltas, regression flag, default Reject), accept checkbox when flagged, history with Rollback, current-supplement display next to the candidate. FR-18, KG split-brain, KG selection-not-bound.
-- [ ] E3 "Refine prompt" button on `profile-card.tsx` (user profiles only). FR-18.
-- [ ] E4 Vitest: panel states (empty sources, proposal ready, evaluating, evaluated with and without regression, accepted, rolled back). FR-18 (CLAUDE.md: vitest for new components).
+- [x] E1 `lib/api.ts` functions and types for every route. FR-18 (CLAUDE.md: use the shared API client).
+- [x] E2 `refinement-panel.tsx`: source-run table, proposal CP select defaulted from newest selected run, Propose, diff + rationale, holdout list + reps + run-count confirm, progress polling, results table (per case/rep/arm, deltas, regression flag, default Reject), accept checkbox when flagged, history with Rollback, current-supplement display next to the candidate. FR-18, KG split-brain, KG selection-not-bound.
+- [x] E3 "Refine prompt" button on `profile-card.tsx` (user profiles only). FR-18.
+- [x] E4 Vitest: panel states (empty sources, proposal ready, evaluating, evaluated with and without regression, accepted, rolled back). FR-18 (CLAUDE.md: vitest for new components).
 
 ## Phase F — docs and closure (Team Lead + QA)
 
@@ -89,6 +89,10 @@ only to keep the codebase conventions or ship the feature.
 - D2 (review fix): reject returns 409 when the profile's RLM prompt already equals the candidate. After a split-brain accept the row stays `evaluated` while the candidate is live, and recording `rejected` would contradict the profile with no API path back.
 - E2 (carried from review): (a) progress can be `{done: 0, total: 0}` when every case is excluded, so never divide by `total`; (b) after an accept or rollback the panel must refresh or close the card's edit form, because a ProfileCard save sends the RLM prompt captured when editing started and would overwrite the decision's result.
 - D4: `GET …/refinements/export.jsonl` serves `application/x-ndjson` with one `RefinementRecord` per line, newest first.
+- E2: the panel is a dialog (`components/settings/refinement-panel.tsx`) opened from a "Refine" button on user ProfileCards. SWR loads the history, source runs, holdout cases and the selected refinement, polling every 2 s only while it is `evaluating`. Progress `0/0` renders "Preparing cases…" (no division). After an accept or rollback, success or failure, the card closes its edit form and refreshes the profile list; a split-brain 500 still changed the profile.
+- E2: Accept stays disabled until the evaluation is complete, has a deterministic case, and any flagged regression is acknowledged; with a regression, Reject is the primary button. "Reject is the default" and the template-detach note show only while a decision is still open.
+- E2: the proposal is synchronous; under `npm run dev` it goes through the Next rewrite proxy and its timeout (spec §6 gap). The shipped bundle is same-origin with no proxy.
+- E2: smoke-tested in a real browser (headless Chromium) against an isolated backend: open the panel on an evaluated refinement with a regression, acknowledge, accept (profile gets the candidate), roll back (profile follows its template again), open New refinement; no page errors.
 - A7: `afd2db3` (2026-04-07) removed per-mode prompt editors in favour of prompt groups. FR-14 re-adds one RLM textarea; the old "no per-mode textareas" test now asserts only RLM is editable. Owner decision 2026-11-03: keep the single RLM textarea.
 
 ## Owner tasks (human)

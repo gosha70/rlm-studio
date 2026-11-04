@@ -8,7 +8,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, act } from "@testing-library/react";
 import { vi, describe, test, expect, beforeEach } from "vitest";
 import { FieldLabel } from "@/components/settings/field-label";
 import { ProfileCard } from "@/components/settings/profile-card";
@@ -33,6 +33,16 @@ vi.mock("@/lib/api", async (importOriginal) => {
     updateProfile: vi.fn().mockResolvedValue({}),
   };
 });
+
+// The panel has its own test file; here a stub exposes the callback the card
+// passes, so the card's reaction to an accept or rollback can be checked.
+const panelProps: { onProfileChanged?: () => void } = {};
+vi.mock("@/components/settings/refinement-panel", () => ({
+  RefinementPanel: (props: { onProfileChanged: () => void }) => {
+    panelProps.onProfileChanged = props.onProfileChanged;
+    return <div data-testid="refinement-panel" />;
+  },
+}));
 
 import useSWR from "swr";
 
@@ -315,5 +325,49 @@ describe("ProfileCard — system_prompts persistence", () => {
     const api = await import("@/lib/api");
     await vi.waitFor(() => expect(api.createProfile).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.createProfile).mock.calls[0][0].system_prompts).toEqual(STORED);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// ProfileCard — prompt refinement entry point (#78 FR-18)
+// ---------------------------------------------------------------------------
+
+describe("ProfileCard — refinement", () => {
+  beforeEach(() => {
+    mockUseSWR.mockReturnValue({
+      data: MOCK_TEMPLATES,
+      error: undefined,
+      isLoading: false,
+      isValidating: false,
+      mutate: vi.fn(),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+  });
+
+  test("user profiles get a Refine button that opens the panel", () => {
+    render(<ProfileCard profile={makeProfile()} />);
+    expect(screen.queryByTestId("refinement-panel")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refine Test Profile RLM prompt" }));
+    expect(screen.getByTestId("refinement-panel")).toBeInTheDocument();
+  });
+
+  test("built-in profiles have no Refine button", () => {
+    render(<ProfileCard profile={makeProfile({ is_builtin: true })} />);
+    expect(screen.queryByRole("button", { name: /Refine/ })).not.toBeInTheDocument();
+  });
+
+  test("an accept or rollback closes the open edit form and refreshes the profile", () => {
+    const onUpdated = vi.fn();
+    render(<ProfileCard profile={makeProfile()} onUpdated={onUpdated} />);
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    expect(screen.getByRole("button", { name: /^Save$/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Refine Test Profile RLM prompt" }));
+
+    act(() => panelProps.onProfileChanged?.());
+
+    // A stale form would save the RLM prompt captured before the decision.
+    expect(screen.queryByRole("button", { name: /^Save$/i })).not.toBeInTheDocument();
+    expect(onUpdated).toHaveBeenCalledTimes(1);
   });
 });

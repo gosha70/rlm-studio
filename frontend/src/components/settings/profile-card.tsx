@@ -31,9 +31,10 @@ import {
 } from "@/lib/api";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Trash2, Lock, Edit2, Copy, Download, ChevronDown, ChevronUp } from "lucide-react";
+import { Trash2, Lock, Edit2, Copy, Download, ChevronDown, ChevronUp, FlaskConical } from "lucide-react";
 import { MODE_RLM, displayModeName } from "@/lib/constants";
 import { StrategySelectItems } from "./strategy-select-items";
+import { RefinementPanel } from "./refinement-panel";
 
 interface ProfileCardProps {
   profile: RunProfile;
@@ -56,6 +57,7 @@ export function ProfileCard({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [refining, setRefining] = useState(false);
   const { data: templates = [] } = useSWR<SystemPromptTemplate[]>("prompt-templates", getPromptTemplates);
 
   const [editData, setEditData] = useState({
@@ -286,6 +288,16 @@ export function ProfileCard({
             </Badge>
           </div>
           <div className="flex gap-1">
+            {!profile.is_builtin && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setRefining(true)}
+                aria-label={`Refine ${profile.name} RLM prompt`}
+              >
+                <FlaskConical className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            )}
             {!profile.is_builtin && (
               <Button
                 variant="ghost"
@@ -607,6 +619,20 @@ export function ProfileCard({
         </CollapsibleContent>
       </CardContent>
     </Card>
+    {refining && (
+      <RefinementPanel
+        profile={profile}
+        chatProviders={chatProviders}
+        open={refining}
+        onOpenChange={setRefining}
+        onProfileChanged={() => {
+          // An accept or rollback rewrote the RLM prompt: drop any open edit
+          // form, whose save would send the prompt captured before it.
+          setEditing(false);
+          onUpdated?.();
+        }}
+      />
+    )}
     </Collapsible>
   );
 }
