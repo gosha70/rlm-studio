@@ -36,6 +36,18 @@ _PREFILL_RATIO = 0.7
 _MIN_PREFILL_STEPS = 2
 
 
+# Error-text phrases that mean the prompt did not fit the model's context.
+# Providers word it differently: OpenAI "maximum context length", LM Studio
+# "greater than the context length", litellm "ContextWindowExceededError",
+# Anthropic "prompt is too long".
+CONTEXT_OVERFLOW_KEYWORDS: tuple[str, ...] = (
+    "context window",
+    "context_length",
+    "context length",
+    "contextwindowexceeded",
+    "prompt is too long",
+)
+
 # Warning prefix used by RLM/Direct/RAG use cases for degraded outcomes
 _DEGRADED_WARNING_PREFIX = "\u26a0\ufe0f"
 
@@ -112,7 +124,7 @@ def _classify_hard_failure(
         if trace is not None and _is_prefill_dominated(trace):
             return ExecutionOutcome(OutcomeCategory.PREFILL_TIMEOUT, is_usable=False)
         return ExecutionOutcome(OutcomeCategory.TIMEOUT, is_usable=False)
-    if "context window" in error_lower or "context_length" in error_lower:
+    if any(kw in error_lower for kw in CONTEXT_OVERFLOW_KEYWORDS):
         return ExecutionOutcome(OutcomeCategory.CONTEXT_OVERFLOW, is_usable=False)
     if "budget" in error_lower:
         return ExecutionOutcome(OutcomeCategory.BUDGET_EXHAUSTED, is_usable=False)

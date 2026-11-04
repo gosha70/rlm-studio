@@ -20,6 +20,7 @@ from rlmstudio.application.services.provider_failure import (
     describe_provider_failure,
     failure_answer,
     redact_secrets,
+    strip_html,
 )
 
 # ---------------------------------------------------------------------------
@@ -538,3 +539,60 @@ def test_all_three_execution_records_carry_the_same_keys() -> None:
         f"chat and Compare records drifted — "
         f"only chat: {rest[0] - compare[0]}, only Compare: {compare[0] - rest[0]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# M6: missing credentials, a local server's HTML 500, context-length wording
+# ---------------------------------------------------------------------------
+
+_LM_STUDIO_500 = (
+    "litellm.InternalServerError: InternalServerError: OpenAIException - <!DOCTYPE html>\n"
+    '<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n'
+    "<body>\n<pre>Internal Server Error</pre>\n</body>\n</html>\n"
+)
+
+
+def test_missing_credentials_is_an_auth_failure() -> None:
+    litellm = pytest.importorskip("litellm")
+    exc = litellm.InternalServerError(
+        "OpenAIException - Missing credentials. Please pass an api_key, "
+        "workload_identity, admin_api_key, or set the OPENAI_API_KEY environment variable.",
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    assert classify_provider_failure(exc) is ProviderFailureKind.AUTH
+
+
+def test_html_500_is_a_server_error_with_readable_detail() -> None:
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+    exc = litellm.InternalServerError(_LM_STUDIO_500, llm_provider="openai", model="qwen")
+    assert classify_provider_failure(exc) is ProviderFailureKind.SERVER_ERROR
+
+    adapter = LiteLLMAdapter(model="openai/qwen2.5-7b-instruct")
+    err = adapter._translate_exception(exc, "LiteLLM completion failed")
+    answer = failure_answer(err)
+
+    assert answer is not None
+    assert answer.startswith("⚠️ **The provider's server failed**")
+    assert "reload the model" in answer
+    assert "<html" not in answer
+    assert "<pre>" not in answer
+    assert "Internal Server Error" in answer
+
+
+def test_strip_html_leaves_plain_text_alone() -> None:
+    text = "Error code: 400 - {'error': 'Model unloaded.'}\nsecond line"
+    assert strip_html(text) == text
+
+
+def test_direct_answer_names_a_context_length_overflow() -> None:
+    from rlmstudio.application.use_cases.run_direct import _format_error_answer
+
+    exc = RuntimeError(
+        "LiteLLM completion failed: litellm.BadRequestError: OpenAIException - "
+        "The number of tokens to keep from the initial prompt is greater than the "
+        "context length."
+    )
+    assert _format_error_answer(exc).startswith("⚠️ **Context window exceeded**")

@@ -34,6 +34,7 @@ __all__ = [
     "failure_kind_of",
     "failure_kind_value",
     "redact_secrets",
+    "strip_html",
     "SECRET_PLACEHOLDER",
 ]
 
@@ -59,6 +60,21 @@ _API_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def strip_html(text: str) -> str:
+    """Reduce an HTML error page in *text* to its words.
+
+    A local server that crashes (LM Studio's HTTP 500) answers with an HTML
+    page, which the answer card otherwise showed as raw markup.  Text with
+    no HTML document in it is returned unchanged.
+    """
+    if "<html" not in text.lower():
+        return text
+    return " ".join(_HTML_TAG_RE.sub(" ", text).split())
+
+
 def redact_secrets(text: str) -> str:
     """Replace anything matching a known API-key shape with a placeholder.
 
@@ -82,6 +98,7 @@ class ProviderFailureKind(str, Enum):
     CONNECTION = "connection"
     TIMEOUT = "timeout"
     RATE_LIMIT = "rate_limit"
+    SERVER_ERROR = "server_error"
     UNKNOWN = "unknown"
 
 
@@ -121,6 +138,8 @@ _KEYWORD_KINDS: tuple[tuple[ProviderFailureKind, tuple[str, ...]], ...] = (
             "authentication_error",
             "unauthorized",
             "invalid authentication",
+            # The OpenAI client's own error when no key was sent at all.
+            "missing credentials",
         ),
     ),
     (
@@ -150,6 +169,13 @@ _KEYWORD_KINDS: tuple[tuple[ProviderFailureKind, tuple[str, ...]], ...] = (
             "no route to host",
             "network is unreachable",
         ),
+    ),
+    # After every cause above: litellm wraps many failures (a missing key
+    # among them) in InternalServerError, so only a 500 nothing more
+    # specific explains lands here.
+    (
+        ProviderFailureKind.SERVER_ERROR,
+        ("internal server error", "internalservererror"),
     ),
 )
 
@@ -262,6 +288,17 @@ def describe_provider_failure(
             fix="Wait and retry, or check the account's usage limits with the provider.",
         )
 
+    if kind is ProviderFailureKind.SERVER_ERROR:
+        return ProviderFailure(
+            kind=kind,
+            cause=f"The provider's server{where} failed with an internal error (HTTP 500).",
+            fix=(
+                "Check the server's own log. A local server (LM Studio, Ollama) "
+                "usually fails this way when the model crashed, was unloaded or "
+                "ran out of memory: reload the model and try again."
+            ),
+        )
+
     return ProviderFailure(
         kind=ProviderFailureKind.UNKNOWN,
         cause="The provider call failed.",
@@ -320,6 +357,7 @@ _FAILURE_TITLES: dict[ProviderFailureKind, str] = {
     ProviderFailureKind.CONNECTION: "Cannot reach the provider",
     ProviderFailureKind.TIMEOUT: "The provider did not respond in time",
     ProviderFailureKind.RATE_LIMIT: "Rate limited by the provider",
+    ProviderFailureKind.SERVER_ERROR: "The provider's server failed",
     ProviderFailureKind.UNKNOWN: "The provider call failed",
 }
 

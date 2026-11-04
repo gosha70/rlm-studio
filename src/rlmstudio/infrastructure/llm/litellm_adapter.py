@@ -23,6 +23,7 @@ from rlmstudio.application.services.provider_failure import (
     classify_provider_failure,
     describe_provider_failure,
     redact_secrets,
+    strip_html,
 )
 from rlmstudio.branding import env, env_name
 
@@ -920,7 +921,7 @@ class LiteLLMAdapter:
         kind = classify_provider_failure(exc)
         if kind is not ProviderFailureKind.UNKNOWN:
             failure = describe_provider_failure(kind, model=self._model, api_base=self._api_base)
-            detail = redact_secrets(str(exc))
+            detail = redact_secrets(strip_html(str(exc)))
             # ProviderFailureError subclasses RuntimeError, so every existing
             # `except RuntimeError` keeps working; the carried kind is what
             # lets the server attach a stable classification to the run
