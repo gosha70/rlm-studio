@@ -81,6 +81,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Which budget limit stopped a run (see ``RunRLMUseCase._exceeded_limit``).
+_LIMIT_TOKENS = "tokens"
+_LIMIT_COST = "cost"
+_LIMIT_TIME = "time"
+_LIMIT_STEPS = "steps"
+
+# Where a run's step limit is set: the Chat Provider's profile, or the LLM
+# Tuner's own control for a Compare run.  Chat Providers have no such field.
+_MAX_STEPS_HINT = (
+    "- Increase **Max Steps** on the Chat Provider's profile (Settings → Profiles), "
+    "or **Max steps** in the LLM Tuner.\n"
+)
+
 
 @dataclass(frozen=True)
 class _AttachedFileSection:
@@ -888,8 +901,8 @@ class RunRLMUseCase:
             )
 
         except BudgetExceededError as exc:
-            # Config/limit hit — return a warning, not an error, so the user
-            # knows exactly which setting to change. success=True lets Auto-Judge run.
+            # Config/limit hit — the answer names the limit and the setting to
+            # change; the run is a failure, classified by the limit it hit.
             if hasattr(self._llm, "use_root_model"):
                 self._llm.use_root_model()
             elapsed = time.time() - start
@@ -947,17 +960,31 @@ class RunRLMUseCase:
                             elapsed_time=time.time() - start,
                             trace=trace,
                         )
-            warning = self._format_limit_warning(
-                overflow_step=overflow_at_step,
-                steps_used=budget_state.steps,
-                config=budget_config,
-                exc=exc,
-            )
-            answer = (partial + "\n\n---\n\n" + warning) if partial else warning
+            if overflow_at_step is not None:
+                warning = self._format_limit_warning(
+                    overflow_step=overflow_at_step,
+                    steps_used=budget_state.steps,
+                    config=budget_config,
+                )
+                answer = (partial + "\n\n---\n\n" + warning) if partial else warning
+                return RunResultDTO(
+                    answer=answer,
+                    mode_used=MODE_RLM,
+                    success=True,
+                    steps=budget_state.steps,
+                    input_tokens=cumulative_input,
+                    output_tokens=cumulative_output,
+                    total_cost=cumulative_cost,
+                    elapsed_time=elapsed,
+                    trace=trace,
+                )
+            budget_state.elapsed_seconds = elapsed
+            answer, error = self._budget_stop_outcome(budget_state, budget_config, partial, exc)
             return RunResultDTO(
                 answer=answer,
                 mode_used=MODE_RLM,
-                success=True,
+                success=False,
+                error=error,
                 steps=budget_state.steps,
                 input_tokens=cumulative_input,
                 output_tokens=cumulative_output,
@@ -1847,8 +1874,8 @@ class RunRLMUseCase:
             )
 
         except BudgetExceededError as exc:
-            # Config/limit hit — return a warning, not an error, so the user
-            # knows exactly which setting to change. success=True lets Auto-Judge run.
+            # Config/limit hit — the answer names the limit and the setting to
+            # change; the run is a failure, classified by the limit it hit.
             if hasattr(self._llm, "use_root_model"):
                 self._llm.use_root_model()
             elapsed = time.time() - start
@@ -1913,17 +1940,31 @@ class RunRLMUseCase:
                             elapsed_time=time.time() - start,
                             trace=trace,
                         )
-            warning = self._format_limit_warning(
-                overflow_step=overflow_at_step,
-                steps_used=budget_state.steps,
-                config=budget_config,
-                exc=exc,
-            )
-            answer = (partial + "\n\n---\n\n" + warning) if partial else warning
+            if overflow_at_step is not None:
+                warning = self._format_limit_warning(
+                    overflow_step=overflow_at_step,
+                    steps_used=budget_state.steps,
+                    config=budget_config,
+                )
+                answer = (partial + "\n\n---\n\n" + warning) if partial else warning
+                return RunResultDTO(
+                    answer=answer,
+                    mode_used=MODE_RLM,
+                    success=True,
+                    steps=budget_state.steps,
+                    input_tokens=cumulative_input,
+                    output_tokens=cumulative_output,
+                    total_cost=cumulative_cost,
+                    elapsed_time=elapsed,
+                    trace=trace,
+                )
+            budget_state.elapsed_seconds = elapsed
+            answer, error = self._budget_stop_outcome(budget_state, budget_config, partial, exc)
             return RunResultDTO(
                 answer=answer,
                 mode_used=MODE_RLM,
-                success=True,
+                success=False,
+                error=error,
                 steps=budget_state.steps,
                 input_tokens=cumulative_input,
                 output_tokens=cumulative_output,
@@ -2566,16 +2607,14 @@ class RunRLMUseCase:
         overflow_step: int | None = None,
         steps_used: int = 0,
         config: BudgetConfig | None = None,
-        exc: Exception | None = None,
     ) -> str:
-        """Return a user-friendly warning for known configuration-driven limits.
+        """Return a user-friendly warning for a context overflow or used-up steps.
 
         These are *not* bugs — they indicate that the provider's settings need
         adjustment.  The warning includes specific mitigation steps so the user
-        knows exactly what to change.
+        knows exactly what to change.  A run stopped by a budget limit is
+        described by :meth:`_budget_stop_outcome` instead.
         """
-        exc_msg = str(exc).lower() if exc else ""
-
         if overflow_step is not None:
             return (
                 f"⚠️ **Context window exceeded** at step {overflow_step}.\n\n"
@@ -2587,34 +2626,107 @@ class RunRLMUseCase:
                 "leaves very little room for the growing conversation context.\n"
                 "- Or reduce **Max Steps** to limit how deep the exploration goes."
             )
-        if "timeout" in exc_msg or ("time" in exc_msg and "budget" in exc_msg):
-            timeout = config.max_time_seconds if config else None
-            timeout_str = f" ({int(timeout)}s limit)" if timeout else ""
-            return (
-                f"⚠️ **Execution timed out** after {steps_used} steps{timeout_str}.\n\n"
-                "**How to fix** — in Settings → Chat Providers → [this provider]:\n"
-                "- Increase **Timeout** to allow more time for analysis."
-            )
-        if "token" in exc_msg and any(
-            kw in exc_msg for kw in ("budget", "exceed", "maximum", "limit")
-        ):
-            max_tok = config.max_tokens if config else None
-            tok_str = f" (limit: {max_tok:,})" if max_tok else ""
-            return (
-                f"⚠️ **Token budget exceeded** after {steps_used} steps{tok_str}.\n\n"
-                "**How to fix** — in Settings → Budget:\n"
-                "- Increase **Max Tokens** per execution."
-            )
         # Generic steps-exhausted case
         max_steps = config.max_steps if config else None
         steps_str = f" of {max_steps}" if max_steps else ""
         return (
             f"⚠️ **Step budget exhausted** ({steps_used}{steps_str} steps used) "
             "without producing a complete answer.\n\n"
-            "**How to fix** — in Settings → Chat Providers → [this provider]:\n"
-            "- Increase **Max Steps** to allow deeper document analysis.\n"
-            "- Or ask a more focused question."
+            "**How to fix:**\n" + _MAX_STEPS_HINT + "- Or ask a more focused question."
         )
+
+    @staticmethod
+    def _exceeded_limit(state: BudgetState, config: BudgetConfig) -> str | None:
+        """Name the budget limit *state* has reached, or ``None`` if none has.
+
+        Mirrors :meth:`BudgetState.is_within`, so a stopped run names the
+        limit that actually stopped it.  ``None`` means the run was stopped
+        for another reason (the no-progress circuit breaker).
+        """
+        if config.max_tokens is not None and state.total_tokens >= config.max_tokens:
+            return _LIMIT_TOKENS
+        if config.max_cost is not None and state.cost >= config.max_cost:
+            return _LIMIT_COST
+        if config.max_time_seconds is not None and state.elapsed_seconds >= config.max_time_seconds:
+            return _LIMIT_TIME
+        if config.max_steps is not None and state.steps > config.max_steps:
+            return _LIMIT_STEPS
+        return None
+
+    @classmethod
+    def _budget_stop_outcome(
+        cls,
+        state: BudgetState,
+        config: BudgetConfig,
+        partial: str,
+        exc: BudgetExceededError,
+    ) -> tuple[str, str]:
+        """Return ``(answer, error)`` for a run stopped by a budget limit.
+
+        The answer leads with a warning naming the limit that was hit and
+        where to change it, followed by any partial answer.  The error
+        carries the keyword the outcome classifier keys on ("budget", or
+        "timed out" for the time limit), so the run is classified as
+        stopped rather than as a success.
+        """
+        limit = cls._exceeded_limit(state, config)
+        steps = state.steps
+        if limit == _LIMIT_TOKENS:
+            max_tokens = config.max_tokens or 0
+            warning = (
+                f"⚠️ **Token budget exceeded** after {steps} steps "
+                f"({state.total_tokens:,} of {max_tokens:,} tokens).\n\n"
+                "**How to fix** — in Settings → Budget:\n"
+                "- Increase **Max Tokens**.\n"
+                "- Or ask a more focused question."
+            )
+            error = (
+                f"Budget exceeded: the {max_tokens:,}-token limit was reached after {steps} steps"
+            )
+        elif limit == _LIMIT_COST:
+            max_cost = config.max_cost or 0.0
+            warning = (
+                f"⚠️ **Cost budget exceeded** after {steps} steps "
+                f"(${state.cost:.4f} of ${max_cost:.4f}).\n\n"
+                "**How to fix** — in Settings → Budget:\n"
+                "- Increase **Max Cost (USD)**.\n"
+                "- Or ask a more focused question."
+            )
+            error = (
+                f"Budget exceeded: the ${max_cost:.4f} cost limit was reached after {steps} steps"
+            )
+        elif limit == _LIMIT_TIME:
+            seconds = int(config.max_time_seconds or 0)
+            warning = (
+                f"⚠️ **Execution timed out** after {steps} steps ({seconds}s limit).\n\n"
+                "**How to fix:**\n"
+                "- Increase **Max Execution Time (s)** on the Chat Provider's profile "
+                "(Settings → Profiles), or **Max time** in the LLM Tuner.\n"
+                "- Or ask a more focused question."
+            )
+            error = (
+                f"Execution timed out: the {seconds}s time limit was reached after {steps} steps"
+            )
+        elif limit == _LIMIT_STEPS:
+            max_steps = config.max_steps or 0
+            warning = (
+                f"⚠️ **Step budget exhausted** ({steps} of {max_steps} steps used) "
+                "without producing a complete answer.\n\n"
+                "**How to fix:**\n" + _MAX_STEPS_HINT + "- Or ask a more focused question."
+            )
+            error = f"Budget exceeded: the {max_steps}-step limit was reached"
+        else:
+            warning = (
+                f"⚠️ **Run stopped** after {steps} steps: the model kept replying "
+                "without code or a final answer.\n\n"
+                "**How to fix:**\n"
+                "- Ask a more focused question, or try a model that follows the "
+                "RLM action format more reliably."
+            )
+            error = f"Budget exceeded: stall limit reached ({exc})"
+        if partial:
+            return f"{warning}\n\n---\n\n**Partial answer**\n\n{partial}", error
+        return warning, error
 
     @staticmethod
     def _format_timeout_warning(timeout_seconds: float | None, steps_used: int) -> str:

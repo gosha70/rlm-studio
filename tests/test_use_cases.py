@@ -629,8 +629,9 @@ class TestRunRLMUseCase:
         uc = RunRLMUseCase(llm, sandbox)
         result = uc.execute("content", "question", config=config)
 
-        assert result.success is True
-        assert "⚠️" in result.answer
+        assert result.success is False
+        assert "⚠️ **Run stopped**" in result.answer
+        assert "Budget exceeded" in (result.error or "")
         assert result.steps < 10
 
     def test_sandbox_receives_content(self):
@@ -1105,8 +1106,9 @@ class TestRunRLMAsync:
             uc.execute_async("content", "question", config=config)
         )
 
-        assert result.success is True
-        assert "⚠️" in result.answer
+        assert result.success is False
+        assert "⚠️ **Run stopped**" in result.answer
+        assert "Budget exceeded" in (result.error or "")
         assert result.steps < 10
 
 
@@ -1704,8 +1706,9 @@ class TestCostAccounting:
         config = RunConfigDTO(mode="rlm", max_cost=0.000001)
         result = uc.execute("content", "query", config=config)
 
-        assert result.success is True
-        assert "⚠️" in result.answer
+        assert result.success is False
+        assert "⚠️ **Cost budget exceeded**" in result.answer
+        assert "Budget exceeded" in (result.error or "")
 
     def test_max_cost_enforced_on_immediate_final(self):
         """A single FINAL response that exceeds max_cost must not return success."""
@@ -1721,8 +1724,9 @@ class TestCostAccounting:
         config = RunConfigDTO(mode="rlm", max_cost=0.000001)
         result = uc.execute("content", "query", config=config)
 
-        assert result.success is True
-        assert "⚠️" in result.answer
+        assert result.success is False
+        assert "⚠️ **Cost budget exceeded**" in result.answer
+        assert "Budget exceeded" in (result.error or "")
 
     def test_subcall_cost_folded_into_parent(self):
         """Parent total_cost includes child RLM token usage."""
