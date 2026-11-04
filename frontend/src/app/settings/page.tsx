@@ -104,6 +104,10 @@ const DEEP_LINK_BASE_URL_ALLOWED_BACKENDS: ReadonlySet<string> = new Set([
   BACKEND_VLLM,
 ]);
 
+// A dropdown of user-named items: never wider than the viewport, so a long
+// unbroken name wraps inside it instead of spilling off screen.
+const NAME_LIST_CONTENT_CLASS = "max-w-[calc(100vw-2rem)]";
+
 /** A connection-test outcome, including the backend's classified failure. */
 interface TestResult {
   connected: boolean;
@@ -1101,10 +1105,10 @@ function SettingsPageInner() {
               return (
                 <Card key={lp.id}>
                   <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <CardTitle className="text-base">{lp.name}</CardTitle>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <CardTitle className="min-w-0 text-base wrap-anywhere">{lp.name}</CardTitle>
                           <span
                             className={cn("inline-block h-2 w-2 rounded-full", statusColor)}
                             title={lp.status}
@@ -1113,7 +1117,7 @@ function SettingsPageInner() {
                             {lp.status.replace("_", " ")}
                           </Badge>
                         </div>
-                        <p className="text-sm text-muted-foreground">
+                        <p className="text-sm text-muted-foreground wrap-anywhere">
                           {BACKEND_DISPLAY_NAMES[lp.backend] || lp.backend} &middot; {lp.model}
                           {lp.endpoint && <> &middot; {lp.endpoint}</>}
                           {lp.context_window && <> &middot; {lp.context_window.toLocaleString()} tokens</>}
@@ -1162,7 +1166,7 @@ function SettingsPageInner() {
                           </p>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex shrink-0 items-center gap-2">
                         <Button
                           variant="outline"
                           size="sm"
@@ -1238,10 +1242,10 @@ function SettingsPageInner() {
                   <SelectTrigger>
                     <SelectValue placeholder="None (judging disabled)" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className={NAME_LIST_CONTENT_CLASS}>
                     <SelectItem value="__none__">None (judging disabled)</SelectItem>
                     {chatProviders.map((cp) => (
-                      <SelectItem key={cp.id} value={cp.id}>
+                      <SelectItem key={cp.id} value={cp.id} className="wrap-anywhere">
                         {cp.name} ({cp.llm_provider_name || cp.llm_provider_id})
                       </SelectItem>
                     ))}
@@ -1290,9 +1294,9 @@ function SettingsPageInner() {
                       <SelectTrigger id="cp-llm-provider">
                         <SelectValue placeholder="Select an LLM Provider" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className={NAME_LIST_CONTENT_CLASS}>
                         {llmProviders.map((lp) => (
-                          <SelectItem key={lp.id} value={lp.id}>
+                          <SelectItem key={lp.id} value={lp.id} className="wrap-anywhere">
                             <span>{lp.name}</span>
                             <span className="ml-2 text-xs text-muted-foreground">
                               {BACKEND_DISPLAY_NAMES[lp.backend] || lp.backend} &middot; {lp.model}
@@ -1453,15 +1457,15 @@ function SettingsPageInner() {
               return (
               <Card key={provider.id}>
                 <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-1">
-                      <CardTitle className="text-base">{provider.name}</CardTitle>
-                      <p className="text-sm text-muted-foreground">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <CardTitle className="text-base wrap-anywhere">{provider.name}</CardTitle>
+                      <p className="text-sm text-muted-foreground wrap-anywhere">
                         {provider.llm_provider_name || provider.llm_provider_id}
                         {providerProfile && ` · ${providerProfile.name}`}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-2">
                       <span className="inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground">
                         {displayModeName(provider.execution_mode)}
                       </span>
@@ -1518,9 +1522,9 @@ function SettingsPageInner() {
                         <SelectTrigger id={`edit-cp-llm-provider-${provider.id}`}>
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className={NAME_LIST_CONTENT_CLASS}>
                           {llmProviders.map((lp) => (
-                            <SelectItem key={lp.id} value={lp.id}>
+                            <SelectItem key={lp.id} value={lp.id} className="wrap-anywhere">
                               {lp.name} &middot; {BACKEND_DISPLAY_NAMES[lp.backend] || lp.backend} &middot; {lp.model}
                             </SelectItem>
                           ))}

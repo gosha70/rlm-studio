@@ -283,9 +283,9 @@ export function ProfileCard({
     <Collapsible open={expanded} onOpenChange={setExpanded}>
     <Card>
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-sm">{profile.name}</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <CardTitle className="min-w-0 text-sm wrap-anywhere">{profile.name}</CardTitle>
             {profile.is_builtin && (
               <Badge variant="secondary" className="text-xs">
                 <Lock className="mr-1 h-3 w-3" aria-hidden="true" />
@@ -296,7 +296,7 @@ export function ProfileCard({
               {displayModeName(profile.strategy)}
             </Badge>
           </div>
-          <div className="flex gap-1">
+          <div className="flex shrink-0 gap-1">
             {!profile.is_builtin && (
               <Button
                 variant="ghost"
@@ -373,7 +373,7 @@ export function ProfileCard({
         </div>
 
         {usedBy.length > 0 ? (
-          <p className="text-xs text-muted-foreground mt-2">
+          <p className="text-xs text-muted-foreground mt-2 wrap-anywhere">
             Used by: {usedBy.map((cp) => cp.name).join(", ")}
           </p>
         ) : (

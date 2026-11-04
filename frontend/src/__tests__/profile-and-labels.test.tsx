@@ -165,6 +165,15 @@ describe("ProfileCard — read-only view", () => {
     expect(screen.queryByText(MODE_RLM)).not.toBeInTheDocument();
   });
 
+  test("a long unbroken name wraps and leaves the action buttons on the card", () => {
+    const longName = "p" + "x".repeat(200);
+    render(<ProfileCard profile={makeProfile({ name: longName })} />);
+    expect(screen.getByText(longName)).toHaveClass("wrap-anywhere");
+    expect(
+      screen.getByRole("button", { name: `Delete ${longName} profile` }).parentElement,
+    ).toHaveClass("shrink-0");
+  });
+
   test("displays the official engine's name for an rlm_official profile", () => {
     render(<ProfileCard profile={makeProfile({ strategy: MODE_RLM_OFFICIAL })} />);
     expect(screen.getByText(displayModeName(MODE_RLM_OFFICIAL))).toBeInTheDocument();

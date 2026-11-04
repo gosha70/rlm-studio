@@ -945,6 +945,49 @@ describe("SettingsPage — Wave 3", () => {
     );
   });
 
+  test("a long unbroken name wraps inside its card and keeps the buttons on it", async () => {
+    const longName = "vLLM" + "dfs".repeat(60);
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ name: longName })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [
+        {
+          id: "cp-1",
+          name: longName,
+          llm_provider_id: "lp-1",
+          llm_provider_name: longName,
+          profile_id: RAG_PROFILE.id,
+          execution_mode: "rag",
+          runtime_settings: RUNTIME,
+          rlm_max_steps: 16,
+          rlm_timeout_seconds: 600,
+          rlm_repeat_limit: 2,
+        },
+      ],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+
+    const lpTitle = screen.getByText(longName);
+    expect(lpTitle).toHaveClass("wrap-anywhere");
+    expect(lpTitle.closest(".min-w-0.flex-1")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Delete" }).parentElement).toHaveClass("shrink-0");
+
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    const cpTitles = screen.getAllByText(longName);
+    expect(cpTitles.some((el) => el.classList.contains("wrap-anywhere"))).toBe(true);
+    for (const button of screen.getAllByRole("button", { name: "Delete" })) {
+      expect(button.parentElement).toHaveClass("shrink-0");
+    }
+
+    // The LLM Provider dropdown stays within the viewport.
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    await user.click(document.getElementById("cp-llm-provider")!);
+    const option = await screen.findByRole("option", { name: new RegExp(longName) });
+    expect(option).toHaveClass("wrap-anywhere");
+    expect(screen.getByRole("listbox").closest("[class*='max-w-[calc(100vw-2rem)]']")).not.toBeNull();
+  });
+
   test("a successful Budget save is confirmed", async () => {
     vi.mocked(updateConfig).mockResolvedValueOnce(MOCK_CONFIG as never);
     vi.mocked(toast.success).mockClear();
