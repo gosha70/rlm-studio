@@ -224,10 +224,16 @@ class ProposalResult:
 
 
 def render_proposal_prompt(
-    template: str, *, digest: EvidenceDigest, current_supplement: str, base_prompt_version: str
+    template: str,
+    *,
+    digest: EvidenceDigest,
+    current_supplement: str,
+    base_prompt: str,
+    base_prompt_version: str,
 ) -> str:
     """Fill the proposal template; values are inserted verbatim, never re-formatted."""
     return template.format(
+        base_prompt=base_prompt,
         base_prompt_version=base_prompt_version,
         current_supplement=current_supplement or EMPTY_SUPPLEMENT_PLACEHOLDER,
         evidence=digest.text,
@@ -287,9 +293,11 @@ def propose_supplement(
     prompt_version: str,
     digest: EvidenceDigest,
     current_supplement: str,
+    base_prompt: str,
     base_prompt_version: str,
 ) -> ProposalResult:
-    """Make the single proposal call and validate the reply (FR-3).
+    """Make the single proposal call over the evidence, the current supplement
+    and the base prompt, and validate the reply (FR-3).
 
     Raises:
         ProposalError: The reply is unusable, identical to the current
@@ -300,6 +308,7 @@ def propose_supplement(
         template,
         digest=digest,
         current_supplement=current_supplement,
+        base_prompt=base_prompt,
         base_prompt_version=base_prompt_version,
     )
     response = llm.complete([{"role": "user", "content": prompt}])

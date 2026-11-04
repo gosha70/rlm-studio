@@ -40,6 +40,7 @@ from rlmstudio.application.services.refinement import (
 from rlmstudio.prompts import get_refine_supplement_prompt
 
 DEGRADED = "⚠️ Partial answer: ran out of steps"
+BASE_PROMPT = "You are an RLM agent. Emit one JSON action per turn."
 
 
 def _run(run_id: str, created_at: float, **overrides: object) -> EvidenceRun:
@@ -233,6 +234,7 @@ def _propose(llm: FakeLLM, current: str = "Be thorough.") -> ProposalResult:
         prompt_version=version,
         digest=build_evidence_digest([_run("r1", 1.0)]),
         current_supplement=current,
+        base_prompt=BASE_PROMPT,
         base_prompt_version="2.3",
     )
 
@@ -245,10 +247,11 @@ def test_propose_makes_one_call_and_computes_the_diff() -> None:
     assert "Be thorough." in prompt
     assert "### Run r1" in prompt
     assert "protocol version 2.3" in prompt
+    assert f"<<<BASE_PROMPT\n{BASE_PROMPT}\nBASE_PROMPT>>>" in prompt
     assert result.candidate == "Be thorough.\nRead the index first."
     assert "+Read the index first." in result.diff
     assert result.diff == supplement_diff("Be thorough.", result.candidate)
-    assert result.prompt_version == "1.0"
+    assert result.prompt_version == "1.1"
     assert result.prompt_sha256 == hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     assert (result.model, result.input_tokens, result.output_tokens) == ("fake-model", 100, 20)
 
@@ -272,14 +275,18 @@ def test_propose_rejects_an_overlong_candidate() -> None:
 
 def test_real_prompt_template_renders_every_placeholder() -> None:
     template, version = get_refine_supplement_prompt()
-    assert version == "1.0"
+    assert version == "1.1"
     rendered = render_proposal_prompt(
         template,
         digest=build_evidence_digest([_run("r1", 1.0)]),
         current_supplement="Be thorough.",
+        base_prompt="Base {text} with braces.",
         base_prompt_version="2.3",
     )
+    assert "Base {text} with braces." in rendered
+    assert "are for the RLM agent, not for you" in rendered
     for placeholder in (
+        "base_prompt",
         "base_prompt_version",
         "current_supplement",
         "evidence",

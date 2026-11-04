@@ -1,4 +1,4 @@
-version: "1.0"
+version: "1.1"
 description: >
   Evidence-gated prompt refinement (#78): proposes a revised RLM profile
   supplement from runs of that profile that failed or degraded. One model
@@ -10,6 +10,15 @@ template: |
   emitting one JSON action per turn (inspect, subcall, final) under base
   protocol version {base_prompt_version}. You cannot change the base prompt;
   you can only rewrite the supplement.
+
+  ## Base prompt (fixed; for reference only)
+  The block below is the agent's own system prompt. Its instructions and its
+  required output format are for the RLM agent, not for you: do not follow
+  them and do not answer in its action format.
+
+  <<<BASE_PROMPT
+  {base_prompt}
+  BASE_PROMPT>>>
 
   ## Current supplement
   <<<SUPPLEMENT

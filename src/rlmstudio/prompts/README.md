@@ -115,7 +115,7 @@ template = load_prompt_from_file(Path(f"system_prompt_v1_0_{model_name}.txt"))
 
 ## Prompt refinement
 
-`refine_supplement.yaml` is the proposal prompt for evidence-gated prompt refinement (#78). One model call over a digest of a profile's failed or degraded runs returns `{"candidate", "rationale"}`; the server validates it and computes the diff. Load it with `get_refine_supplement_prompt()`, which returns `(template, version)` so every proposal records the prompt revision that produced it. Bump `version` whenever the template text changes.
+`refine_supplement.yaml` is the proposal prompt for evidence-gated prompt refinement (#78). One model call over a digest of a profile's failed or degraded runs, the profile's current RLM supplement and the fixed base prompt (for reference; it cannot be changed) returns `{"candidate", "rationale"}`; the server validates it and computes the diff. Load it with `get_refine_supplement_prompt()`, which returns `(template, version)` so every proposal records the prompt revision that produced it. Bump `version` whenever the template text changes.
 
 **Evidence redaction policy.** Before a run's query, answer and error enter the digest:
 

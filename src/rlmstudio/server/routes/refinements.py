@@ -280,6 +280,8 @@ async def create_refinement(
             prompt_version=prompt_version,
             digest=digest,
             current_supplement=base.resolved,
+            # The same text whose sha256 the proposal record stores.
+            base_prompt=get_default_system_prompt(),
             base_prompt_version=base.base_prompt_version,
         )
     except ProposalError as exc:
