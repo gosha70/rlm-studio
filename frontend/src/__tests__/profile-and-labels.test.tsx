@@ -107,7 +107,7 @@ describe("FieldLabel", () => {
 
   test("renders a focusable help button", () => {
     render(<FieldLabel tooltip="Help text">Temperature</FieldLabel>);
-    const helpBtn = screen.getByRole("button", { name: "Help" });
+    const helpBtn = screen.getByRole("button", { name: "Help: Temperature" });
     expect(helpBtn).toBeInTheDocument();
     // Should be a real button element, not an SVG
     expect(helpBtn.tagName).toBe("BUTTON");
@@ -115,15 +115,27 @@ describe("FieldLabel", () => {
 
   test("help button has type=button (does not submit forms)", () => {
     render(<FieldLabel tooltip="Help text">Temperature</FieldLabel>);
-    const helpBtn = screen.getByRole("button", { name: "Help" });
+    const helpBtn = screen.getByRole("button", { name: "Help: Temperature" });
     expect(helpBtn).toHaveAttribute("type", "button");
   });
 
   test("HelpCircle SVG is aria-hidden", () => {
     render(<FieldLabel tooltip="Help text">Temperature</FieldLabel>);
-    const helpBtn = screen.getByRole("button", { name: "Help" });
+    const helpBtn = screen.getByRole("button", { name: "Help: Temperature" });
     const svg = helpBtn.querySelector("svg");
     expect(svg).toHaveAttribute("aria-hidden", "true");
+  });
+
+  test("names the help button after its field, without a slider value", () => {
+    render(
+      <>
+        <FieldLabel tooltip="a">Max Tokens</FieldLabel>
+        <FieldLabel tooltip="b">Max Steps: {16}</FieldLabel>
+      </>,
+    );
+    expect(screen.getByRole("button", { name: "Help: Max Tokens" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Help: Max Steps" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Help" })).not.toBeInTheDocument();
   });
 
   test("associates label with htmlFor", () => {
@@ -268,8 +280,8 @@ describe("ProfileCard — editing form", () => {
 
   test("shows FieldLabel tooltips for numeric fields", () => {
     openEditor();
-    // FieldLabel renders a "Help" button for each numeric field
-    const helpButtons = screen.getAllByRole("button", { name: "Help" });
+    // FieldLabel renders a "Help: <field>" button for each numeric field
+    const helpButtons = screen.getAllByRole("button", { name: /^Help: / });
     // Temperature, Top P, Max Tokens, Timeout, Max Steps, Max Cost,
     // Repeat Limit, Nudge at Fraction = 8 FieldLabels
     expect(helpButtons.length).toBeGreaterThanOrEqual(8);
