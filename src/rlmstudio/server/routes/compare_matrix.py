@@ -457,6 +457,7 @@ async def _compare_matrix_v2(
             )
 
     # --- Fan out -------------------------------------------------------
+    slot_steps_limit = {s.slot_id: s.config.max_steps for s in slots if s.config}
     uc = RunMatrixComparisonUseCase(serial_modes=_serial_modes(state))
     result: MatrixComparisonResultDTO = await asyncio.to_thread(
         uc.execute,
@@ -473,7 +474,9 @@ async def _compare_matrix_v2(
     for slot_result in result.slots:
         meta = slot_meta[slot_result.slot_id]
         execution = state.executions[meta.execution_id]
-        _update_execution_record(execution, slot_result, finish)
+        _update_execution_record(
+            execution, slot_result, finish, slot_steps_limit.get(slot_result.slot_id)
+        )
         _record_slot_telemetry(
             state=state,
             slot_result=slot_result,
@@ -721,6 +724,7 @@ async def compare_matrix(
             )
 
     # --- Fan out via the use case (ThreadPoolExecutor under the hood) -
+    slot_steps_limit = {s.slot_id: s.config.max_steps for s in slots if s.config}
     uc = RunMatrixComparisonUseCase(serial_modes=_serial_modes(state))
     result: MatrixComparisonResultDTO = await asyncio.to_thread(
         uc.execute,
@@ -739,7 +743,9 @@ async def compare_matrix(
         execution = state.executions[meta.execution_id]
 
         # Update in-memory ExecutionRecord so judge/best-pick/quality see it.
-        _update_execution_record(execution, slot_result, finish)
+        _update_execution_record(
+            execution, slot_result, finish, slot_steps_limit.get(slot_result.slot_id)
+        )
 
         # Persist to telemetry store.
         _record_slot_telemetry(
@@ -879,6 +885,7 @@ def _update_execution_record(
     execution: ExecutionRecord,
     slot_result: MatrixSlotResultDTO,
     completed_at: datetime,
+    steps_limit: int | None = None,
 ) -> None:
     """Fill in the in-memory :class:`ExecutionRecord` from a slot result.
 
@@ -900,5 +907,7 @@ def _update_execution_record(
         "total_cost": result.total_cost,
         "elapsed_time": result.elapsed_time,
         "steps_count": result.steps,
+        # The slot's own step limit, which Traces shows (not the global one).
+        "steps_limit": steps_limit,
     }
     execution.steps = list(result.trace)

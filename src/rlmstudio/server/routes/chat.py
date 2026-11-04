@@ -806,6 +806,7 @@ async def _run_execution(
             "total_cost": result.total_cost,
             "elapsed_time": result.elapsed_time,
             "steps_count": result.steps,
+            "steps_limit": run_config.max_steps,
         }
         execution.steps = result.trace
 
@@ -1243,6 +1244,7 @@ async def websocket_chat(
                             "total_cost": result.total_cost,
                             "elapsed_time": result.elapsed_time,
                             "steps_count": result.steps,
+                            "steps_limit": cfg.max_steps,
                         }
                         exec_rec.steps = result.trace
 
