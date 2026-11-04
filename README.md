@@ -271,7 +271,7 @@ graph TB
         Ports[Ports / Protocols]
     end
 
-    Frontend -->|HTTP + WebSocket| Server
+    Frontend -->|HTTP| Server
     REST --> App
     WS -->|streaming| App
     App --> Infra

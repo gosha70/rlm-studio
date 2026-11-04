@@ -256,7 +256,7 @@ RLM Studio adds SQLite-backed conversation storage via the `StoragePort` abstrac
 
 ### 9.8 Async and Streaming
 
-The `server/` layer exposes both REST and WebSocket endpoints. `interact_async()` and `complete_async()` mirror the sync API. The WebSocket connection streams partial responses token-by-token to the UI.
+The `server/` layer exposes both REST and WebSocket endpoints. `interact_async()` and `complete_async()` mirror the sync API. The WebSocket endpoint streams partial responses token-by-token to API clients; the Studio Chat page in 1.0 uses REST and shows each answer when its run finishes.
 
 ### 9.9 The Reference Implementation as a Built-in Baseline
 
