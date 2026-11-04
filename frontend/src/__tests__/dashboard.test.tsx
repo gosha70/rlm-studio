@@ -12,7 +12,7 @@ import { Hash } from "lucide-react";
 import { MetricCard } from "@/components/metrics/metric-card";
 import { ComparisonChart } from "@/components/metrics/comparison-chart";
 import { PerformanceTrend } from "@/components/metrics/performance-trend";
-import { CostBreakdown } from "@/components/metrics/cost-breakdown";
+import { CostBreakdown, NO_COST_TEXT } from "@/components/metrics/cost-breakdown";
 import type { ModeSummary, TimelineEntry } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -281,6 +281,18 @@ describe("CostBreakdown", () => {
     expect(screen.getByText("Cost by Mode")).toBeInTheDocument();
     expect(screen.getByTestId("pie-entry-rlm")).toBeInTheDocument();
     expect(screen.getByTestId("pie-entry-direct")).toBeInTheDocument();
+  });
+
+  test("says no cost was recorded instead of drawing an empty card", () => {
+    const free = Object.fromEntries(
+      ["Qwen Direct", "Qwen RLM"].map((name) => [
+        name,
+        { queries: 2, total_tokens: 900, total_cost_usd: 0, avg_latency_seconds: 1.0 },
+      ]),
+    );
+    render(<CostBreakdown data={free} title="Cost by Chat Provider" />);
+    expect(screen.getByText(NO_COST_TEXT)).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /Pie chart/ })).not.toBeInTheDocument();
   });
 
   test("formats USD values to 4 decimal places via Tooltip formatter", () => {
