@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
+from rlmstudio.application.services.provider_failure import ProviderFailureKind
 from rlmstudio.application.services.provider_tester import (
     ProviderTestResult,
     test_provider,
@@ -481,3 +482,35 @@ def test_record_model_check_from_an_auth_failure_leaves_it_alone() -> None:
     record_model_check_from_probe(lp, result)
 
     assert lp.model_check_status == "available"
+
+
+def test_a_probe_timeout_suggests_waiting_for_the_model_to_load() -> None:
+    """The fix must not point at the runtime timeout, which the probe ignores (M21)."""
+
+    class Timeout(Exception):  # noqa: N818 — litellm's class name, which the classifier matches
+        pass
+
+    provider = _make_provider(backend="lmstudio", endpoint="http://localhost:1234/v1")
+    exc = Timeout(
+        "litellm.Timeout: APITimeoutError - Request timed out. Error_str: Request timed out."
+    )
+
+    with patch("litellm.completion", side_effect=exc):
+        result = test_provider(provider, timeout_s=5.0)
+
+    assert result.failure_kind is ProviderFailureKind.TIMEOUT
+    assert result.failure_fix is not None
+    assert "runtime settings" not in result.failure_fix
+    assert "loading the model" in result.failure_fix
+    assert "test again" in result.failure_fix
+    assert result.error_message == "Request timed out."
+
+
+def test_error_str_label_keeps_a_different_detail() -> None:
+    provider = _make_provider()
+    exc = RuntimeError("APIError - Bad gateway. Error_str: upstream closed the connection")
+
+    with patch("litellm.completion", side_effect=exc):
+        result = test_provider(provider, timeout_s=5.0)
+
+    assert result.error_message == "Bad gateway. upstream closed the connection"
