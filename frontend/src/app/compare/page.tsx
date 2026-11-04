@@ -1258,6 +1258,13 @@ const BAR_COLORS = [
   "hsl(0, 0%, 55%)",     // gray (failed)
 ];
 
+/** The judge's overall score scale (1–5); the axis shows 0 for the origin. */
+const JUDGE_SCORE_MAX = 5;
+const JUDGE_SCORE_TICKS = [0, 1, 2, 3, 4, 5];
+/** Tooltip text for a slot with nothing to plot. */
+const CHART_FAILED_TEXT = "Failed — no result";
+const CHART_NOT_JUDGED_TEXT = "Not judged";
+
 interface ComparisonChartProps {
   slots: CompareMatrixSlotResponse[];
   metric: MatrixRankingMetric;
@@ -1269,7 +1276,8 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
   const chartData = useMemo(() => {
     return ranking.map((slotIdx) => {
       const s = slots[slotIdx];
-      let value: number;
+      // null = nothing to plot (failed or not judged): no bar, no "0".
+      let value: number | null;
       switch (metric) {
         case "cost":
           value = s.total_cost;
@@ -1287,7 +1295,7 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
           break;
         case "judge_score": {
           const js = judgeScores[s.execution_id];
-          value = js ? js.overall_score : 0;
+          value = js ? js.overall_score : null;
           break;
         }
         // Phase 5 prefill/decode metrics. Previously fell through to
@@ -1313,7 +1321,7 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
       return {
         name: s.label,
         failed,
-        value: failed ? 0 : value,
+        value: failed ? null : value,
         success: !failed,
         slotIdx,
       };
@@ -1348,7 +1356,14 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
       </p>
       <ResponsiveContainer width="100%" height={Math.max(120, chartData.length * 40)}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 20, top: 0, bottom: 0 }}>
-          <XAxis type="number" tick={{ fontSize: 11 }} />
+          <XAxis
+            type="number"
+            tick={{ fontSize: 11 }}
+            // The judge scores on a fixed 1–5 scale; an auto domain ran to 8.
+            {...(metric === "judge_score"
+              ? { domain: [0, JUDGE_SCORE_MAX], ticks: JUDGE_SCORE_TICKS }
+              : {})}
+          />
           <YAxis
             type="category"
             dataKey="name"
@@ -1372,15 +1387,20 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
             }}
           />
           <RechartsTooltip
-            formatter={(value) => {
-              const v = Number(value ?? 0);
+            // Keep null rows so the tooltip can say why a slot has no bar.
+            filterNull={false}
+            formatter={(value, _name, item) => {
+              const entry = item?.payload as (typeof chartData)[number] | undefined;
+              if (entry?.failed) return [CHART_FAILED_TEXT, metricLabel];
+              if (value == null) return [CHART_NOT_JUDGED_TEXT, metricLabel];
+              const v = Number(value);
               return [
                 metric === "cost"
                   ? `$${v.toFixed(4)}`
                   : metric === "latency"
                     ? `${v.toFixed(1)}s`
                     : metric === "judge_score"
-                      ? `${v.toFixed(1)}/5`
+                      ? `${v.toFixed(1)}/${JUDGE_SCORE_MAX}`
                       : v.toLocaleString(),
                 metricLabel,
               ];

@@ -23,10 +23,49 @@ vi.mock("@/components/shared/app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+// Recharts draws nothing in jsdom. The mock keeps what the user would read:
+// the tooltip text per bar (through the page's own formatter) and the value
+// axis' domain and ticks.
+const chart = vi.hoisted(() => ({ data: [] as Array<Record<string, unknown>> }));
+vi.mock("recharts", () => {
+  const Pass = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
+  type Formatter = (v: unknown, n: string, item: { payload: unknown }) => [string, string];
+  return {
+    ResponsiveContainer: Pass,
+    BarChart: ({ data, children }: { data?: Array<Record<string, unknown>>; children?: React.ReactNode }) => {
+      chart.data = data ?? [];
+      return <div>{children}</div>;
+    },
+    Bar: Pass,
+    Cell: () => null,
+    YAxis: () => null,
+    CartesianGrid: () => null,
+    Legend: () => null,
+    ReferenceLine: () => null,
+    XAxis: ({ domain, ticks }: { domain?: unknown; ticks?: unknown }) => (
+      <div
+        data-testid="chart-value-axis"
+        data-domain={JSON.stringify(domain ?? null)}
+        data-ticks={JSON.stringify(ticks ?? null)}
+      />
+    ),
+    Tooltip: ({ formatter }: { formatter?: Formatter }) => (
+      <ul data-testid="chart-tooltip">
+        {chart.data.map((d) => (
+          <li key={String(d.name)}>
+            {`${String(d.name)}: ${formatter ? formatter(d.value, "value", { payload: d })[0] : String(d.value)}`}
+          </li>
+        ))}
+      </ul>
+    ),
+  };
+});
+
 import ComparePage from "@/app/compare/page";
 import type {
   CompareMatrixResponse,
   CompareMatrixSlotResponse,
+  JudgeScoreData,
   LLMProviderConfig,
 } from "@/lib/api";
 
@@ -44,7 +83,7 @@ const PROVIDER: LLMProviderConfig = {
   status: "connected",
 };
 
-function mockSWR(llmProviders: LLMProviderConfig[] = [PROVIDER]) {
+function mockSWR(llmProviders: LLMProviderConfig[] = [PROVIDER], judgeConfigured = false) {
   const stub = (data: unknown) => ({
     data,
     mutate: vi.fn(),
@@ -55,6 +94,7 @@ function mockSWR(llmProviders: LLMProviderConfig[] = [PROVIDER]) {
   vi.mocked(useSWR).mockImplementation(((key: unknown) => {
     if (key === "llm-providers") return stub(llmProviders);
     if (key === "profiles") return stub([]);
+    if (key === "config") return stub(judgeConfigured ? { judge_chat_provider_id: "cp-judge" } : {});
     return stub(undefined);
   }) as typeof useSWR);
 }
@@ -84,8 +124,8 @@ function makeSlot(overrides: Partial<CompareMatrixSlotResponse> = {}): CompareMa
 }
 
 /** Fill the form, run, and wait for the results grid. */
-async function runWith(slots: CompareMatrixSlotResponse[]) {
-  mockSWR();
+async function runWith(slots: CompareMatrixSlotResponse[], judgeScores: JudgeScoreData[] = []) {
+  mockSWR([PROVIDER], judgeScores.length > 0);
   render(<ComparePage />);
   fireEvent.change(screen.getByPlaceholderText("What would you like to ask?"), {
     target: { value: "What is the title?" },
@@ -103,7 +143,13 @@ async function runWith(slots: CompareMatrixSlotResponse[]) {
   };
   vi.stubGlobal(
     "fetch",
-    vi.fn().mockResolvedValue({ ok: true, json: async () => response }),
+    vi.fn().mockImplementation(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        String(url).includes("/api/evaluations/judge")
+          ? { pointwise: judgeScores, pairwise: [] }
+          : response,
+    })),
   );
   fireEvent.click(screen.getByRole("button", { name: /Run Compare/ }));
   await screen.findByText("Results");
@@ -185,5 +231,59 @@ describe("Failed Compare cell without an answer", () => {
         "Step budget exhausted (13 of 16 steps used) without producing a complete answer.",
       ),
     ).toBeInTheDocument();
+  });
+});
+
+describe("Judge Score chart", () => {
+  const judged = makeSlot({ slot_id: "a", execution_id: "exec-a", label: "Ollama Llama · direct", provider: "ollama" });
+  const unjudged = makeSlot({ slot_id: "b", execution_id: "exec-b", label: "LM Studio Qwen · direct" });
+  const failed = makeSlot({
+    slot_id: "c",
+    execution_id: "exec-c",
+    label: "Mock vLLM · direct",
+    provider: "vllm",
+    success: false,
+    answer: "⚠️ **Cannot reach the provider**",
+  });
+  const score: JudgeScoreData = {
+    id: "j-1",
+    execution_id: "exec-a",
+    session_id: "sess-1",
+    chat_provider_id: "cp-1",
+    judge_provider_id: "cp-judge",
+    dimensions: { relevance: 4 },
+    overall_score: 4.5,
+    reasoning: "",
+    created_at: "2026-11-04T00:00:00Z",
+  };
+
+  async function judgeAndRankByScore() {
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.hasPointerCapture = vi.fn().mockReturnValue(false);
+    await runWith([judged, unjudged, failed], [score]);
+    fireEvent.click(screen.getByRole("button", { name: /Auto-Judge/ }));
+    await screen.findByText(/Judge Dimensions/);
+    const ranking = screen
+      .getAllByRole("combobox")
+      .find((el) => el.textContent?.includes("Cost (lowest wins)"))!;
+    fireEvent.pointerDown(ranking, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /Judge Score/ }));
+    // The Compare chart is the first chart in the results panel.
+    return screen.getAllByTestId("chart-tooltip")[0];
+  }
+
+  test("a failed or unjudged slot shows no score, not 0.0/5", async () => {
+    const tooltip = await judgeAndRankByScore();
+    expect(tooltip).toHaveTextContent("Ollama Llama · direct: 4.5/5");
+    expect(tooltip).toHaveTextContent("LM Studio Qwen · direct: Not judged");
+    expect(tooltip).toHaveTextContent("Mock vLLM · direct: Failed — no result");
+    expect(tooltip).not.toHaveTextContent("0.0/5");
+  });
+
+  test("the score axis runs 0–5", async () => {
+    await judgeAndRankByScore();
+    const axis = screen.getAllByTestId("chart-value-axis")[0];
+    expect(JSON.parse(axis.dataset.domain!)).toEqual([0, 5]);
+    expect(JSON.parse(axis.dataset.ticks!)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 });
