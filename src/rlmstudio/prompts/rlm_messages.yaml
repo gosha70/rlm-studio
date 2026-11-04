@@ -49,12 +49,6 @@ duplicate_result: |
   Explore a DIFFERENT section of the content, or if you've seen enough,
   provide your final answer now.
 
-# Sent after repeat_limit duplicate inspections.  Forces finalization.
-repeat_detected: |
-  You have inspected the same content multiple times. You MUST now
-  synthesize what you've found and output {"type": "final", "answer": "..."}.
-  No more inspect calls allowed.
-
 # Soft convergence nudge sent at nudge_at_fraction of max_steps.
 soft_nudge: |
   Progress check: you have used {steps_used}/{max_steps} steps.

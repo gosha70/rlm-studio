@@ -95,6 +95,22 @@ _MAX_STEPS_HINT = (
     "or **Max steps** in the LLM Tuner.\n"
 )
 
+# The repeat limit ends the loop: a trace row, and the answer when no answer
+# could be synthesised from what was inspected.
+_REPEAT_LIMIT_NOTE = (
+    "Repeat limit reached: the same inspect result came back {repeats} more "
+    "time(s); answering from what was inspected."
+)
+_REPEAT_LIMIT_WARNING = (
+    "⚠️ **Run stopped at the repeat limit** after {steps} steps: the model "
+    "kept inspecting the same content ({repeats} repeats) and no answer could "
+    "be written from what it found.\n\n"
+    "**How to fix:**\n"
+    "- Ask a more focused question.\n"
+    "- Or raise **Repeat Limit** on the Chat Provider's profile "
+    "(Settings → Profiles), or in the LLM Tuner."
+)
+
 # A final action whose JSON did not parse (see ``_recover_final_answer``).
 _FINAL_TYPE_RE = re.compile(r'"type"\s*:\s*"final"')
 _ANSWER_VALUE_RE = re.compile(r'"answer"\s*:\s*(?=")')
@@ -219,6 +235,7 @@ class RunRLMUseCase:
         overflow_at_step: int | None = None  # set when context window is exceeded mid-loop
         recent_exec_hashes: list[int] = []  # last N inspect result hashes for repeat detection
         repeat_count = 0  # consecutive duplicate inspect results
+        repeat_stopped = False  # set when repeat_limit ends the loop
         repeat_limit = config.repeat_limit
         nudge_sent = False  # soft convergence nudge (sent once)
         hard_nudge_sent = False  # stronger convergence nudge near the end
@@ -582,11 +599,25 @@ class RunRLMUseCase:
                         if is_repeat:
                             repeat_count += 1
                             if repeat_count >= repeat_limit:
-                                repeat_nudge = get_rlm_message("repeat_detected")
+                                repeat_stopped = True
                             else:
                                 repeat_nudge = get_rlm_message("duplicate_result")
                         else:
                             repeat_count = 0
+
+                    # At the repeat limit, stop asking for more inspections and
+                    # answer from what was inspected (synthesis after the loop).
+                    if repeat_stopped:
+                        trace_seq += 1
+                        trace.append(
+                            {
+                                TRACE_KEY_STEP: budget_state.steps,
+                                TRACE_KEY_SEQ: trace_seq,
+                                TRACE_KEY_ROLE: "system",
+                                TRACE_KEY_CONTENT: _REPEAT_LIMIT_NOTE.format(repeats=repeat_count),
+                            }
+                        )
+                        break
 
                     messages.append({"role": "assistant", "content": text})
                     # Truncate large execution outputs before adding to message
@@ -868,8 +899,11 @@ class RunRLMUseCase:
                 answer = synth_response.content.strip() or (
                     "The content was inspected but contained no extractable themes."
                 )
-                # If the synthesis call itself returned a JSON action blob
-                # (model stuck in action mode), fall through to the limit warning.
+                # Stopped at the repeat limit, the model is still in action mode
+                # and may answer with a final action; take its answer.  Any other
+                # JSON action blob falls through to the limit warning.
+                if repeat_stopped:
+                    answer = self._recover_final_answer(answer) or answer
                 if not self._looks_like_action(answer):
                     elapsed = time.time() - start
                     return RunResultDTO(
@@ -889,6 +923,25 @@ class RunRLMUseCase:
             if hasattr(self._llm, "use_root_model"):
                 self._llm.use_root_model()
             elapsed = time.time() - start
+            if repeat_stopped:
+                # Stopped by a limit, like a budget stop: not a success.
+                return RunResultDTO(
+                    answer=_REPEAT_LIMIT_WARNING.format(
+                        steps=budget_state.steps, repeats=repeat_count
+                    ),
+                    mode_used=MODE_RLM,
+                    success=False,
+                    error=(
+                        f"Budget exceeded: the repeat limit ({repeat_limit}) was "
+                        f"reached after {budget_state.steps} steps"
+                    ),
+                    steps=budget_state.steps,
+                    input_tokens=cumulative_input,
+                    output_tokens=cumulative_output,
+                    total_cost=cumulative_cost,
+                    elapsed_time=elapsed,
+                    trace=trace,
+                )
             return RunResultDTO(
                 answer=self._format_limit_warning(
                     overflow_step=overflow_at_step,
@@ -1158,6 +1211,7 @@ class RunRLMUseCase:
         overflow_at_step: int | None = None  # set when context window is exceeded mid-loop
         recent_exec_hashes: list[int] = []  # last N inspect result hashes for repeat detection
         repeat_count = 0  # consecutive duplicate inspect results
+        repeat_stopped = False  # set when repeat_limit ends the loop
         repeat_limit = config.repeat_limit
         nudge_sent = False  # soft convergence nudge (sent once)
         hard_nudge_sent = False  # stronger convergence nudge near the end
@@ -1559,11 +1613,25 @@ class RunRLMUseCase:
                         if is_repeat:
                             repeat_count += 1
                             if repeat_count >= repeat_limit:
-                                repeat_nudge = get_rlm_message("repeat_detected")
+                                repeat_stopped = True
                             else:
                                 repeat_nudge = get_rlm_message("duplicate_result")
                         else:
                             repeat_count = 0
+
+                    # At the repeat limit, stop asking for more inspections and
+                    # answer from what was inspected (synthesis after the loop).
+                    if repeat_stopped:
+                        trace_seq += 1
+                        trace.append(
+                            {
+                                TRACE_KEY_STEP: budget_state.steps,
+                                TRACE_KEY_SEQ: trace_seq,
+                                TRACE_KEY_ROLE: "system",
+                                TRACE_KEY_CONTENT: _REPEAT_LIMIT_NOTE.format(repeats=repeat_count),
+                            }
+                        )
+                        break
 
                     messages.append({"role": "assistant", "content": text})
                     # Truncate large execution outputs before adding to message
@@ -1844,8 +1912,11 @@ class RunRLMUseCase:
                 answer = synth_response.content.strip() or (
                     "The content was inspected but contained no extractable themes."
                 )
-                # If the synthesis call itself returned a JSON action blob
-                # (model stuck in action mode), fall through to the limit warning.
+                # Stopped at the repeat limit, the model is still in action mode
+                # and may answer with a final action; take its answer.  Any other
+                # JSON action blob falls through to the limit warning.
+                if repeat_stopped:
+                    answer = self._recover_final_answer(answer) or answer
                 if not self._looks_like_action(answer):
                     elapsed = time.time() - start
                     return RunResultDTO(
@@ -1865,6 +1936,25 @@ class RunRLMUseCase:
             if hasattr(self._llm, "use_root_model"):
                 self._llm.use_root_model()
             elapsed = time.time() - start
+            if repeat_stopped:
+                # Stopped by a limit, like a budget stop: not a success.
+                return RunResultDTO(
+                    answer=_REPEAT_LIMIT_WARNING.format(
+                        steps=budget_state.steps, repeats=repeat_count
+                    ),
+                    mode_used=MODE_RLM,
+                    success=False,
+                    error=(
+                        f"Budget exceeded: the repeat limit ({repeat_limit}) was "
+                        f"reached after {budget_state.steps} steps"
+                    ),
+                    steps=budget_state.steps,
+                    input_tokens=cumulative_input,
+                    output_tokens=cumulative_output,
+                    total_cost=cumulative_cost,
+                    elapsed_time=elapsed,
+                    trace=trace,
+                )
             return RunResultDTO(
                 answer=self._format_limit_warning(
                     overflow_step=overflow_at_step,
