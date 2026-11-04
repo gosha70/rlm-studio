@@ -314,6 +314,21 @@ describe("TracesPage", () => {
     );
   });
 
+  test("the session filter fetches sessions with the default limit, not the SWR key", async () => {
+    mockUseSWR.mockReturnValue({ data: [], isLoading: false } as ReturnType<typeof useSWR>);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]"));
+    try {
+      render(<TracesPage />);
+      const call = mockUseSWR.mock.calls.find(([key]) => key === "sessions");
+      expect(call).toBeDefined();
+      // SWR calls the fetcher with the key as its argument.
+      await (call![1] as (key: string) => Promise<unknown>)("sessions");
+      expect(fetchSpy).toHaveBeenCalledWith("/api/sessions?limit=20&offset=0", expect.anything());
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   test("shows empty state when no executions exist", () => {
     mockUseSWR.mockReturnValue({
       data: [],

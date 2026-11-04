@@ -163,3 +163,6 @@ export const REFINEMENT_POLL_MS = 2_000;
 export const HEALTH_POLL_MS = 10_000;
 /** How often it retries while the backend is unreachable, so it recovers on its own. */
 export const HEALTH_RETRY_MS = 5_000;
+
+/** SWR key for the sidebar session list; revalidate it when a session is created. */
+export const SESSIONS_SWR_KEY = "sessions";

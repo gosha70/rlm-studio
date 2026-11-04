@@ -16,6 +16,7 @@ import {
   PanelLeft,
   Plus,
   Trash2,
+  Pencil,
   Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,11 @@ export function hasLearnErrorBadge(
     diagnostics.judge.status === "error" ||
     diagnostics.storage.status === "error"
   );
+}
+
+/** Confirmation text for deleting a session; its runs stay in Traces. */
+function deleteSessionPrompt(name: string): string {
+  return `Delete session "${name}"? Its conversation is removed; its runs stay in Traces. This cannot be undone.`;
 }
 
 export function Sidebar({
@@ -238,22 +244,44 @@ export function Sidebar({
                   ) : (
                     <button
                       type="button"
-                      className="flex-1 truncate text-left"
+                      className="min-w-0 flex-1 truncate text-left"
                       onClick={() => onSelectSession?.(s.id)}
                       onDoubleClick={() => startRename(s)}
                     >
                       {s.name}
                     </button>
                   )}
+                  {editingSessionId !== s.id && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                        s.id === activeSessionId && "opacity-100",
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startRename(s);
+                      }}
+                      aria-label={`Rename session ${s.name}`}
+                      title="Rename"
+                    >
+                      <Pencil className="h-3 w-3" aria-hidden="true" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-6 w-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                    className={cn(
+                      "h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                      s.id === activeSessionId && "opacity-100",
+                    )}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onDeleteSession?.(s.id);
+                      if (window.confirm(deleteSessionPrompt(s.name))) onDeleteSession?.(s.id);
                     }}
                     aria-label={`Delete session ${s.name}`}
+                    title="Delete"
                   >
                     <Trash2 className="h-3 w-3" aria-hidden="true" />
                   </Button>

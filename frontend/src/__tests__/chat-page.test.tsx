@@ -5,6 +5,7 @@
  *   files are refused before any bytes are sent.
  * - M8: a Chat Provider whose LLM provider went offline is dropped from the
  *   selection restored from localStorage, so it cannot run.
+ * - M10: the session created by the first message shows in the sidebar.
  */
 
 import React from "react";
@@ -15,11 +16,21 @@ import { vi, describe, test, expect, beforeEach } from "vitest";
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), warning: vi.fn(), success: vi.fn() },
 }));
-vi.mock("@/components/shared/app-shell", () => ({
-  AppShell: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+// The real AppShell, with a sidebar that just lists the sessions it is given.
+vi.mock("@/components/shared/sidebar", () => ({
+  Sidebar: ({ sessions = [] }: { sessions?: { id: string; name: string }[] }) => (
+    <ul aria-label="Sessions">
+      {sessions.map((s) => (
+        <li key={s.id}>{s.name}</li>
+      ))}
+    </ul>
+  ),
 }));
+vi.mock("@/components/shared/theme-toggle", () => ({ ThemeToggle: () => null }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
+  getHealth: vi.fn(),
+  getSessions: vi.fn(),
   getChatProviders: vi.fn(),
   getLLMProviders: vi.fn(),
   getConfig: vi.fn(),
@@ -91,6 +102,8 @@ beforeEach(() => {
     ReturnType<typeof api.getSessionEvaluations>
   >);
   mocked.getExecutions.mockResolvedValue([]);
+  mocked.getHealth.mockResolvedValue({ status: "ok" } as Awaited<ReturnType<typeof api.getHealth>>);
+  mocked.getSessions.mockResolvedValue([]);
 });
 
 describe("Chat uploads (M7)", () => {
@@ -194,5 +207,21 @@ describe("Chat Provider selection (M8)", () => {
     await sendMessage("hello");
     await waitFor(() => expect(mocked.submitChat).toHaveBeenCalled());
     expect(mocked.submitChat.mock.calls.map(([req]) => req.chat_provider_id)).toEqual(["cp-on2"]);
+  });
+});
+
+describe("Sessions sidebar (M10)", () => {
+  test("the session created by the first message appears without a reload", async () => {
+    mocked.submitChat.mockResolvedValue({ execution_id: "exec-1", session_id: "sess-new", status: "accepted" });
+    mocked.getTrace.mockReturnValue(new Promise(() => {}));
+    mocked.getSessions.mockResolvedValueOnce([]).mockResolvedValue([
+      { id: "sess-new", name: "Session 17:45" } as Awaited<ReturnType<typeof api.getSessions>>[number],
+    ]);
+    renderPage();
+    const input = await screen.findByLabelText("Message input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: "hello" } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+    expect(await screen.findByText("Session 17:45")).toBeInTheDocument();
   });
 });

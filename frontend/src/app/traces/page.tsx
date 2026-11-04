@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { AppShell } from "@/components/shared/app-shell";
+import { SESSIONS_SWR_KEY } from "@/lib/constants";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { PERF_UI_ENABLED } from "@/lib/branding";
 import { Timeline } from "@/components/trace/timeline";
@@ -248,7 +249,8 @@ function TracesPageInner() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
 
-  const { data: sessions = [] } = useSWR<SessionSummary[]>("sessions", getSessions);
+  // Wrap getSessions: SWR passes the key to the fetcher, where it would land as `limit`.
+  const { data: sessions = [] } = useSWR<SessionSummary[]>(SESSIONS_SWR_KEY, () => getSessions());
 
   // Unfiltered fetch — drives the chat-provider filter dropdown so it never disappears
   const { data: allExecutions = [] } = useSWR<ExecutionSummary[]>(

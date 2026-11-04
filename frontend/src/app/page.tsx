@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { User, Bot, Sparkles, Loader2, ChevronDown, ChevronRight, Terminal, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/shared/app-shell";
+import { SESSIONS_SWR_KEY } from "@/lib/constants";
 import { ChatProviderSelector } from "@/components/chat/chat-provider-selector";
 import { ChatInput } from "@/components/chat/chat-input";
 import { FileAttachment } from "@/components/chat/file-attachment";
@@ -155,6 +156,7 @@ export default function ChatPage() {
   const { data: chatProviders = [] } = useSWR<ChatProviderConfig[]>("chat-providers", getChatProviders);
   const { data: llmProviders = [] } = useSWR<LLMProviderConfig[]>("llm-providers", getLLMProviders);
   const { data: config } = useSWR<AppConfig>("config", getConfig);
+  const { mutate } = useSWRConfig();
 
   // Persist active session to localStorage
   useEffect(() => {
@@ -833,6 +835,8 @@ export default function ChatPage() {
             effectiveSessionId = resp.session_id;
             skipSessionLoadRef.current = true;
             setSessionId(resp.session_id);
+            // The server just created the session: list it in the sidebar now.
+            void mutate(SESSIONS_SWR_KEY);
           }
 
           // Register mapping so WS events can find the turn
@@ -899,7 +903,7 @@ export default function ChatPage() {
         );
       }
     },
-    [sessionId, uploadedFiles, selectedChatProviderIds, chatProviders, pollForResult],
+    [sessionId, uploadedFiles, selectedChatProviderIds, chatProviders, pollForResult, mutate],
   );
 
   const handleFileUpload = useCallback(async (files: File[]) => {
