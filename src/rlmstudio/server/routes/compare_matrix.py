@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal, TypeAlias
@@ -39,9 +38,6 @@ from rlmstudio.application.use_cases.run_matrix_comparison import (
     MatrixSlotResultDTO,
     RunMatrixComparisonUseCase,
 )
-from rlmstudio.infrastructure.embedding.litellm_embedding_adapter import (
-    LiteLLMEmbeddingAdapter,
-)
 from rlmstudio.infrastructure.storage.sqlite_adapter import SQLiteStorageAdapter
 from rlmstudio.server.dependencies import AppState, ExecutionRecord, get_state
 from rlmstudio.server.models import (
@@ -50,6 +46,7 @@ from rlmstudio.server.models import (
     RAGConfig,
     RuntimeSettings,
 )
+from rlmstudio.server.rag_embedding import build_rag_embedder, rag_config_for
 from rlmstudio.server.routes._helpers import _record_slot_telemetry, _SlotMeta
 from rlmstudio.telemetry.store import content_sha256
 
@@ -404,12 +401,8 @@ async def _compare_matrix_v2(
             storage = None
             slot_extra: dict[str, object] = {}
             if mode == MODE_RAG:
-                embedding_api_key = _resolve_embedding_api_key(state, cp)
-                rag_cfg_resolved = req.rag_config or state.config.mode_config.rag_config
-                embedder = LiteLLMEmbeddingAdapter(
-                    model=rag_cfg_resolved.embedding_model,
-                    api_key=embedding_api_key,
-                )
+                rag_cfg_resolved = req.rag_config or rag_config_for(state, cp)
+                embedder = build_rag_embedder(state, cp, rag_cfg_resolved)
                 storage = SQLiteStorageAdapter(":memory:")
                 slot_extra = {
                     "collection": f"rag_{uuid.uuid4().hex}",
@@ -661,12 +654,8 @@ async def compare_matrix(
             storage = None
             slot_extra: dict[str, object] = {}
             if mode == MODE_RAG:
-                embedding_api_key = _resolve_embedding_api_key(state, cp)
-                rag_cfg = state.config.mode_config.rag_config
-                embedder = LiteLLMEmbeddingAdapter(
-                    model=rag_cfg.embedding_model,
-                    api_key=embedding_api_key,
-                )
+                rag_cfg = rag_config_for(state, cp)
+                embedder = build_rag_embedder(state, cp, rag_cfg)
                 # Each slot gets its own in-memory store so collections
                 # never collide across slots.
                 storage = SQLiteStorageAdapter(":memory:")
@@ -822,30 +811,6 @@ async def compare_matrix(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _resolve_embedding_api_key(
-    state: AppState,
-    cp: ChatProviderConfig,
-) -> str | None:
-    """Resolve the embedding API key using the same fallback as ``/api/chat``.
-
-    Preference order:
-    1. ``OPENAI_API_KEY`` from the process environment.
-    2. The stored secret for this chat provider's LLM provider instance,
-       when that provider's backend is ``openai``.
-    """
-    api_key: str | None = os.environ.get("OPENAI_API_KEY")
-    if api_key:
-        return api_key
-
-    lp = state.get_llm_provider(cp.llm_provider_id) if cp.llm_provider_id else None
-    if lp and lp.backend == "openai":
-        from rlmstudio.server.routes.llm_providers import _get_api_key
-
-        api_key = _get_api_key(lp.id, lp.backend)
-
-    return api_key
 
 
 def _build_slot_run_config(
