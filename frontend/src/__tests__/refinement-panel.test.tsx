@@ -333,6 +333,13 @@ describe("Evaluation", () => {
     });
   });
 
+  test("shows the full current supplement next to the candidate", async () => {
+    showRefinement(refinement());
+    renderPanel();
+    expect(await screen.findByLabelText("Current supplement")).toHaveTextContent("Template text");
+    expect(screen.getByLabelText("Candidate supplement")).toHaveTextContent(CANDIDATE);
+  });
+
   test("a failed start shows the server's reason", async () => {
     showRefinement(refinement());
     mocked.getHoldoutCases.mockResolvedValue([
@@ -458,6 +465,28 @@ describe("Decisions", () => {
     const onProfileChanged = renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Accept" }));
     expect(await screen.findByText(/recording the accept failed/)).toBeInTheDocument();
+    await waitFor(() => expect(onProfileChanged).toHaveBeenCalledTimes(1));
+  });
+
+  test("a successful accept refreshes the profile even when the follow-up read fails", async () => {
+    const evaluated = refinement({ status: REFINEMENT_STATUS_EVALUATED, evaluation: evaluation() });
+    mocked.listRefinements.mockResolvedValue([evaluated]);
+    mocked.getRefinement.mockResolvedValueOnce(evaluated).mockRejectedValue(new Error("network down"));
+    mocked.acceptRefinement.mockResolvedValue(refinement({ status: REFINEMENT_STATUS_ACCEPTED }));
+    const onProfileChanged = renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(onProfileChanged).toHaveBeenCalledTimes(1));
+  });
+
+  test("a split-brain accept refreshes the profile even when the follow-up read fails", async () => {
+    const evaluated = refinement({ status: REFINEMENT_STATUS_EVALUATED, evaluation: evaluation() });
+    mocked.listRefinements.mockResolvedValue([evaluated]);
+    mocked.getRefinement.mockResolvedValueOnce(evaluated).mockRejectedValue(new Error("network down"));
+    mocked.acceptRefinement.mockRejectedValue(
+      new Error('API error 500: {"error": {"message": "The candidate was saved to the profile, but recording the accept failed"}}'),
+    );
+    const onProfileChanged = renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Accept" }));
     await waitFor(() => expect(onProfileChanged).toHaveBeenCalledTimes(1));
   });
 

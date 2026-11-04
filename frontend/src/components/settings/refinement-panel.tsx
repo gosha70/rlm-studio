@@ -424,16 +424,14 @@ function RefinementDetail({
   const run = async (action: () => Promise<unknown>, success: string, changesProfile: boolean) => {
     setBusy(true);
     setMessage(null);
+    // Refresh the profile before re-reading the refinement, so a stale edit
+    // form on the card is closed whatever happens to that read.
     try {
       await action();
       toast.success(success);
-      await mutate();
-      onChanged();
       if (changesProfile) onProfileChanged();
     } catch (err) {
       setMessage(apiErrorMessage(err));
-      await mutate();
-      onChanged();
       // A split-brain accept or rollback (5xx after a successful save) did
       // change the profile, so refresh it. A 4xx was refused before any
       // write: leave the card, and any edit in progress, alone.
@@ -441,6 +439,8 @@ function RefinementDetail({
     } finally {
       setBusy(false);
     }
+    await mutate();
+    onChanged();
   };
 
   const evaluation = refinement.evaluation;
@@ -473,6 +473,26 @@ function RefinementDetail({
         <pre className="mt-1 max-h-64 overflow-auto rounded-md border bg-muted p-2 text-xs">
           {proposal.diff || "(no textual change)"}
         </pre>
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          <div className="min-w-0">
+            <h4 className="text-xs text-muted-foreground">Current supplement (when proposed)</h4>
+            <pre
+              aria-label="Current supplement"
+              className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border p-2 text-xs"
+            >
+              {proposal.base.resolved || "(empty)"}
+            </pre>
+          </div>
+          <div className="min-w-0">
+            <h4 className="text-xs text-muted-foreground">Candidate supplement</h4>
+            <pre
+              aria-label="Candidate supplement"
+              className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border p-2 text-xs"
+            >
+              {proposal.candidate}
+            </pre>
+          </div>
+        </div>
         {!proposal.base.rlm_key_present && ACCEPT_STILL_POSSIBLE.includes(status) && (
           <p className="mt-1 text-xs text-muted-foreground">
             This profile follows the prompt group &quot;{proposal.base.template_name ?? "global defaults"}
