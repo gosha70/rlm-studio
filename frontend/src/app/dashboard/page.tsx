@@ -21,6 +21,22 @@ import { JudgeDimensionsChart } from "@/components/metrics/judge-dimensions-char
 import { FailureBreakdown } from "@/components/metrics/failure-breakdown";
 import { displayModeName } from "@/lib/constants";
 
+/** Shown in a summary card when there is no run to compute it from. */
+const NO_VALUE = "—";
+
+/**
+ * The fourth summary card. The server's figure is RLM's token saving over
+ * Direct in percent; when RLM used more, a negative percentage such as
+ * "-1734%" says nothing useful, so the card shows how many times Direct's
+ * tokens RLM used instead.
+ */
+function tokenComparisonCard(savingsPercent: number | null | undefined): { label: string; value: string } {
+  if (savingsPercent == null) return { label: "Token Savings", value: "N/A" };
+  if (savingsPercent >= 0) return { label: "Token Savings", value: `${savingsPercent.toFixed(0)}%` };
+  const ratio = 1 - savingsPercent / 100;
+  return { label: "RLM Tokens vs Direct", value: `${ratio.toFixed(1)}×` };
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { mutate } = useSWRConfig();
@@ -68,6 +84,9 @@ export default function DashboardPage() {
   );
 
   const summary = metrics?.summary;
+  // Totals and averages cover successful runs only (the server leaves
+  // failures out), so with none of those there is nothing to show — not 0.
+  const hasUsableRuns = Object.values(metrics?.by_mode ?? {}).some((m) => (m?.queries ?? 0) > 0);
 
   return (
     <AppShell>
@@ -101,25 +120,21 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <MetricCard
             label="Total Tokens"
-            value={summary ? summary.total_tokens.toLocaleString() : "0"}
+            value={summary && hasUsableRuns ? summary.total_tokens.toLocaleString() : NO_VALUE}
             icon={Hash}
           />
           <MetricCard
             label="Total Cost"
-            value={summary ? `$${summary.total_cost_usd.toFixed(2)}` : "$0.00"}
+            value={summary && hasUsableRuns ? `$${summary.total_cost_usd.toFixed(2)}` : NO_VALUE}
             icon={DollarSign}
           />
           <MetricCard
             label="Avg Latency"
-            value={summary ? summary.avg_latency_seconds.toFixed(1) : "0.0"}
-            unit="s"
+            value={summary && hasUsableRuns ? summary.avg_latency_seconds.toFixed(1) : NO_VALUE}
+            unit={summary && hasUsableRuns ? "s" : undefined}
             icon={Clock}
           />
-          <MetricCard
-            label="Token Savings"
-            value={summary?.avg_token_savings_percent != null ? `${summary.avg_token_savings_percent.toFixed(0)}%` : "N/A"}
-            icon={Activity}
-          />
+          <MetricCard {...tokenComparisonCard(summary?.avg_token_savings_percent)} icon={Activity} />
         </div>
 
         {isLoading && (

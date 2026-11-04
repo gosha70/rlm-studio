@@ -468,6 +468,55 @@ describe("DashboardPage — LLM Tuner note", () => {
   });
 });
 
+describe("DashboardPage — summary cards", () => {
+  const emptyMetrics = (): MetricsResponse => ({
+    session_id: "sess-1",
+    summary: {
+      total_queries: 0,
+      total_tokens: 0,
+      total_cost_usd: 0,
+      avg_latency_seconds: 0,
+      avg_token_savings_percent: null,
+    },
+    by_mode: {},
+    by_provider: {},
+    timeline: [],
+  });
+
+  test("show no numbers before any session exists", () => {
+    renderDashboard(undefined, []);
+    expect(screen.getByLabelText("Total Tokens: —")).toBeInTheDocument();
+    expect(screen.getByLabelText("Total Cost: —")).toBeInTheDocument();
+    expect(screen.getByLabelText("Avg Latency: —")).toBeInTheDocument();
+  });
+
+  test("show no numbers once every run was cleared, not Avg Latency 0.0 s", () => {
+    renderDashboard(emptyMetrics());
+    expect(screen.getByLabelText("Avg Latency: —")).toBeInTheDocument();
+    expect(screen.queryByText("0.0")).not.toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+  });
+
+  test("show no numbers when every run failed", () => {
+    renderDashboard({ ...emptyMetrics(), summary: { ...emptyMetrics().summary, total_queries: 3 } });
+    expect(screen.getByLabelText("Total Tokens: —")).toBeInTheDocument();
+  });
+
+  test("say how many times Direct's tokens RLM used when RLM used more", () => {
+    renderDashboard({
+      ...makeMetrics(),
+      summary: { ...makeMetrics().summary, avg_token_savings_percent: -1734 },
+    });
+    expect(screen.getByLabelText("RLM Tokens vs Direct: 18.3×")).toBeInTheDocument();
+    expect(screen.queryByText(/-1734%/)).not.toBeInTheDocument();
+  });
+
+  test("keep the savings percentage when RLM used fewer tokens", () => {
+    renderDashboard(makeMetrics());
+    expect(screen.getByLabelText("Token Savings: 25%")).toBeInTheDocument();
+  });
+});
+
 describe("DashboardPage — Recent Executions", () => {
   test("labels the official engine's runs by name, not RLM_OFFICIAL", () => {
     renderDashboard({
