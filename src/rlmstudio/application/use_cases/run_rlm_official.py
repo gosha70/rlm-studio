@@ -40,6 +40,13 @@ from rlmstudio.application.services.provider_failure import (
 
 logger = logging.getLogger(__name__)
 
+_EMPTY_ANSWER_ERROR = "Official RLM engine finished without an answer"
+_EMPTY_ANSWER_CARD = (
+    "⚠️ **No answer** — the official engine finished without returning one.\n\n"
+    "It usually stops like this when it runs out of steps before it answers.\n\n"
+    "**How to fix:** raise **Max steps**, or ask a more focused question."
+)
+
 
 class _WallClockExceededError(Exception):
     """Raised internally when the engine did not return within the wall-clock budget."""
@@ -186,6 +193,18 @@ class RunRLMOfficialUseCase:
         metadata = dict(result.metadata)
         metadata.setdefault(RESULT_KEY_ENGINE_VERSION, self._engine.version)
         answer = result.answer
+        if result.success and not answer.strip():
+            # The engine finished without an answer; ranking it as a success
+            # put an empty cell above real answers.
+            return dataclasses.replace(
+                result,
+                answer=_EMPTY_ANSWER_CARD,
+                success=False,
+                error=_EMPTY_ANSWER_ERROR,
+                mode_used=MODE_RLM_OFFICIAL,
+                elapsed_time=result.elapsed_time or (time.time() - start),
+                metadata=metadata,
+            )
         if result.success:
             breach = self._budget_breach(result, config)
             if breach is not None:

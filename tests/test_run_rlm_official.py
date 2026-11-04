@@ -343,3 +343,18 @@ class TestAsync:
 
         assert not result.success
         assert result.error == "async boom"
+
+
+class TestEmptyAnswer:
+    """D3: an engine that finishes without an answer is not a success."""
+
+    def test_empty_answer_is_a_failure_with_a_card(self) -> None:
+        engine = FakeRLMEngine(answer="   ")
+        result = RunRLMOfficialUseCase(engine).execute("doc", "q")
+
+        assert result.success is False
+        assert result.answer.startswith("⚠️ **No answer**")
+        assert result.error
+        assert result.input_tokens == FAKE_INPUT_TOKENS
+        assert result.mode_used == MODE_RLM_OFFICIAL
+        assert _category(result) is OutcomeCategory.GENERAL_ERROR

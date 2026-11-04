@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 import re
 import threading
@@ -93,6 +94,10 @@ _MAX_STEPS_HINT = (
     "- Increase **Max Steps** on the Chat Provider's profile (Settings → Profiles), "
     "or **Max steps** in the LLM Tuner.\n"
 )
+
+# A final action whose JSON did not parse (see ``_recover_final_answer``).
+_FINAL_TYPE_RE = re.compile(r'"type"\s*:\s*"final"')
+_ANSWER_VALUE_RE = re.compile(r'"answer"\s*:\s*(?=")')
 
 
 @dataclass(frozen=True)
@@ -978,6 +983,9 @@ class RunRLMUseCase:
                     elapsed_time=elapsed,
                     trace=trace,
                 )
+            # A raw JSON action is not a partial answer worth showing.
+            if partial and self._looks_like_action(partial):
+                partial = ""
             budget_state.elapsed_seconds = elapsed
             answer, error = self._budget_stop_outcome(budget_state, budget_config, partial, exc)
             return RunResultDTO(
@@ -1958,6 +1966,9 @@ class RunRLMUseCase:
                     elapsed_time=elapsed,
                     trace=trace,
                 )
+            # A raw JSON action is not a partial answer worth showing.
+            if partial and self._looks_like_action(partial):
+                partial = ""
             budget_state.elapsed_seconds = elapsed
             answer, error = self._budget_stop_outcome(budget_state, budget_config, partial, exc)
             return RunResultDTO(
@@ -2486,6 +2497,9 @@ class RunRLMUseCase:
                         )
             except Exception:  # nosec B110 — intentional: v2 JSON parse failure falls through to v1 markdown parser below
                 pass
+            recovered = self._recover_final_answer(text)
+            if recovered is not None:
+                return ParsedResponse(final_answer=recovered, raw_text=text)
 
         # v1.0 markdown / plain-text fallback.
         # Re-use is_inspect so the synthesis fallback works for models that
@@ -2509,6 +2523,31 @@ class RunRLMUseCase:
         ):
             result.is_inspect = True
         return result
+
+    @staticmethod
+    def _recover_final_answer(text: str) -> str | None:
+        """Read the answer out of a final action whose JSON did not parse.
+
+        Small local models often emit a final action with a missing closing
+        brace or an invalid optional field; the raw JSON was then shown and
+        ranked as the answer.  Returns ``None`` unless the text is a final
+        action (optionally fenced) with a non-empty string ``answer``.
+        """
+        body = text.strip()
+        if body.startswith("```"):
+            body = body.split("\n", 1)[-1].lstrip()
+        if not body.startswith("{") or not _FINAL_TYPE_RE.search(body):
+            return None
+        match = _ANSWER_VALUE_RE.search(body)
+        if match is None:
+            return None
+        try:
+            answer, _ = json.JSONDecoder().raw_decode(body, match.end())
+        except ValueError:
+            return None
+        if isinstance(answer, str) and answer.strip():
+            return answer.strip()
+        return None
 
     @staticmethod
     def _inspect_to_code(action_obj: Any) -> str | None:

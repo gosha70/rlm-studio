@@ -1,4 +1,4 @@
-"""A stopped RLM run names the limit it hit and is not a success (M1).
+"""A stopped RLM run names the limit it hit and is not a success (M1, M5).
 
 Before: every ``BudgetExceededError`` was reported as "Step budget exhausted"
 with a hint at a Chat Provider field that does not exist, and returned
@@ -66,3 +66,40 @@ class TestBudgetStopReason:
         assert "Step budget exhausted" in result.answer
         assert "Settings → Profiles" in result.answer
         assert "Chat Providers" not in result.answer
+
+    def test_raw_json_action_is_not_shown_as_partial_answer(self) -> None:
+        # M5: an unparseable action repeated until the stall limit stops the run.
+        llm = FakeLLM(['{"type": "inspect", "tool": "grep", "args": '])
+        config = RunConfigDTO(mode="rlm", max_steps=20)
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q", config=config)
+
+        assert result.success is False
+        assert '"type"' not in result.answer
+        assert _category(result) is OutcomeCategory.BUDGET_EXHAUSTED
+
+
+class TestUnparsedFinalAction:
+    """M5: a final action the strict parser rejects still yields its answer."""
+
+    def test_final_action_missing_its_closing_brace_yields_the_answer(self) -> None:
+        truncated = (
+            '{\n  "type": "final",\n  "answer": "Owned by \\u0022Harbour\\u0022.",\n'
+            '  "confidence": 0.9\n'
+        )
+        llm = FakeLLM([truncated])
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q")
+
+        assert result.success is True
+        assert result.answer == 'Owned by "Harbour".'
+
+    def test_fenced_final_with_invalid_confidence_yields_the_answer(self) -> None:
+        fenced = '```json\n{"type": "final", "answer": "42", "confidence": "high"}\n```'
+        llm = FakeLLM([fenced])
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q")
+
+        assert result.success is True
+        assert result.answer == "42"
+
+    def test_prose_mentioning_a_final_type_is_not_recovered(self) -> None:
+        text = 'The "type": "final" field, "answer": "x"'
+        assert RunRLMUseCase._recover_final_answer(text) is None
