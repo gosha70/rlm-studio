@@ -100,6 +100,9 @@ export const MAX_OUTPUT_TOKENS_LIMIT = 1_000_000;
 /** Longest scheduled connection-test interval, in minutes (24 hours). */
 export const CONNECTION_TEST_INTERVAL_MAX_MINUTES = 1440;
 
+/** Default RLM nudge point — mirrors RLM_DEFAULT_NUDGE_AT_FRACTION (sandbox_vars.py). */
+export const RLM_DEFAULT_NUDGE_AT_FRACTION = 0.4;
+
 /** Whether `text` is a plain whole number ("1e3", "5s" and "-5" are not). */
 export function isWholeNumber(text: string): boolean {
   return /^\d+$/.test(text.trim());

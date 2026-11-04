@@ -192,7 +192,8 @@ describe("BudgetConfig", () => {
       max_time_seconds: 600,
       max_recursion_depth: 5,
       repeat_limit: 2,
-      nudge_at_fraction: 0.6,
+      // The server default (RLM_DEFAULT_NUDGE_AT_FRACTION), not 0.6.
+      nudge_at_fraction: 0.4,
     });
   });
 
@@ -717,7 +718,7 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
 
     expect(
-      screen.getByText(/Model check could not reach the provider\./),
+      screen.getByText(/Model not checked: the provider's model list could not be read\./),
     ).toBeInTheDocument();
   });
 
@@ -1041,6 +1042,44 @@ describe("SettingsPage — Wave 3", () => {
 
     expect(screen.getByLabelText("API Key")).toHaveAttribute("placeholder", "sk-...");
     expect(screen.queryByText(/A key is stored for this provider/)).not.toBeInTheDocument();
+  });
+
+  test("a disabled Create says which fields are missing", async () => {
+    stubSettingsData({ "llm-providers": [], profiles: [RAG_PROFILE], "chat-providers": [] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+    expect(screen.getByText("Fill in Name, Model to create.")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Name"), "Local");
+    expect(screen.getByText("Fill in Model to create.")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Model"), "llama3.2");
+    expect(screen.queryByText(/^Fill in/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    expect(screen.getByText("Fill in Name, LLM Provider, Profile to create.")).toBeInTheDocument();
+  });
+
+  test("picking a discovered model does not flip the Select to controlled", async () => {
+    vi.mocked(getLLMProviderModelsForConfig).mockResolvedValueOnce({
+      models: [{ name: "qwen2.5-7b-instruct", input_cost_per_1k: 0, output_cost_per_1k: 0 }],
+      source: "live",
+      error: null,
+    });
+    // Radix reports the flip through console.warn.
+    const errors = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubSettingsData({ "llm-providers": [] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+    await screen.findByText(/1 model loaded/, undefined, { timeout: 3000 });
+    await pick(user, "llmp-model", /qwen2\.5-7b-instruct/);
+
+    const flips = errors.mock.calls.filter((args) =>
+      String(args[0]).includes("from uncontrolled to controlled"),
+    );
+    errors.mockRestore();
+    expect(flips).toEqual([]);
   });
 
   test("a successful Budget save is confirmed", async () => {

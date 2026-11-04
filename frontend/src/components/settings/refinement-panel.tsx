@@ -151,14 +151,18 @@ export function RefinementPanel({
 
         <div className="grid gap-4 md:grid-cols-[14rem_1fr]">
           <nav aria-label="Refinement history" className="space-y-2">
-            <Button
-              size="sm"
-              variant={current === NEW_REFINEMENT ? "default" : "outline"}
-              className="w-full"
+            {/* A list entry like the history items below, not an action
+                button: it selects the "new proposal" view. */}
+            <button
+              type="button"
               onClick={() => setSelected(NEW_REFINEMENT)}
+              aria-current={current === NEW_REFINEMENT}
+              className={`w-full rounded-md border px-2 py-1.5 text-left text-xs ${
+                current === NEW_REFINEMENT ? "border-primary bg-muted" : "border-muted"
+              }`}
             >
               New refinement
-            </Button>
+            </button>
             {error && (
               <p className="text-xs text-destructive" role="alert">
                 {apiErrorMessage(error)}
@@ -284,8 +288,8 @@ function NewProposal({
   if (runs.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No usable runs yet. Refinement learns from RLM runs of this profile recorded after
-        document hashing was added; run the profile in RLM mode first.
+        No RLM runs of this profile yet. Chat with a Chat Provider that uses this profile in
+        RLM mode, then come back to pick the runs that went wrong.
       </p>
     );
   }
@@ -339,7 +343,7 @@ function NewProposal({
           Proposal Chat Provider
         </Label>
         <Select
-          value={effectiveProposer ?? undefined}
+          value={effectiveProposer ?? ""}
           onValueChange={(v) => setProposerId(v)}
         >
           <SelectTrigger id={`proposer-${profile.id}`} className="h-8 text-xs">

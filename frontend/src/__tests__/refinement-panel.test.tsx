@@ -217,7 +217,17 @@ describe("apiErrorMessage", () => {
 describe("New proposal", () => {
   test("explains when there are no usable runs", async () => {
     renderPanel();
-    expect(await screen.findByText(/No usable runs yet/)).toBeInTheDocument();
+    const empty = await screen.findByText(/No RLM runs of this profile yet/);
+    expect(empty).toHaveTextContent(/in RLM mode/);
+    expect(empty).not.toHaveTextContent(/document hashing/);
+  });
+
+  test("the New refinement entry is a selected list item, not an action", async () => {
+    renderPanel();
+    const entry = await screen.findByRole("button", { name: "New refinement" });
+    expect(entry).toHaveAttribute("aria-current", "true");
+    expect(entry.className).toContain("border-primary");
+    expect(entry.className).not.toContain("bg-primary");
   });
 
   test("proposes from the selected runs through the newest run's Chat Provider", async () => {

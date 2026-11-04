@@ -33,7 +33,12 @@ import {
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Trash2, Lock, Edit2, Copy, Download, ChevronDown, ChevronUp, FlaskConical } from "lucide-react";
-import { MAX_OUTPUT_TOKENS_LIMIT, MODE_RLM, displayModeName } from "@/lib/constants";
+import {
+  MAX_OUTPUT_TOKENS_LIMIT,
+  MODE_RLM,
+  RLM_DEFAULT_NUDGE_AT_FRACTION,
+  displayModeName,
+} from "@/lib/constants";
 import { StrategySelectItems } from "./strategy-select-items";
 import { RefinementPanel } from "./refinement-panel";
 
@@ -77,7 +82,7 @@ export function ProfileCard({
     max_time_seconds: String(profile.budget.max_time_seconds),
     max_recursion_depth: String(profile.budget.max_recursion_depth),
     repeat_limit: String(profile.budget.repeat_limit ?? 2),
-    nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? 0.6),
+    nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? RLM_DEFAULT_NUDGE_AT_FRACTION),
     prompt_template_name: profile.prompt_template_name as string | null,
     rlm_prompt: profile.system_prompts?.[MODE_RLM] ?? "",
   });
@@ -137,7 +142,7 @@ export function ProfileCard({
       max_time_seconds: String(profile.budget.max_time_seconds),
       max_recursion_depth: String(profile.budget.max_recursion_depth),
       repeat_limit: String(profile.budget.repeat_limit ?? 2),
-      nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? 0.6),
+      nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? RLM_DEFAULT_NUDGE_AT_FRACTION),
       prompt_template_name: profile.prompt_template_name,
       rlm_prompt: profile.system_prompts?.[MODE_RLM] ?? "",
     });
@@ -406,7 +411,7 @@ export function ProfileCard({
             <span className="text-muted-foreground">Repeat Limit</span>
             <span>{profile.budget.repeat_limit ?? 2}</span>
             <span className="text-muted-foreground">Nudge at Fraction</span>
-            <span>{profile.budget.nudge_at_fraction ?? 0.6}</span>
+            <span>{profile.budget.nudge_at_fraction ?? RLM_DEFAULT_NUDGE_AT_FRACTION}</span>
             <span className="text-muted-foreground">Prompt Group</span>
             <span>{profile.prompt_template_name ?? "Global defaults"}</span>
             <span className="text-muted-foreground">Custom RLM prompt</span>

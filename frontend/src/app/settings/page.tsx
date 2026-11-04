@@ -104,6 +104,12 @@ const DEEP_LINK_BASE_URL_ALLOWED_BACKENDS: ReadonlySet<string> = new Set([
   BACKEND_VLLM,
 ]);
 
+/** Why a form's submit button is disabled, e.g. "Fill in Name, Model to create." */
+function missingFieldsHint(missing: (string | false)[], action: string): string | null {
+  const names = missing.filter((m): m is string => !!m);
+  return names.length > 0 ? `Fill in ${names.join(", ")} to ${action}.` : null;
+}
+
 // A dropdown of user-named items: never wider than the viewport, so a long
 // unbroken name wraps inside it instead of spilling off screen.
 const NAME_LIST_CONTENT_CLASS = "max-w-[calc(100vw-2rem)]";
@@ -822,6 +828,19 @@ function SettingsPageInner() {
   const modelSourceLabel = isLocalFormBackend
     ? llmProviderForm.endpoint.trim() || "the endpoint"
     : (BACKEND_DISPLAY_NAMES[llmProviderForm.backend] ?? llmProviderForm.backend);
+  const llmFormHint = missingFieldsHint(
+    [!llmProviderForm.name.trim() && "Name", !llmProviderForm.model.trim() && "Model"],
+    editingLLMProviderId ? "save" : "create",
+  );
+  const chatProviderFormHint = missingFieldsHint(
+    [
+      !formData.name.trim() && "Name",
+      !formData.llm_provider_id && "LLM Provider",
+      !formData.profile_id && "Profile",
+    ],
+    "create",
+  );
+
   // The edit form never shows the stored key, so say that one exists.
   const editingKeyStored =
     !!editingLLMProviderId &&
@@ -938,7 +957,9 @@ function SettingsPageInner() {
                     {llmProviderModels.length > 0 ? (
                       <div className="flex gap-2">
                         <Select
-                          value={llmProviderForm.model || undefined}
+                          // "" shows the placeholder; undefined would make the
+                          // Select uncontrolled and React warns when it flips.
+                          value={llmProviderForm.model}
                           onValueChange={(v) => setLLMProviderForm({ ...llmProviderForm, model: v })}
                         >
                           <SelectTrigger id="llmp-model" className="flex-1">
@@ -1104,6 +1125,9 @@ function SettingsPageInner() {
                       Cancel
                     </Button>
                   </div>
+                  {llmFormHint && (
+                    <p className="text-xs text-muted-foreground">{llmFormHint}</p>
+                  )}
                   {testResults[FORM_TEST_RESULT_KEY] && (
                     <div className={`mt-2 rounded-md p-2 text-sm ${testResults[FORM_TEST_RESULT_KEY].connected ? "bg-emerald-500/10 text-emerald-400" : "bg-destructive/10 text-destructive"}`}>
                       <TestOutcome result={testResults[FORM_TEST_RESULT_KEY]} />
@@ -1176,7 +1200,7 @@ function SettingsPageInner() {
                         )}
                         {lp.model_check_status === "unknown" && (
                           <p className="text-xs text-muted-foreground">
-                            Model check could not reach the provider.
+                            Model not checked: the provider&apos;s model list could not be read.
                           </p>
                         )}
                       </div>
@@ -1460,6 +1484,9 @@ function SettingsPageInner() {
                       Cancel
                     </Button>
                   </div>
+                  {chatProviderFormHint && (
+                    <p className="text-xs text-muted-foreground">{chatProviderFormHint}</p>
+                  )}
                 </CardContent>
               </Card>
             )}

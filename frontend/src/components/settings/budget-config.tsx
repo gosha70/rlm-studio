@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { FieldLabel } from "./field-label";
 import type { BudgetConfig as BudgetConfigType } from "@/lib/api";
+import { RLM_DEFAULT_NUDGE_AT_FRACTION } from "@/lib/constants";
 
 interface BudgetConfigProps {
   config: BudgetConfigType;
@@ -19,7 +20,7 @@ const DEFAULTS: BudgetConfigType = {
   max_time_seconds: 600,
   max_recursion_depth: 5,
   repeat_limit: 2,
-  nudge_at_fraction: 0.6,
+  nudge_at_fraction: RLM_DEFAULT_NUDGE_AT_FRACTION,
 };
 
 /** Why `budget` cannot be saved, or null when it can. Mirrors the API bounds. */
