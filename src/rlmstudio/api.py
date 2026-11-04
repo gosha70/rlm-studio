@@ -37,6 +37,7 @@ from rlmstudio.infrastructure.storage.sqlite_adapter import SQLiteStorageAdapter
 from rlmstudio.ui.data.providers_catalog import (
     LOCAL_PROVIDER_KEYS,
     PROVIDERS_BY_KEY,
+    request_api_key,
     subcall_concurrency_for,
 )
 
@@ -339,7 +340,7 @@ def build_llm_adapter(
     provider, raw_model = _parse_provider_spec(spec)
     return LiteLLMAdapter(
         model=_resolve_model(provider, raw_model, api_base),
-        api_key=api_key,
+        api_key=request_api_key(provider, api_key),
         api_base=api_base,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -416,7 +417,7 @@ def _setup(
         model=prefixed_model,
         root_model=resolved_root,
         recursive_model=resolved_recursive,
-        api_key=api_key,
+        api_key=request_api_key(provider, api_key),
         api_base=api_base,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -784,7 +785,7 @@ def build_matrix_slots(
         for mode in modes:
             llm = LiteLLMAdapter(
                 model=prefixed_model,
-                api_key=api_key,
+                api_key=request_api_key(provider, api_key),
                 api_base=api_base,
                 temperature=temperature,
                 max_tokens=max_tokens,

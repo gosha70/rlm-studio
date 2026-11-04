@@ -206,6 +206,50 @@ class TestRuntimeSettingsApplied:
         assert adapter._max_tokens == 1024
         assert adapter._timeout == 15.0
 
+    def test_lm_studio_gets_a_placeholder_key_never_the_openai_env_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """LM Studio is keyless but routed as openai/<model>; without a key
+        LiteLLM fell back to OPENAI_API_KEY (failing without it, leaking it
+        to the local server with it). Chat, the official engine and the
+        global adapter must all send the placeholder instead."""
+        from rlmstudio.infrastructure.engines.rlms_adapter import RlmsEngineAdapter
+        from rlmstudio.server import dependencies
+        from rlmstudio.server.models import ChatProviderConfig, LLMProviderConfig
+        from rlmstudio.ui.data.providers_catalog import KEYLESS_API_KEY_PLACEHOLDER
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-real-openai")
+        monkeypatch.setattr(dependencies, "_get_instance_api_key", lambda _id, _backend: None)
+        state = AppState(load_from_disk=False)
+        state.config.llm_providers = [
+            LLMProviderConfig(id="lp-lm", name="LM", backend="lmstudio", model="qwen")
+        ]
+        state.config.chat_providers = [
+            ChatProviderConfig(id="cp-lm", name="LM chat", llm_provider_id="lp-lm")
+        ]
+
+        adapter = state.create_llm_adapter_for_chat_provider("cp-lm")
+        engine = state.create_rlm_engine_for_chat_provider("cp-lm")
+        state.config.active_provider = "lmstudio"
+        state.config.active_model = "qwen"
+        global_adapter = state.create_llm_adapter()
+
+        assert isinstance(engine, RlmsEngineAdapter)
+        assert adapter._api_key == KEYLESS_API_KEY_PLACEHOLDER
+        assert engine._api_key == KEYLESS_API_KEY_PLACEHOLDER
+        assert global_adapter._api_key == KEYLESS_API_KEY_PLACEHOLDER
+
+    def test_cloud_provider_without_a_key_keeps_litellm_env_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The placeholder is for keyless local servers only: an OpenAI
+        provider with no stored key still leaves the key to LiteLLM."""
+        state = AppState(load_from_disk=False)
+        state.config.active_provider = "openai"
+        state.config.active_model = "gpt-4o"
+
+        assert state.create_llm_adapter()._api_key is None
+
 
 # ---------------------------------------------------------------------------
 # Bug #3: Cost calculation

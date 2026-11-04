@@ -200,6 +200,12 @@ jobs:
           cp -r frontend/out/. src/rlmstudio/_ui/
           test -f src/rlmstudio/_ui/__init__.py
           test -f src/rlmstudio/_ui/index.html
+      - name: Ship the docs inside the package (same steps as RELEASING.md)
+        run: |
+          find src/rlmstudio/_docs -mindepth 1 -not -name __init__.py -delete
+          cp -r docs/. src/rlmstudio/_docs/
+          test -f src/rlmstudio/_docs/__init__.py
+          test -f src/rlmstudio/_docs/troubleshoot.yaml
       - name: Build wheel + sdist
         run: uv build
       - name: Wheel contents — bundled UI present, no legacy paths
@@ -210,6 +216,8 @@ jobs:
           names = zipfile.ZipFile(whl).namelist()
           assert "rlmstudio/_ui/index.html" in names, "bundled UI missing from wheel"
           assert "rlmstudio/_ui/__init__.py" in names, "_ui package marker missing"
+          assert "rlmstudio/_docs/rlm-concepts.md" in names, "bundled docs missing from wheel"
+          assert "rlmstudio/_docs/troubleshoot.yaml" in names, "troubleshoot source missing from wheel"
           assert any(n.startswith("rlmstudio/prompts/") and n.endswith(".yaml") for n in names), "prompts missing"
           legacy = [n for n in names if n.startswith("rlmkit/")]
           assert not legacy, f"legacy rlmkit/ paths in wheel: {legacy[:5]}"
@@ -238,6 +246,10 @@ jobs:
           echo
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/studio/)" = "200"
           curl -s http://127.0.0.1:8765/studio/ | grep -q "RLM Studio"
+          # Learn reads docs from the package, not a repo checkout.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/api/docs/rlm-concepts)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/api/docs/hosts-lmstudio)" = "200"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/api/docs/troubleshoot)" = "200"
           kill %1 || true
           tail -5 /tmp/studio.log
 

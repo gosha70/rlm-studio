@@ -21,7 +21,7 @@ from rlmstudio.server.models import (
     ProviderTestRequest,
     ProviderTestResponse,
 )
-from rlmstudio.ui.data.providers_catalog import PROVIDERS, PROVIDERS_BY_KEY
+from rlmstudio.ui.data.providers_catalog import PROVIDERS, PROVIDERS_BY_KEY, request_api_key
 from rlmstudio.ui.services.secret_store import FileSecretStore, KeyringSecretStore
 
 logger = logging.getLogger(__name__)
@@ -192,8 +192,9 @@ async def test_provider(
         "timeout": 30,
         "drop_params": True,
     }
-    if req.api_key:
-        params["api_key"] = req.api_key
+    api_key = request_api_key(req.provider, req.api_key)
+    if api_key:
+        params["api_key"] = api_key
 
     # Use explicit endpoint or fall back to provider's default
     endpoint = req.endpoint

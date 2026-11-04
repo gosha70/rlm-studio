@@ -53,7 +53,6 @@ from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
 from rlmstudio.application.use_cases.run_rlm_official import RunRLMOfficialUseCase
 from rlmstudio.core.trace import ExecutionTrace
 from rlmstudio.core.trace import TraceStep as CoreTraceStep
-from rlmstudio.infrastructure.embedding.litellm_embedding_adapter import LiteLLMEmbeddingAdapter
 from rlmstudio.infrastructure.storage.sqlite_adapter import SQLiteStorageAdapter
 from rlmstudio.prompts import get_mode_system_prompt
 from rlmstudio.server.dependencies import AppState, ExecutionRecord, get_state
@@ -64,6 +63,7 @@ from rlmstudio.server.models import (
 from rlmstudio.server.models import (
     RunProfile as _RunProfile,
 )
+from rlmstudio.server.rag_embedding import build_rag_embedder, rag_config_for
 from rlmstudio.telemetry.store import content_sha256
 
 logger = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ def _prepare_history_context(
         # out the history budget on large docs even though the actual
         # RAG prompt has plenty of room.
         if mode == MODE_RAG:
-            rag_cfg = state.config.mode_config.rag_config
+            rag_cfg = rag_config_for(state, cp)
             estimated_context_chars = rag_cfg.chunk_size * rag_cfg.top_k + 200
             user_text = f"Context:\n{'x' * estimated_context_chars}\n\nQuestion: {current_query}"
         else:
@@ -736,15 +736,7 @@ async def _run_execution(
             )
             results = [result_rlm, result_direct]
         elif mode == MODE_RAG:
-            rag_cfg = state.config.mode_config.rag_config
-            # Resolve embedding API key: OpenAI key covers embeddings for any provider
-            embedding_api_key: str | None = os.environ.get("OPENAI_API_KEY")
-            if not embedding_api_key and cp:
-                from rlmstudio.server.routes.llm_providers import _get_api_key
-
-                lp = state.get_llm_provider(cp.llm_provider_id) if cp.llm_provider_id else None
-                if lp and lp.backend == "openai":
-                    embedding_api_key = _get_api_key(lp.id, lp.backend)
+            rag_cfg = rag_config_for(state, cp)
 
             # Re-use indexed storage for follow-up messages on the same file set.
             # This skips the expensive chunk+embed step (can take 30s+ for large docs).
@@ -762,10 +754,7 @@ async def _run_execution(
             run_config.extra["collection"] = collection
             run_config.extra["chunk_size"] = rag_cfg.chunk_size
             run_config.extra["top_k"] = rag_cfg.top_k
-            embedder = LiteLLMEmbeddingAdapter(
-                model=rag_cfg.embedding_model,
-                api_key=embedding_api_key,
-            )
+            embedder = build_rag_embedder(state, cp, rag_cfg)
             uc_rag = RunRAGUseCase(llm, embedder, storage)
             results = [
                 await asyncio.to_thread(
@@ -1202,26 +1191,12 @@ async def websocket_chat(
                             )
                             results = [result_rlm, result_direct]
                         elif m == MODE_RAG:
-                            rag_cfg = state.config.mode_config.rag_config
-                            emb_key: str | None = os.environ.get("OPENAI_API_KEY")
-                            if not emb_key and ws_cp:
-                                from rlmstudio.server.routes.llm_providers import _get_api_key
-
-                                ws_lp_obj = (
-                                    state.get_llm_provider(ws_cp.llm_provider_id)
-                                    if ws_cp.llm_provider_id
-                                    else None
-                                )
-                                if ws_lp_obj and ws_lp_obj.backend == "openai":
-                                    emb_key = _get_api_key(ws_lp_obj.id, ws_lp_obj.backend)
+                            rag_cfg = rag_config_for(state, ws_cp)
                             ws_collection = f"rag_{uuid.uuid4().hex}"
                             cfg.extra["collection"] = ws_collection
                             cfg.extra["chunk_size"] = rag_cfg.chunk_size
                             cfg.extra["top_k"] = rag_cfg.top_k
-                            ws_embedder = LiteLLMEmbeddingAdapter(
-                                model=rag_cfg.embedding_model,
-                                api_key=emb_key,
-                            )
+                            ws_embedder = build_rag_embedder(state, ws_cp, rag_cfg)
                             ws_storage = SQLiteStorageAdapter(":memory:")
                             uc_rag = RunRAGUseCase(llm, ws_embedder, ws_storage)
                             results = [

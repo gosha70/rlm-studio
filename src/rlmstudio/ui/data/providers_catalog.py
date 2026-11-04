@@ -147,6 +147,30 @@ PROVIDERS_BY_KEY: dict[str, ProviderEntry] = {p.key: p for p in PROVIDERS}
 LOCAL_PROVIDER_KEYS: frozenset[str] = frozenset({"ollama", "lmstudio", "vllm"})
 """Providers whose inference runs on the user's own machine or LAN."""
 
+KEYLESS_API_KEY_PLACEHOLDER = "not-needed"
+"""Key sent to a keyless server that LiteLLM reaches through its OpenAI client.
+
+LM Studio is routed as ``openai/<model>``. Given no key, LiteLLM's OpenAI
+client falls back to ``OPENAI_API_KEY``: the call fails when that variable is
+unset, and when it is set the user's real OpenAI key goes to the local server.
+"""
+
+_OPENAI_ROUTED_KEYLESS: frozenset[str] = frozenset({"lmstudio"})
+
+
+def request_api_key(provider_key: str, api_key: str | None) -> str | None:
+    """Key to send for ``provider_key``.
+
+    ``api_key`` when one is set; :data:`KEYLESS_API_KEY_PLACEHOLDER` for a
+    keyless backend that LiteLLM routes through its OpenAI client; otherwise
+    ``None``, which keeps LiteLLM's own environment lookup for cloud providers.
+    """
+    if api_key:
+        return api_key
+    if provider_key in _OPENAI_ROUTED_KEYLESS:
+        return KEYLESS_API_KEY_PLACEHOLDER
+    return None
+
 
 def subcall_concurrency_for(provider_key: str | None) -> int:
     """Default concurrent-child cap for a provider kind.

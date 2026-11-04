@@ -69,6 +69,7 @@ class FakeChatProvider:
     ):
         self.conversation_memory_enabled = conversation_memory_enabled
         self.conversation_memory_fraction = conversation_memory_fraction
+        self.rag_config = None
 
 
 def _make_conversation(

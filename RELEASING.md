@@ -32,10 +32,17 @@ For each release, the maintainer:
    # Verify the package marker survived and the bundle landed.
    test -f ../src/rlmstudio/_ui/__init__.py
    test -f ../src/rlmstudio/_ui/index.html
+
+   # Ship docs/ too: Learn reads it at runtime, and an installed wheel has no
+   # repository docs/. Same marker rule as _ui/.
+   find ../src/rlmstudio/_docs -mindepth 1 -not -name __init__.py -delete
+   cp -r ../docs/. ../src/rlmstudio/_docs/
+   test -f ../src/rlmstudio/_docs/__init__.py
+   test -f ../src/rlmstudio/_docs/troubleshoot.yaml
    ```
    `build:bundle` (not `build`) is the right script — `build` produces a Next.js server build (`.next/`), `build:bundle` sets `BUNDLE=1` and emits a static export under `frontend/out/`.
 3. Opens a release PR that bumps `pyproject.toml`, promotes the `[Unreleased]` section in `CHANGELOG.md` to a dated version header, and updates any docs whose user-facing copy changed.
-4. After merge, pushes an annotated tag `vX.Y.Z` to `master`. That tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which rebuilds the bundle + wheel + sdist, smoke-installs the wheel, publishes to **PyPI** via a trusted publisher (OIDC — no tokens in the repo), pushes the sandbox image to `ghcr.io/gosha70/rlm-studio-sandbox:<version>` (+ `latest`), and attaches `dist/` to the workflow run. A pre-release tag `vX.Y.Z-rc.N` publishes to **TestPyPI** instead. The maintainer then publishes the GitHub release page by hand with the same wheel and sdist attached.
+4. After merge, pushes an annotated tag `vX.Y.Z` to `master`. That tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which rebuilds the bundle, copies `docs/`, builds the wheel + sdist, smoke-installs the wheel, publishes to **PyPI** via a trusted publisher (OIDC — no tokens in the repo), pushes the sandbox image to `ghcr.io/gosha70/rlm-studio-sandbox:<version>` (+ `latest`), and attaches `dist/` to the workflow run. A pre-release tag `vX.Y.Z-rc.N` publishes to **TestPyPI** instead. The maintainer then publishes the GitHub release page by hand with the same wheel and sdist attached.
 ### Release-candidate flow
 
 The uploaded artifact's version comes from `pyproject.toml`, **not** from the

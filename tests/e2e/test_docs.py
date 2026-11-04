@@ -83,8 +83,33 @@ class TestDocsEndpoint:
         # Sanity: resolved docs dir does not escape to the filesystem root.
         assert str(_DOCS_DIR.resolve()) != "/"
         # The docs dir must live directly under the repo root — identified by
-        # a marker file, not by the checkout directory's name.
-        assert (_DOCS_DIR.resolve().parent / "pyproject.toml").is_file()
+        # a marker file, not by the checkout directory's name — unless a
+        # release build copied it into the package (smoke-install.sh does).
+        resolved = _DOCS_DIR.resolve()
+        assert (resolved.parent / "pyproject.toml").is_file() or resolved.name == "_docs"
+
+    def test_an_installed_package_reads_its_bundled_docs(self, tmp_path: Path) -> None:
+        """A wheel has no repository docs/: the release build copies it into
+        rlmstudio/_docs/, and the route must read that copy (Learn was empty
+        in the installed 1.0.0rc1)."""
+        from rlmstudio.server.routes.docs import _resolve_docs_dir
+
+        routes = tmp_path / "site-packages" / "rlmstudio" / "server" / "routes"
+        routes.mkdir(parents=True)
+        packaged = tmp_path / "site-packages" / "rlmstudio" / "_docs"
+        packaged.mkdir()
+        (packaged / "troubleshoot.yaml").write_text("[]\n", encoding="utf-8")
+
+        assert _resolve_docs_dir(routes / "docs.py") == packaged
+
+    def test_a_placeholder_only_package_falls_back_to_repo_docs(self, tmp_path: Path) -> None:
+        from rlmstudio.server.routes.docs import _resolve_docs_dir
+
+        routes = tmp_path / "repo" / "src" / "rlmstudio" / "server" / "routes"
+        routes.mkdir(parents=True)
+        (tmp_path / "repo" / "src" / "rlmstudio" / "_docs").mkdir()
+
+        assert _resolve_docs_dir(routes / "docs.py") == tmp_path / "repo" / "docs"
 
 
 class TestDocsPathTraversalDefense:

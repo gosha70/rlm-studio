@@ -53,7 +53,7 @@ from rlmstudio.application.services.provider_failure import (
     redact_secrets,
 )
 from rlmstudio.server.models import LLMProviderConfig
-from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY
+from rlmstudio.ui.data.providers_catalog import PROVIDERS_BY_KEY, request_api_key
 from rlmstudio.ui.services.secret_store import FileSecretStore, KeyringSecretStore
 
 logger = logging.getLogger("rlmstudio.application.provider_tester")
@@ -216,11 +216,12 @@ def _build_probe_params(
         "num_retries": 0,
     }
 
+    # Same key chat would use: an instance key for any backend (a local server
+    # may sit behind its own key), else the keyless placeholder for LM Studio.
     entry = PROVIDERS_BY_KEY.get(provider.backend)
-    if entry and entry.requires_api_key:
-        api_key = resolve_provider_key(provider, api_key_override)
-        if api_key:
-            params["api_key"] = api_key
+    api_key = request_api_key(provider.backend, resolve_provider_key(provider, api_key_override))
+    if api_key:
+        params["api_key"] = api_key
 
     endpoint = provider.endpoint
     if not endpoint and entry and entry.default_endpoint:
