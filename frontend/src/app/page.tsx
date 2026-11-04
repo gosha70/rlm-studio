@@ -1174,7 +1174,9 @@ export default function ChatPage() {
                                           aria-label="Toggle steps"
                                         >
                                           <Terminal className="h-3 w-3" />
-                                          <span>{resp.steps.length} steps</span>
+                                          <span>
+                                            {resp.steps.length} {resp.steps.length === 1 ? "step" : "steps"}
+                                          </span>
                                           {stepsVisible[resp.executionId] ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                                         </button>
                                       )}
@@ -1232,12 +1234,18 @@ export default function ChatPage() {
                       const isUsable = (r: typeof completed[0][1]) =>
                         r.content && !r.content.startsWith("⚠️") && !r.content.startsWith("Error:");
                       const usable = completed.filter(([, r]) => isUsable(r));
-                      const cheapest = usable.length > 0
-                        ? usable.reduce((a, b) => a[1].metrics!.cost_usd <= b[1].metrics!.cost_usd ? a : b)
-                        : null;
-                      const fastest = usable.length > 0
-                        ? usable.reduce((a, b) => a[1].metrics!.elapsed_seconds <= b[1].metrics!.elapsed_seconds ? a : b)
-                        : null;
+                      // Name a winner only when there is a real comparison:
+                      // two or more usable answers that differ on the metric
+                      // (one success among failures, or an all-$0 tie, is not
+                      // "cheapest").
+                      const winnerBy = (metric: (m: MessageMetrics) => number) => {
+                        if (usable.length < 2) return null;
+                        const values = usable.map(([, r]) => metric(r.metrics!));
+                        if (values.every((v) => v === values[0])) return null;
+                        return usable.reduce((a, b) => (metric(a[1].metrics!) <= metric(b[1].metrics!) ? a : b));
+                      };
+                      const cheapest = winnerBy((m) => m.cost_usd);
+                      const fastest = winnerBy((m) => m.elapsed_seconds);
                       return (
                         <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
                           <div className="flex gap-6">
@@ -1273,7 +1281,7 @@ export default function ChatPage() {
                                   name: r.chatProviderName,
                                   score: judgeScores[r.executionId].overall_score,
                                 }));
-                              if (scored.length === 0) return null;
+                              if (scored.length < 2) return null;
                               const best = scored.reduce((a, b) =>
                                 a.score >= b.score ? a : b
                               );
@@ -1329,7 +1337,7 @@ export default function ChatPage() {
                     })()}
                   </div>
                 ))}
-                {isAnyStreaming && <TypingIndicator />}
+                {/* Each pending response card shows its own "Generating…". */}
                 <div ref={messagesEndRef} />
               </div>
             </div>

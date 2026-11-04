@@ -225,3 +225,77 @@ describe("Sessions sidebar (M10)", () => {
     expect(await screen.findByText("Session 17:45")).toBeInTheDocument();
   });
 });
+
+describe("Multi-provider turn (Chat Lows)", () => {
+  type Outcome = { answer: string; seconds: number; steps: number; status?: string };
+
+  /** Two selected providers; each run finishes with the given outcome. */
+  async function runTurn(outcomes: Record<string, Outcome>) {
+    const ids = Object.keys(outcomes);
+    mocked.getChatProviders.mockResolvedValue(ids.map((id) => cp({ id, name: `Provider ${id}` })));
+    localStorage.setItem(STORAGE_KEY_SELECTED_CHAT_PROVIDERS, JSON.stringify(ids));
+    mocked.submitChat.mockImplementation(async (req) => ({
+      execution_id: `exec-${req.chat_provider_id}`,
+      session_id: "sess-1",
+      status: "accepted",
+    }));
+    mocked.getTrace.mockImplementation(async (execId) => {
+      const o = outcomes[execId.replace("exec-", "")];
+      if (o.status === "running") return new Promise(() => {});
+      const start = new Date("2026-11-04T10:00:00Z");
+      return {
+        execution_id: execId,
+        status: o.status ?? "complete",
+        started_at: start.toISOString(),
+        completed_at: new Date(start.getTime() + o.seconds * 1000).toISOString(),
+        result: { answer: o.answer, success: (o.status ?? "complete") === "complete", total_cost: 0 },
+        budget: { tokens_used: 100, cost_used: 0, steps_used: o.steps },
+        steps: Array.from({ length: o.steps }, (_, i) => ({ index: i, action_type: "final" })),
+      } as unknown as Awaited<ReturnType<typeof api.getTrace>>;
+    });
+    renderPage();
+    const input = await screen.findByLabelText("Message input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: "Where is the needle?" } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+    for (const o of Object.values(outcomes)) {
+      if (o.status !== "running") await screen.findByText(o.answer);
+    }
+  }
+
+  test("one success among failures is not crowned Cheapest or Fastest", async () => {
+    await runTurn({
+      a: { answer: "⚠️ The provider did not respond in time", seconds: 30, steps: 0, status: "error" },
+      b: { answer: "The window is Friday 00:00-02:00 UTC.", seconds: 6, steps: 2 },
+    });
+    expect(screen.getByText(/Provider a \(failed\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Cheapest:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Fastest:/)).not.toBeInTheDocument();
+  });
+
+  test("an all-$0 tie names no Cheapest; a real time difference still names Fastest", async () => {
+    await runTurn({
+      a: { answer: "Answer A", seconds: 9, steps: 1 },
+      b: { answer: "Answer B", seconds: 4, steps: 3 },
+    });
+    expect(screen.queryByText(/Cheapest:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Fastest:/)).toHaveTextContent("Fastest: Provider b");
+  });
+
+  test("step counts are pluralised", async () => {
+    await runTurn({
+      a: { answer: "Answer A", seconds: 9, steps: 1 },
+      b: { answer: "Answer B", seconds: 4, steps: 3 },
+    });
+    expect(screen.getByText("1 step")).toBeInTheDocument();
+    expect(screen.getByText("3 steps")).toBeInTheDocument();
+  });
+
+  test("a pending response says Generating once, not again below the turn", async () => {
+    await runTurn({
+      a: { answer: "Answer A", seconds: 9, steps: 1 },
+      b: { answer: "", seconds: 0, steps: 0, status: "running" },
+    });
+    expect(screen.getAllByRole("status", { name: "Generating response" })).toHaveLength(1);
+  });
+});

@@ -36,6 +36,7 @@ export function ResponseRating({
         )}
         onClick={() => handleClick("up")}
         aria-label="Thumbs up"
+        aria-pressed={currentRating === "up"}
       >
         <ThumbsUp className="h-3.5 w-3.5" />
       </Button>
@@ -48,6 +49,7 @@ export function ResponseRating({
         )}
         onClick={() => handleClick("down")}
         aria-label="Thumbs down"
+        aria-pressed={currentRating === "down"}
       >
         <ThumbsDown className="h-3.5 w-3.5" />
       </Button>

@@ -33,6 +33,7 @@ export function PickWinner({
               "border-amber-500 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
           )}
           onClick={() => onPick(r.executionId)}
+          aria-pressed={currentWinnerId === r.executionId}
         >
           {r.name}
         </Button>

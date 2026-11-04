@@ -561,6 +561,12 @@ describe("ResponseRating", () => {
     expect(screen.getByLabelText("Thumbs up").className).not.toMatch(/emerald/);
     expect(screen.getByLabelText("Thumbs down").className).not.toMatch(/red/);
   });
+
+  test("exposes the current rating to assistive tech with aria-pressed", () => {
+    render(<ResponseRating {...baseProps} currentRating="up" />);
+    expect(screen.getByRole("button", { name: "Thumbs up" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Thumbs down" })).toHaveAttribute("aria-pressed", "false");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -621,6 +627,14 @@ describe("PickWinner", () => {
     expect(winnerBtn.className).toMatch(/amber/);
     const otherBtn = screen.getByRole("button", { name: "Claude" });
     expect(otherBtn.className).not.toMatch(/amber/);
+  });
+
+  test("exposes the chosen winner to assistive tech with aria-pressed", () => {
+    render(
+      <PickWinner sessionId="sess-1" responses={responses} currentWinnerId="exec-2" onPick={vi.fn()} />
+    );
+    expect(screen.getByRole("button", { name: "Claude" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "GPT-4o" })).toHaveAttribute("aria-pressed", "false");
   });
 
   test("no highlight when no winner selected", () => {
