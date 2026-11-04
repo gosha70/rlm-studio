@@ -614,7 +614,7 @@ export default function ComparePage() {
                         type="button"
                         onClick={() => usable && toggleLLMProvider(lp.id)}
                         disabled={isRunning || !usable}
-                        className={`flex flex-col items-start rounded-md border px-3 py-1.5 text-left transition-colors ${
+                        className={`flex max-w-xs flex-col items-start rounded-md border px-3 py-1.5 text-left transition-colors ${
                           !usable
                             ? "cursor-not-allowed border-input bg-muted/30 opacity-50"
                             : active
@@ -622,11 +622,16 @@ export default function ComparePage() {
                               : "border-input bg-background hover:bg-accent"
                         } ${isRunning ? "cursor-not-allowed opacity-50" : ""}`}
                         aria-pressed={usable ? active : undefined}
-                        title={usable ? undefined : `${lp.name} is ${lp.status} — test connection in Settings`}
+                        // Long names are cut off in the chip; the tooltip has them whole.
+                        title={
+                          usable
+                            ? `${lp.name} — ${lp.model}`
+                            : `${lp.name} is ${lp.status} — test connection in Settings`
+                        }
                       >
-                        <span className="text-sm font-medium">{lp.name}</span>
+                        <span className="block max-w-full truncate text-sm font-medium">{lp.name}</span>
                         <span
-                          className={`text-xs ${
+                          className={`block max-w-full truncate text-xs ${
                             !usable
                               ? "text-muted-foreground/50"
                               : active
@@ -1461,14 +1466,14 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
       className={`space-y-2 rounded-md border-2 bg-card p-3 ${statusColor}`}
       data-testid={`matrix-slot-${slot.mode}-${slot.provider}`}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           {failed ? (
-            <Ban className="h-4 w-4 text-destructive" />
+            <Ban className="h-4 w-4 shrink-0 text-destructive" />
           ) : rank === 1 ? (
-            <Trophy className="h-4 w-4 text-amber-500" />
+            <Trophy className="h-4 w-4 shrink-0 text-amber-500" />
           ) : null}
-          <span className="text-sm font-semibold">{_slotLabel(slot)}</span>
+          <span className="min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">{_slotLabel(slot)}</span>
           <EngineBadge mode={slot.mode} />
         </div>
         {rank !== null && (

@@ -309,6 +309,21 @@ describe("LLM Tuner upload", () => {
   });
 });
 
+describe("LLM provider chips", () => {
+  test("a long unbroken name is cut off inside its chip and kept whole in the tooltip", () => {
+    const longName = "vLLM" + "dfsdfsdfsdfdfsdfsdfsdgdsgdsgdsgdsg".repeat(6);
+    mockSWR([{ ...PROVIDER, id: "lp-long", name: longName }]);
+    render(<ComparePage />);
+
+    const name = screen.getByText(longName);
+    const chip = name.closest("button")!;
+    // jsdom has no layout: check the classes that bound the chip and clip the text.
+    expect(chip).toHaveClass("max-w-xs");
+    expect(name).toHaveClass("truncate", "max-w-full", "block");
+    expect(chip).toHaveAttribute("title", `${longName} — ${PROVIDER.model}`);
+  });
+});
+
 describe("Slot labels", () => {
   test("spell the official engine for people, never as rlm_official", async () => {
     const official = makeSlot({ mode: "rlm_official", label: "LM Studio Qwen · rlm_official" });
