@@ -58,6 +58,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import {
+  apiErrorMessage,
   getConfig,
   getLLMProviders,
   getProfiles,
@@ -436,7 +437,7 @@ export default function ComparePage() {
       const resp = await submitCompareMatrix(req);
       setResult(resp);
     } catch (err) {
-      setRunError(err instanceof Error ? err.message : "Matrix run failed");
+      setRunError(err instanceof Error ? apiErrorMessage(err) : "Matrix run failed");
     } finally {
       setIsRunning(false);
     }

@@ -50,6 +50,7 @@ from rlmstudio.server.models import (
 )
 from rlmstudio.server.rag_embedding import build_rag_embedder, rag_config_for
 from rlmstudio.server.routes._helpers import _record_slot_telemetry, _SlotMeta
+from rlmstudio.server.routes.llm_providers import _compute_status
 from rlmstudio.telemetry.store import content_sha256
 
 if TYPE_CHECKING:
@@ -314,7 +315,9 @@ async def _compare_matrix_v2(
         lp = state.get_llm_provider(lp_id)
         if not lp:
             raise HTTPException(status_code=404, detail=f"LLM Provider {lp_id} not found")
-        if lp.status not in ("connected", "configured"):
+        # The same status Settings shows: a provider saved without a test
+        # keeps the stored default "not_configured" but is usable.
+        if _compute_status(lp) not in ("connected", "configured"):
             raise HTTPException(
                 status_code=400,
                 detail=f"LLM Provider '{lp.name}' is not connected",

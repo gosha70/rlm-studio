@@ -143,6 +143,26 @@ class TestV2Validation:
         assert resp.status_code == 400
         assert "not connected" in resp.json()["error"]["message"]
 
+    def test_an_untested_local_provider_is_accepted(self, client: TestClient) -> None:
+        """Browser pass D1: a local provider saved without pressing Test keeps
+        the stored default status "not_configured" while Settings shows it as
+        "configured"; Compare refused it with a 400."""
+        state = get_state()
+        lp = _make_llm_provider("Local", backend="lmstudio", model="qwen", status="not_configured")
+        state.config.llm_providers.append(lp)
+        _register_fake_adapter(state)
+
+        resp = client.post(
+            "/api/chat/compare-matrix",
+            json={
+                "query": "q",
+                "content": "doc",
+                "llm_provider_ids": [lp.id],
+                "modes": ["direct"],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
     def test_missing_content_returns_400(self, client: TestClient) -> None:
         state = get_state()
         lp = _make_llm_provider("A")
