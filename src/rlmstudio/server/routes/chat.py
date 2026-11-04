@@ -7,6 +7,9 @@ import json
 import logging
 import os
 import uuid
+import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -64,11 +67,37 @@ from rlmstudio.server.models import (
     RunProfile as _RunProfile,
 )
 from rlmstudio.server.rag_embedding import build_rag_embedder, rag_config_for
+from rlmstudio.server.routes.compare_matrix import _serial_modes
 from rlmstudio.telemetry.store import content_sha256
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# One queue per event loop: an ``asyncio.Lock`` binds to the loop it first
+# waits on, and each test client runs its own loop.
+_serial_queues: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+@asynccontextmanager
+async def _serial_turn(state: AppState, mode: str) -> AsyncIterator[None]:
+    """Wait for this run's turn when *mode* must run one at a time.
+
+    The Chat page sends one request per selected Chat Provider, so two
+    official-engine providers on one message used to start together and the
+    second gave up "busy" after its short wait for the in-process REPL.  The
+    same rule as the Compare grid (:func:`_serial_modes`) queues them here;
+    the wait is not charged to the run's own time limit.
+    """
+    if mode not in _serial_modes(state):
+        yield
+        return
+    loop = asyncio.get_running_loop()
+    queue = _serial_queues.setdefault(loop, asyncio.Lock())
+    async with queue:
+        yield
 
 
 def _resolve_profile_prompt(profile: _RunProfile, mode: str) -> str | None:
@@ -771,9 +800,10 @@ async def _run_execution(
                 else state.create_rlm_engine(llm)
             )
             uc_official = RunRLMOfficialUseCase(engine)
-            results = [
-                await asyncio.to_thread(uc_official.execute, content, full_query, run_config)
-            ]
+            async with _serial_turn(state, mode):
+                results = [
+                    await asyncio.to_thread(uc_official.execute, content, full_query, run_config)
+                ]
         elif mode in MODES_REPL_VARIABLE:
             sandbox = state.create_sandbox()
             uc = RunRLMUseCase(llm, sandbox)
@@ -1210,11 +1240,12 @@ async def websocket_chat(
                                 else state.create_rlm_engine(llm)
                             )
                             uc_official = RunRLMOfficialUseCase(engine)
-                            results = [
-                                await uc_official.execute_async(
-                                    cnt, full_query, cfg, event_emitter=emitter
-                                )
-                            ]
+                            async with _serial_turn(state, m):
+                                results = [
+                                    await uc_official.execute_async(
+                                        cnt, full_query, cfg, event_emitter=emitter
+                                    )
+                                ]
                         elif m in MODES_REPL_VARIABLE:
                             sandbox = state.create_sandbox()
                             uc = RunRLMUseCase(llm, sandbox)
