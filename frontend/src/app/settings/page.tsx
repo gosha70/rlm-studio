@@ -78,6 +78,7 @@ import {
   defaultEmbeddingModelFor,
   isDefaultEmbeddingModel,
   displayModeName,
+  CHAT_PROVIDERS_SWR_KEY,
 } from "@/lib/constants";
 import { StrategySelectItems } from "@/components/settings/strategy-select-items";
 import {
@@ -427,7 +428,7 @@ function SettingsPageInner() {
   const { data: config, mutate: mutateConfig } = useSWR<AppConfig>("config", getConfig);
   const { data: profiles = [], mutate: mutateProfiles } = useSWR<RunProfile[]>("profiles", getProfiles);
   const { data: chatProviders = [], mutate: mutateChatProviders } = useSWR<ChatProviderConfig[]>(
-    "chat-providers",
+    CHAT_PROVIDERS_SWR_KEY,
     getChatProviders
   );
   const { data: llmProviders = [], mutate: mutateLLMProviders } = useSWR<LLMProviderConfig[]>(
@@ -1232,7 +1233,8 @@ function SettingsPageInner() {
                               lp.status === "connected" && (
                                 <span className="ml-2 text-amber-500">
                                   &middot; {lp.consecutive_failures} recent failure
-                                  {lp.consecutive_failures === 1 ? "" : "s"} — monitoring
+                                  {lp.consecutive_failures === 1 ? "" : "s"}
+                                  {(config?.connection_test_interval_minutes ?? 0) > 0 ? " — monitoring" : ""}
                                 </span>
                               )}
                           </p>

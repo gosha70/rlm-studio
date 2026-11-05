@@ -258,6 +258,7 @@ export interface TraceResponse {
       | "timeout"
       | "rate_limit"
       | "server_error"
+      | "model_not_loaded"
       | null;
     input_tokens?: number;
     output_tokens?: number;

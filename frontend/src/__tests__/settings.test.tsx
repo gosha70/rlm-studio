@@ -658,6 +658,42 @@ describe("SettingsPage", () => {
     expect(screen.getByText(/update it in Settings/)).toBeInTheDocument();
   });
 
+  test.each([
+    [0, false],
+    [5, true],
+  ])(
+    "a connected provider with a failure says monitoring only when auto-testing is on (interval %i)",
+    (minutes, monitoring) => {
+      // SET2-01: with auto-testing off nothing re-checks the provider, so
+      // "monitoring" was untrue.
+      const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+      vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+        if (key === "config") return swrStub({ ...MOCK_CONFIG, connection_test_interval_minutes: minutes });
+        if (key === "llm-providers")
+          return swrStub([
+            {
+              id: "lp-flaky",
+              name: "Flaky",
+              backend: "vllm",
+              model: "m",
+              endpoint: "http://spark:8001/v1",
+              runtime_settings: { temperature: 0.7, top_p: 1.0, max_output_tokens: 4096, timeout_seconds: 30 },
+              status: "connected",
+              last_tested_at: "2026-11-01T13:05:58Z",
+              last_tested_by: "background",
+              consecutive_failures: 1,
+            },
+          ]);
+        return swrStub(undefined);
+      }) as typeof useSWR);
+
+      render(<SettingsPage />);
+
+      expect(screen.getByText(/1 recent failure/)).toBeInTheDocument();
+      expect(screen.queryByText(/monitoring/) !== null).toBe(monitoring);
+    },
+  );
+
   test("a provider row flags a model the provider does not offer", () => {
     const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
     vi.mocked(useSWR).mockImplementation(((key: unknown) => {

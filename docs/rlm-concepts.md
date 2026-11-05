@@ -194,7 +194,7 @@ The reference impl has 5 hand-written provider clients. RLM Studio uses a single
 
 ### 9.3 Multi-Strategy Execution
 
-RLM Studio adds strategies the original paper does not implement:
+RLM Studio adds strategies the original paper does not implement. This table describes the Python `interact()` API; in the Studio app, Chat Providers run Direct, RLM, RAG or Official RLM (rlms), and the LLM Tuner compares them side by side.
 
 | Mode | Description |
 |------|-------------|
