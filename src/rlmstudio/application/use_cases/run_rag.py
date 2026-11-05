@@ -25,6 +25,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_STEP,
 )
 from rlmstudio.application.services.provider_failure import (
+    as_provider_failure,
     failure_answer,
     failure_kind_value,
 )
@@ -247,8 +248,13 @@ class RunRAGUseCase:
                     "collection": collection,
                 },
             )
-        except Exception as exc:
+        except Exception as raw:
             elapsed = time.time() - start
+            # The chat model's errors arrive classified by the LLM adapter;
+            # the embedder calls LiteLLM itself, so its raw errors (LM Studio
+            # failing to load the embedding model, a bad key) are classified
+            # here the same way, naming the embedding model.
+            exc = as_provider_failure(raw, model=getattr(self._embedder, "model", None))
             error_msg = _humanize_rag_error(exc)
             answer = _format_rag_warning(exc, error_msg)
             return RunResultDTO(

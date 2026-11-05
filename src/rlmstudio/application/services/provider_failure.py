@@ -23,11 +23,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import TypeVar
 
 __all__ = [
     "ProviderFailureKind",
     "ProviderFailure",
     "ProviderFailureError",
+    "as_provider_failure",
     "classify_provider_failure",
     "describe_provider_failure",
     "display_model_id",
@@ -129,6 +131,9 @@ _MODEL_NOT_LOADED_KEYWORDS: tuple[str, ...] = (
     "model was unloaded",
     "has been unloaded",
     "has not started loading",
+    # LM Studio's JIT load of a chat or embedding model failed or was
+    # cancelled ("Failed to load model \"…\". Error: Operation canceled.").
+    "failed to load model",
 )
 
 # The routing prefixes Studio and LiteLLM put in front of a model id
@@ -308,7 +313,10 @@ def describe_provider_failure(
         return ProviderFailure(
             kind=kind,
             cause=f"The model{named_model} is not loaded in LM Studio{where}.",
-            fix="Load the model in LM Studio, then retry.",
+            fix=(
+                "Load the model in LM Studio, then retry. If it does not load, check "
+                "that it is downloaded and that there is enough free memory for it."
+            ),
         )
 
     if kind is ProviderFailureKind.CONNECTION:
@@ -376,6 +384,31 @@ class ProviderFailureError(RuntimeError):
         self.fix_text = failure.fix
         # Redacted upstream text, for the answer card's small-print line.
         self.detail = detail
+
+
+_E = TypeVar("_E", bound=BaseException)
+
+
+def as_provider_failure(
+    exc: _E, *, model: str | None = None, api_base: str | None = None
+) -> _E | ProviderFailureError:
+    """Return *exc* classified the way the run path classifies a chat error.
+
+    For a raw provider exception that did not come through the LLM adapter
+    (the RAG embedder calls LiteLLM itself).  An exception that already
+    carries a kind, or that the classifier does not recognise, is returned
+    unchanged so it keeps its own detail.
+    """
+    if failure_kind_of(exc) is not None:
+        return exc
+    kind = classify_provider_failure(exc)
+    if kind is ProviderFailureKind.UNKNOWN:
+        return exc
+    failure = describe_provider_failure(kind, model=model, api_base=api_base)
+    detail = redact_secrets(strip_html(str(exc)))
+    return ProviderFailureError(
+        f"{failure.cause} {failure.fix} (Detail: {detail})", failure, detail
+    )
 
 
 def failure_kind_of(exc: BaseException) -> ProviderFailureKind | None:

@@ -659,6 +659,73 @@ def test_lm_studio_unloaded_model_says_to_load_it(exc_class: str, message: str) 
     assert "Load the model in LM Studio, then retry." in answer
 
 
+# The reply LM Studio gave in the browser pass when RAG's embedding model could
+# not be loaded (SC3-10).
+_LM_STUDIO_LOAD_FAILED = (
+    'Lm_studioException - {"error":"Failed to load model '
+    '\\"text-embedding-nomic-embed-text-v1.5\\". Error: Operation canceled."}'
+)
+
+
+def test_lm_studio_failing_to_load_a_chat_model_says_how_to_fix_it() -> None:
+    """SC3-10: "Failed to load model" came through as a raw BadRequestError."""
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+    exc = litellm.BadRequestError(_LM_STUDIO_LOAD_FAILED, llm_provider="lm_studio", model="m")
+    assert classify_provider_failure(exc) is ProviderFailureKind.MODEL_NOT_LOADED
+
+    adapter = LiteLLMAdapter(model="openai/qwen2.5-7b-instruct", api_base="http://localhost:1234")
+    answer = failure_answer(adapter._translate_exception(exc, "LiteLLM completion failed"))
+
+    assert answer is not None
+    assert answer.startswith("⚠️ **Model not loaded**")
+    assert "downloaded" in answer
+    assert "enough free memory" in answer
+
+
+def test_a_rag_embedding_model_that_fails_to_load_is_classified_like_chat() -> None:
+    """SC3-10: the RAG embedder calls LiteLLM itself, so its raw error reached
+    the answer as "litellm.BadRequestError: Lm_studioException - {…}"."""
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
+    from tests.test_use_cases import FakeEmbedder, FakeLLM, FakeStorage
+
+    class _UnloadableEmbedder(FakeEmbedder):
+        model = "lm_studio/text-embedding-nomic-embed-text-v1.5"
+
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            raise litellm.BadRequestError(
+                _LM_STUDIO_LOAD_FAILED, llm_provider="lm_studio", model=self.model
+            )
+
+    result = RunRAGUseCase(FakeLLM(["unused"]), _UnloadableEmbedder(), FakeStorage()).execute(
+        "a document", "q"
+    )
+
+    assert result.success is False
+    assert result.failure_kind == ProviderFailureKind.MODEL_NOT_LOADED.value
+    assert result.answer.startswith("⚠️ **Model not loaded**")
+    assert "The model 'text-embedding-nomic-embed-text-v1.5' is not loaded" in result.answer
+    assert "Load the model in LM Studio" in result.answer
+
+
+def test_an_unrecognised_rag_failure_keeps_its_own_message() -> None:
+    from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
+    from tests.test_use_cases import FakeEmbedder, FakeLLM, FakeStorage
+
+    class _BrokenEmbedder(FakeEmbedder):
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            raise ValueError("vector store is read-only")
+
+    result = RunRAGUseCase(FakeLLM(["unused"]), _BrokenEmbedder(), FakeStorage()).execute(
+        "a document", "q"
+    )
+
+    assert result.failure_kind is None
+    assert result.error == "vector store is read-only"
+
+
 @pytest.mark.parametrize(
     ("routed", "configured"),
     [
