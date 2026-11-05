@@ -30,6 +30,7 @@ __all__ = [
     "ProviderFailureError",
     "classify_provider_failure",
     "describe_provider_failure",
+    "display_model_id",
     "failure_answer",
     "failure_kind_of",
     "failure_kind_value",
@@ -128,6 +129,21 @@ _MODEL_NOT_LOADED_KEYWORDS: tuple[str, ...] = (
     "model was unloaded",
     "has been unloaded",
     "has not started loading",
+)
+
+# The routing prefixes Studio and LiteLLM put in front of a model id
+# (``openai/`` for LM Studio, ``hosted_vllm/`` for vLLM, and so on).  A
+# message about a model names the id the user picked, so one leading prefix
+# is dropped; an id with a slash of its own (``Qwen/Qwen2.5-7B``) is kept.
+# Covers the prefix tables in server/dependencies.py, server/rag_embedding.py
+# and api.py, which this layer cannot import.
+_LITELLM_ROUTING_PREFIXES: tuple[str, ...] = (
+    "openai/",
+    "lm_studio/",
+    "hosted_vllm/",
+    "ollama/",
+    "ollama_chat/",
+    "anthropic/",
 )
 
 # Fallbacks for providers or httpx layers that surface a generic exception
@@ -233,6 +249,18 @@ def classify_provider_failure(exc: BaseException) -> ProviderFailureKind:
     return ProviderFailureKind.UNKNOWN
 
 
+def display_model_id(model: str) -> str:
+    """Return *model* without one leading LiteLLM routing prefix.
+
+    ``openai/qwen2.5-7b-instruct`` is how an LM Studio model is routed, but
+    ``qwen2.5-7b-instruct`` is what the user picked and what LM Studio lists.
+    """
+    for prefix in _LITELLM_ROUTING_PREFIXES:
+        if model.startswith(prefix) and len(model) > len(prefix):
+            return model[len(prefix) :]
+    return model
+
+
 def describe_provider_failure(
     kind: ProviderFailureKind,
     *,
@@ -247,7 +275,7 @@ def describe_provider_failure(
     it without inventing placeholder values.
     """
     where = f" for {provider_name}" if provider_name else ""
-    named_model = f" '{model}'" if model else ""
+    named_model = f" '{display_model_id(model)}'" if model else ""
 
     if kind is ProviderFailureKind.AUTH:
         return ProviderFailure(

@@ -18,6 +18,7 @@ from rlmstudio.application.services.provider_failure import (
     ProviderFailureKind,
     classify_provider_failure,
     describe_provider_failure,
+    display_model_id,
     failure_answer,
     redact_secrets,
     strip_html,
@@ -656,3 +657,30 @@ def test_lm_studio_unloaded_model_says_to_load_it(exc_class: str, message: str) 
     assert answer is not None
     assert answer.startswith("⚠️ **Model not loaded**")
     assert "Load the model in LM Studio, then retry." in answer
+
+
+@pytest.mark.parametrize(
+    ("routed", "configured"),
+    [
+        ("openai/qwen2.5-7b-instruct", "qwen2.5-7b-instruct"),
+        ("lm_studio/text-embedding-nomic-embed-text-v1.5", "text-embedding-nomic-embed-text-v1.5"),
+        ("hosted_vllm/Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-7B-Instruct"),
+        ("ollama/llama3.2", "llama3.2"),
+        # Not routed: an id with a slash of its own is the user's id.
+        ("Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-7B-Instruct"),
+        ("gpt-4o", "gpt-4o"),
+    ],
+)
+def test_display_model_id_drops_one_routing_prefix(routed: str, configured: str) -> None:
+    assert display_model_id(routed) == configured
+
+
+def test_model_not_loaded_names_the_model_the_user_configured() -> None:
+    """P3-CS-3: it said "The model 'openai/qwen2.5-7b-instruct' is not loaded",
+    with the LM Studio routing prefix the user never typed."""
+    failure = describe_provider_failure(
+        ProviderFailureKind.MODEL_NOT_LOADED, model="openai/qwen2.5-7b-instruct"
+    )
+
+    assert "'qwen2.5-7b-instruct'" in failure.cause
+    assert "openai/" not in failure.cause
