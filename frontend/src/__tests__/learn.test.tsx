@@ -49,6 +49,7 @@ import { hasLearnErrorBadge } from "@/components/shared/sidebar";
 import { DiagnosticsStrip } from "@/components/learn/diagnostics-strip";
 import { DiagnosticsPanel } from "@/components/learn/diagnostics-panel";
 import { MarkdownDoc } from "@/components/learn/markdown-doc";
+import { GITHUB_BLOB_BASE, docDirForSlug, resolveDocHref } from "@/components/learn/doc-links";
 import { ProviderCard } from "@/components/learn/provider-card";
 import { TroubleshootEntry } from "@/components/learn/troubleshoot-entry";
 import { TroubleshootSearch } from "@/components/learn/troubleshoot-search";
@@ -304,6 +305,48 @@ describe("MarkdownDoc", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("world")).toBeInTheDocument();
     expect(container.querySelector("[data-slug='rlm-concepts']")).not.toBeNull();
+  });
+
+  // SH2-3: relative links to repo files used to open "Page not found".
+  test("links to other docs open their Learn page or GitHub, never a relative path", () => {
+    mockUseSWR.mockReturnValue({
+      data: {
+        slug: "hosts-dgx-spark",
+        content: [
+          "See [what Studio needs](README.md#3-what-rlm-studio-needs),",
+          "[the vLLM recipe](dgx-spark-vllm.md), [vLLM](vllm.md),",
+          "[the start script](../../scripts/dgx-spark/vllm/start.sh),",
+          "[concepts](../rlm-concepts.md#budgets), [below](#install) and",
+          "[LiteLLM](https://docs.litellm.ai/).",
+        ].join(" "),
+      },
+      error: undefined,
+      isLoading: false,
+    } as ReturnType<typeof useSWR>);
+
+    render(<MarkdownDoc slug="hosts-dgx-spark" />);
+    const hrefOf = (name: string) => screen.getByRole("link", { name }).getAttribute("href");
+    expect(hrefOf("what Studio needs")).toBe(`${GITHUB_BLOB_BASE}/docs/hosts/README.md#3-what-rlm-studio-needs`);
+    expect(hrefOf("the vLLM recipe")).toBe(`${GITHUB_BLOB_BASE}/docs/hosts/dgx-spark-vllm.md`);
+    expect(hrefOf("vLLM")).toBe("/learn/cookbook?provider=vllm");
+    expect(hrefOf("the start script")).toBe(`${GITHUB_BLOB_BASE}/scripts/dgx-spark/vllm/start.sh`);
+    expect(hrefOf("concepts")).toBe("/learn/concepts#budgets");
+    expect(hrefOf("below")).toBe("#install");
+    expect(hrefOf("LiteLLM")).toBe("https://docs.litellm.ai/");
+    expect(screen.getByRole("link", { name: "the vLLM recipe" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "below" })).not.toHaveAttribute("target");
+  });
+
+  test("a top-level doc resolves links from docs/, not docs/hosts/", () => {
+    expect(resolveDocHref("hosts/dgx-spark.md", docDirForSlug("rlm-concepts"))).toEqual({
+      href: "/learn/cookbook?provider=dgx-spark",
+      internal: true,
+    });
+    expect(resolveDocHref("troubleshoot.yaml", docDirForSlug("rlm-studio-guide")).href).toBe("/learn/troubleshoot");
+    expect(resolveDocHref("../BENCHMARKS.md", docDirForSlug("rlm-studio-guide")).href).toBe(
+      `${GITHUB_BLOB_BASE}/BENCHMARKS.md`,
+    );
+    expect(GITHUB_BLOB_BASE).toBe("https://github.com/gosha70/rlm-studio/blob/master");
   });
 });
 

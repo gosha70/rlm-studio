@@ -15,12 +15,14 @@
  */
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import useSWR from "swr";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getDoc, type DocResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { slugifyHeading } from "./markdown-toc";
+import { docDirForSlug, resolveDocHref } from "./doc-links";
 
 interface MarkdownDocProps {
   slug: string;
@@ -42,6 +44,21 @@ function headingTextOf(children: ReactNode): string {
     return headingTextOf(children.props.children);
   }
   return "";
+}
+
+/** Links to other repo files open their Learn page or GitHub, not a 404. */
+function docLink(docDir: string) {
+  return function DocLink({ href = "", children }: { href?: string; children?: ReactNode }) {
+    const resolved = resolveDocHref(href, docDir);
+    if (resolved.internal) return <Link href={resolved.href}>{children}</Link>;
+    // Anything but a same-page anchor leaves the app: open it in a new tab.
+    const external = resolved.href !== "" && !resolved.href.startsWith("#");
+    return (
+      <a href={resolved.href} {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}>
+        {children}
+      </a>
+    );
+  };
 }
 
 const markdownComponents = {
@@ -100,7 +117,7 @@ export function MarkdownDoc({ slug, className }: MarkdownDocProps) {
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={markdownComponents}
+        components={{ ...markdownComponents, a: docLink(docDirForSlug(slug)) }}
       >
         {data.content}
       </ReactMarkdown>
