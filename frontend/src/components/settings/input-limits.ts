@@ -10,6 +10,12 @@
  */
 export const CONTEXT_WINDOW_MIN_TOKENS = 1_024;
 
+/**
+ * The context window an LLM Provider update sends to remove a stored value
+ * (the update route treats `null` as "no change").
+ */
+export const CONTEXT_WINDOW_CLEAR = 0;
+
 /** RAG chunk size. */
 export const RAG_CHUNK_SIZE_MIN = 1;
 export const RAG_CHUNK_SIZE_MAX = 100_000;

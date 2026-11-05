@@ -82,6 +82,7 @@ import {
 } from "@/lib/constants";
 import { StrategySelectItems } from "@/components/settings/strategy-select-items";
 import {
+  CONTEXT_WINDOW_CLEAR,
   CONTEXT_WINDOW_MIN_TOKENS,
   RAG_CHUNK_SIZE_MAX,
   RAG_CHUNK_SIZE_MIN,
@@ -502,7 +503,7 @@ function SettingsPageInner() {
       mutateProfiles();
     } catch (err) {
       console.error("Failed to create profile:", err);
-      toast.error("Failed to create profile");
+      toast.error(`Profile not created: ${apiErrorMessage(err)}`);
     } finally {
       setCreatingProfile(false);
     }
@@ -573,7 +574,7 @@ function SettingsPageInner() {
       mutateChatProviders();
     } catch (err) {
       console.error("Failed to save chat provider:", err);
-      toast.error("Failed to save Chat Provider");
+      toast.error(`Chat Provider not saved: ${apiErrorMessage(err)}`);
     } finally {
       setSavingProvider(false);
     }
@@ -750,7 +751,17 @@ function SettingsPageInner() {
       const formTestResult = testResults[FORM_TEST_RESULT_KEY];
       let savedId: string | null = null;
       if (editingLLMProviderId) {
-        await updateLLMProvider(editingLLMProviderId, req);
+        // A blank context window on Edit removes the stored value: the
+        // update route reads `null` as "no change".  When the model or
+        // endpoint changed, `null` is kept so the server re-discovers it.
+        const saved = llmProviders.find((lp) => lp.id === editingLLMProviderId);
+        const destinationChanged =
+          !saved || req.model !== saved.model || (req.endpoint ?? null) !== (saved.endpoint ?? null);
+        const update =
+          req.context_window === null && !destinationChanged
+            ? { ...req, context_window: CONTEXT_WINDOW_CLEAR }
+            : req;
+        await updateLLMProvider(editingLLMProviderId, update);
         savedId = editingLLMProviderId;
       } else {
         const created = await createLLMProvider(req);
@@ -1907,8 +1918,9 @@ function SettingsPageInner() {
                   </p>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Range: 0-1440 minutes (24 hours). The first cycle runs after the full
-                  interval elapses, not at server startup.
+                  Range: 0-1440 minutes (24 hours); 0 turns recurring checks off. Every
+                  provider is checked once shortly after the server starts; with an
+                  interval set, the next check runs when the full interval has elapsed.
                 </p>
               </CardContent>
             </Card>

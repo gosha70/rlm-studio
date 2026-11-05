@@ -15,8 +15,10 @@ import { ExecutionConfig } from "@/components/settings/execution-config";
 import useSWR from "swr";
 import {
   createChatProvider,
+  createProfile,
   deleteLLMProvider,
   updateChatProvider,
+  updateLLMProvider,
   getLLMProviderModelsForConfig,
   testLLMProviderConfig,
   testProvider,
@@ -43,6 +45,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     updateConfig: vi.fn(),
     createChatProvider: vi.fn(),
     updateChatProvider: vi.fn(),
+    updateLLMProvider: vi.fn(),
+    createProfile: vi.fn(),
     deleteLLMProvider: vi.fn(),
     getLLMProviderModelsForConfig: vi.fn().mockResolvedValue({
       models: [],
@@ -1255,5 +1259,118 @@ describe("SettingsPage — Wave 3", () => {
     await waitFor(() =>
       expect(vi.mocked(toast.success)).toHaveBeenCalledWith("Budget limits saved"),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SettingsPage — Wave 3c (browser pass 3)
+// ---------------------------------------------------------------------------
+
+describe("SettingsPage — Wave 3c", () => {
+  beforeEach(() => {
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.releasePointerCapture = () => {};
+    Element.prototype.scrollIntoView = () => {};
+    vi.mocked(updateLLMProvider).mockReset();
+    vi.mocked(updateLLMProvider).mockResolvedValue({} as never);
+    vi.mocked(toast.error).mockClear();
+  });
+
+  const setupUser = async () => (await import("@testing-library/user-event")).default.setup();
+
+  /** Open Edit on a saved provider with a stored context window and blank the field. */
+  const blankContextWindowOnEdit = async () => {
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ id: "lp-cw", context_window: 8192 })],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const field = screen.getByLabelText("Context Window (tokens)") as HTMLInputElement;
+    expect(field.value).toBe("8192");
+    await user.clear(field);
+    return user;
+  };
+
+  test("SC3-01: blanking the context window on Edit clears the stored value", async () => {
+    const user = await blankContextWindowOnEdit();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(updateLLMProvider)).toHaveBeenCalledWith(
+        "lp-cw",
+        expect.objectContaining({ context_window: 0 }),
+      ),
+    );
+  });
+
+  test("SC3-01: a blank context window with a new endpoint leaves discovery to the server", async () => {
+    const user = await blankContextWindowOnEdit();
+    await user.type(screen.getByLabelText("Endpoint"), "http://localhost:11500");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(updateLLMProvider)).toHaveBeenCalledWith(
+        "lp-cw",
+        expect.objectContaining({ context_window: null, endpoint: "http://localhost:11500" }),
+      ),
+    );
+  });
+
+  test("SC3-05: a refused Chat Provider save shows the server's reason", async () => {
+    vi.mocked(createChatProvider).mockRejectedValueOnce(
+      new Error(
+        'API error 409: {"error":{"code":"ERROR","message":"Chat Provider with name \'Docs\' already exists","details":{}}}',
+      ),
+    );
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ name: "My ollama" })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    await user.type(screen.getByLabelText("Name"), "Docs");
+    await user.click(document.getElementById("cp-profile")!);
+    await user.click(await screen.findByRole("option", { name: /RAG profile/ }));
+    await user.click(document.getElementById("cp-llm-provider")!);
+    await user.click(await screen.findByRole("option", { name: /My ollama/ }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "Chat Provider not saved: Chat Provider with name 'Docs' already exists",
+      ),
+    );
+  });
+
+  test("SC3-05: a refused profile create shows the server's reason", async () => {
+    vi.mocked(createProfile).mockRejectedValueOnce(
+      new Error('API error 422: {"detail":"strategy must be one of direct, rlm, rag"}'),
+    );
+    stubSettingsData({ profiles: [] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Profiles" }));
+    await user.type(screen.getByLabelText("New profile name"), "Fresh");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "Profile not created: strategy must be one of direct, rlm, rag",
+      ),
+    );
+  });
+
+  test("SC3-07: the General tab and the LLM Providers banner agree on the startup check", async () => {
+    stubSettingsData({});
+    render(<SettingsPage />);
+    expect(screen.getByText(/A one-time check runs at startup/)).toBeInTheDocument();
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "General" }));
+    expect(screen.queryByText(/not at server startup/)).not.toBeInTheDocument();
+    expect(screen.getByText(/checked once shortly after the server starts/)).toBeInTheDocument();
   });
 });
