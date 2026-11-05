@@ -318,9 +318,6 @@ class AppState:
     def _migrate_chat_providers(self) -> None:
         """Auto-create Chat Providers from existing provider_configs on first load.
 
-        Also performs a second pass to replace stale model IDs that are no longer
-        present in the hardcoded catalog with the provider's current default model.
-
         Only a config that predates LLM Providers is converted, and only once:
         once named LLM Providers exist, or the conversion has run, an empty
         provider list is the user's choice (for example, after deleting them
