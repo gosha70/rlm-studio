@@ -662,7 +662,7 @@ def test_lm_studio_unloaded_model_says_to_load_it(exc_class: str, message: str) 
     assert err.kind is ProviderFailureKind.MODEL_NOT_LOADED
     assert answer is not None
     assert answer.startswith("⚠️ **Model not loaded**")
-    assert "Load the model in LM Studio, then retry." in answer
+    assert "Load the model on the model server" in answer
 
 
 # The reply LM Studio gave in the browser pass when RAG's embedding model could
@@ -713,7 +713,7 @@ def test_a_rag_embedding_model_that_fails_to_load_is_classified_like_chat() -> N
     assert result.failure_kind == ProviderFailureKind.MODEL_NOT_LOADED.value
     assert result.answer.startswith("⚠️ **Model not loaded**")
     assert "The model 'text-embedding-nomic-embed-text-v1.5' is not loaded" in result.answer
-    assert "Load the model in LM Studio" in result.answer
+    assert "Load the model on the model server" in result.answer
 
 
 def test_an_unrecognised_rag_failure_keeps_its_own_message() -> None:
@@ -757,3 +757,14 @@ def test_model_not_loaded_names_the_model_the_user_configured() -> None:
 
     assert "'qwen2.5-7b-instruct'" in failure.cause
     assert "openai/" not in failure.cause
+
+
+def test_a_model_load_failure_from_another_server_does_not_blame_lm_studio() -> None:
+    """Review P2: generic "failed to load model" text (here from Ollama) was
+    described as "not loaded in LM Studio" with LM Studio-only steps."""
+    kind = classify_provider_failure(RuntimeError("Ollama failed to load model llama3"))
+    failure = describe_provider_failure(kind, model="llama3")
+
+    assert kind is ProviderFailureKind.MODEL_NOT_LOADED
+    assert "not loaded in LM Studio" not in failure.cause
+    assert "on the model server" in failure.cause

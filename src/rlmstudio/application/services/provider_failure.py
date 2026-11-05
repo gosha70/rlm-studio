@@ -315,10 +315,13 @@ def describe_provider_failure(
     if kind is ProviderFailureKind.MODEL_NOT_LOADED:
         return ProviderFailure(
             kind=kind,
-            cause=f"The model{named_model} is not loaded in LM Studio{where}.",
+            # Provider-neutral: "failed to load model" also comes from Ollama
+            # and other local servers, not only LM Studio.
+            cause=f"The model{named_model} is not loaded on the model server{where}.",
             fix=(
-                "Load the model in LM Studio, then retry. If it does not load, check "
-                "that it is downloaded and that there is enough free memory for it."
+                "Load the model on the model server (in LM Studio, load it in the app "
+                "or run `lms load`), then retry. If it does not load, check that it is "
+                "downloaded and that there is enough free memory for it."
             ),
         )
 
