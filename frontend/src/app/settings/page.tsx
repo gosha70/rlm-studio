@@ -81,6 +81,7 @@ import {
 } from "@/lib/constants";
 import { StrategySelectItems } from "@/components/settings/strategy-select-items";
 import {
+  CONTEXT_WINDOW_MIN_TOKENS,
   RAG_CHUNK_SIZE_MAX,
   RAG_CHUNK_SIZE_MIN,
   RAG_TOP_K_MAX,
@@ -907,8 +908,10 @@ function SettingsPageInner() {
   const contextWindowError =
     ctxText === ""
       ? null
-      : !isWholeNumber(ctxText) || Number(ctxText) < 1 || Number(ctxText) > CONTEXT_WINDOW_MAX_TOKENS
-        ? `Enter a whole number of tokens from 1 to ${CONTEXT_WINDOW_MAX_TOKENS.toLocaleString()}, or leave it blank to auto-discover.`
+      : !isWholeNumber(ctxText) ||
+          Number(ctxText) < CONTEXT_WINDOW_MIN_TOKENS ||
+          Number(ctxText) > CONTEXT_WINDOW_MAX_TOKENS
+        ? `Enter a whole number of tokens from ${CONTEXT_WINDOW_MIN_TOKENS.toLocaleString()} to ${CONTEXT_WINDOW_MAX_TOKENS.toLocaleString()}, or leave it blank to auto-discover.`
         : null;
 
   // A saved model the endpoint does not serve — the old value would

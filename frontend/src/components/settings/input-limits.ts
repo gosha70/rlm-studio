@@ -4,6 +4,12 @@
  * bounds on its request models (src/rlmstudio/server/models.py).
  */
 
+/**
+ * Smallest context window (tokens) an LLM Provider may be given.  Below
+ * this, the output cap derived from the window leaves no room to answer.
+ */
+export const CONTEXT_WINDOW_MIN_TOKENS = 1_024;
+
 /** RAG chunk size. */
 export const RAG_CHUNK_SIZE_MIN = 1;
 export const RAG_CHUNK_SIZE_MAX = 100_000;

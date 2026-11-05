@@ -998,7 +998,7 @@ describe("SettingsPage — Wave 3", () => {
     );
   });
 
-  test.each(["1e3", "-5", "0", "12abc"])(
+  test.each(["1e3", "-5", "0", "1", "1023", "12abc"])(
     "an LLM Provider context window of %j is refused with a reason",
     async (value) => {
       stubSettingsData({ "llm-providers": [] });
@@ -1009,19 +1009,21 @@ describe("SettingsPage — Wave 3", () => {
       await user.type(screen.getByLabelText("Model"), "llama3.2");
       await user.type(screen.getByLabelText("Context Window (tokens)"), value);
 
-      expect(screen.getByText(/Enter a whole number of tokens from 1 to/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Enter a whole number of tokens from 1,024 to 10,000,000/),
+      ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
     },
   );
 
-  test("a valid context window is accepted", async () => {
+  test.each(["1024", "8192"])("a context window of %s is accepted", async (value) => {
     stubSettingsData({ "llm-providers": [] });
     render(<SettingsPage />);
     const user = await setupUser();
     await user.click(screen.getByRole("button", { name: /add llm provider/i }));
     await user.type(screen.getByLabelText("Name"), "Local");
     await user.type(screen.getByLabelText("Model"), "llama3.2");
-    await user.type(screen.getByLabelText("Context Window (tokens)"), "8192");
+    await user.type(screen.getByLabelText("Context Window (tokens)"), value);
 
     expect(screen.queryByText(/Enter a whole number of tokens/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
