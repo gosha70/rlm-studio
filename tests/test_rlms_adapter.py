@@ -981,7 +981,9 @@ class TestInterruptedRunKeepsWhatWasSpent:
         assert not result.success
         assert result.total_tokens == 50_000
         assert result.tokens_known is True
-        assert result.steps == 2  # the two iterations the logger captured
+        # The two iterations the logger captured, plus the one that tripped the
+        # cap: the engine checks it before the logger records that iteration.
+        assert result.steps == 3
         assert len(result.trace) > 0
         assert "3 sections so far" in result.answer
         assert NOTE_INTERRUPTED_TOTALS in result.metadata[RESULT_KEY_ENGINE_NOTES]
@@ -1002,7 +1004,7 @@ class TestInterruptedRunKeepsWhatWasSpent:
 
         result = _adapter().run("d", "q", _CONFIG)
 
-        assert result.answer.startswith("⚠️ **Token budget exceeded** after 2 steps")
+        assert result.answer.startswith("⚠️ **Token budget exceeded** after 3 steps")
         assert "52,240 of 50,000 tokens" in result.answer
         assert "**Max Tokens**" in result.answer
         assert "Execution error" not in result.answer
@@ -1168,6 +1170,32 @@ class TestInterruptedRunKeepsWhatWasSpent:
 
         assert NOTE_INTERRUPTED_TOTALS in notes
         assert NOTE_INTERRUPTED_TOKENS_UNKNOWN not in notes
+
+    @pytest.mark.parametrize(
+        ("exc_name", "attrs", "heading"),
+        [
+            ("TokenLimitExceededError", {"tokens_used": 1_718}, "Token budget exceeded"),
+            ("BudgetExceededError", {"spent": 0.31}, "Cost budget exceeded"),
+        ],
+    )
+    def test_a_cap_tripped_by_the_first_step_says_so(
+        self, fake_rlm: _FakeRlm, exc_name: str, attrs: dict[str, Any], heading: str
+    ) -> None:
+        """SC3-04: "Token budget exceeded after 0 steps (1,718 of 1,500 tokens)".
+
+        The engine checks its token and cost caps after an iteration has run
+        but before its logger records it, so a breach on the first iteration
+        leaves an empty trajectory although that iteration spent the tokens.
+        """
+        fake_rlm.logged_trajectory = {"iterations": []}
+        fake_rlm.raise_on_completion = _raise(exc_name, "cap", **attrs)
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert result.steps == 1
+        assert result.answer.startswith(f"⚠️ **{heading}** on the first step")
+        assert "0 steps" not in result.answer
+        assert "on the first step" in (result.error or "")
 
     def test_an_empty_logger_still_yields_a_classified_failure(self, fake_rlm: _FakeRlm) -> None:
         fake_rlm.logged_trajectory = None

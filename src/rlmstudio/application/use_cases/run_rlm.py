@@ -117,6 +117,9 @@ _REPEAT_LIMIT_WARNING = (
     "(Settings → Profiles), or in the LLM Tuner."
 )
 
+# How a stop on the first step is worded; "after 1 steps" read as a typo.
+_FIRST_STEP_PHRASE = "on the first step"
+
 # A final action whose JSON did not parse (see ``_recover_final_answer``).
 _FINAL_TYPE_RE = re.compile(r'"type"\s*:\s*"final"')
 _ANSWER_VALUE_RE = re.compile(r'"answer"\s*:\s*(?=")')
@@ -143,33 +146,34 @@ def budget_stop_outcome(
     why the run's usage figures are missing.
     """
     steps = state.steps
+    when = _FIRST_STEP_PHRASE if steps == 1 else f"after {steps} steps"
     if limit == LIMIT_TOKENS:
         max_tokens = config.max_tokens or 0
         warning = (
-            f"⚠️ **Token budget exceeded** after {steps} steps "
+            f"⚠️ **Token budget exceeded** {when} "
             f"({state.total_tokens:,} of {max_tokens:,} tokens).\n\n"
             "**How to fix** — in Settings → Budget:\n"
             "- Increase **Max Tokens**.\n"
             "- Or ask a more focused question."
         )
-        error = f"Budget exceeded: the {max_tokens:,}-token limit was reached after {steps} steps"
+        error = f"Budget exceeded: the {max_tokens:,}-token limit was reached {when}"
     elif limit == LIMIT_COST:
         max_cost = config.max_cost or 0.0
         warning = (
-            f"⚠️ **Cost budget exceeded** after {steps} steps "
+            f"⚠️ **Cost budget exceeded** {when} "
             f"(${state.cost:.4f} of ${max_cost:.4f}).\n\n"
             "**How to fix** — in Settings → Budget:\n"
             "- Increase **Max Cost (USD)**.\n"
             "- Or ask a more focused question."
         )
-        error = f"Budget exceeded: the ${max_cost:.4f} cost limit was reached after {steps} steps"
+        error = f"Budget exceeded: the ${max_cost:.4f} cost limit was reached {when}"
     elif limit == LIMIT_TIME:
         seconds = round(config.max_time_seconds or 0)
         warning = (
-            f"⚠️ **Execution timed out** after {steps} steps ({seconds}s limit).\n\n"
+            f"⚠️ **Execution timed out** {when} ({seconds}s limit).\n\n"
             "**How to fix:**\n" + MAX_TIME_HINT + "- Or ask a more focused question."
         )
-        error = f"Execution timed out: the {seconds}s time limit was reached after {steps} steps"
+        error = f"Execution timed out: the {seconds}s time limit was reached {when}"
     elif limit == LIMIT_STEPS:
         max_steps = config.max_steps or 0
         warning = (
@@ -180,7 +184,7 @@ def budget_stop_outcome(
         error = f"Budget exceeded: the {max_steps}-step limit was reached"
     else:
         warning = (
-            f"⚠️ **Run stopped** after {steps} steps: the model kept replying "
+            f"⚠️ **Run stopped** {when}: the model kept replying "
             "without code or a final answer.\n\n"
             "**How to fix:**\n"
             "- Ask a more focused question, or try a model that follows the "

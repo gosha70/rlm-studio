@@ -48,6 +48,17 @@ class TestBudgetStopReason:
         assert "Step budget" not in result.answer
         assert _category(result) is OutcomeCategory.BUDGET_EXHAUSTED
 
+    def test_token_cap_on_the_first_step_is_worded_as_such(self) -> None:
+        """SC3-04: a stop on step 1 read "after 1 steps"."""
+        llm = FakeLLM([_CODE_STEP])
+        config = RunConfigDTO(mode="rlm", max_steps=32, max_tokens=10)
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q", config=config)
+
+        assert result.answer.startswith("⚠️ **Token budget exceeded** on the first step")
+        assert "15 of 10 tokens" in result.answer
+        assert result.error == "Budget exceeded: the 10-token limit was reached on the first step"
+        assert _category(result) is OutcomeCategory.BUDGET_EXHAUSTED
+
     def test_time_cap_is_a_timeout(self) -> None:
         llm = _SlowLLM([_CODE_STEP])
         config = RunConfigDTO(mode="rlm", max_steps=32, max_time_seconds=0.01)

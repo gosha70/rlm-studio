@@ -197,6 +197,13 @@ BUSY_AFTER_TIMEOUT_REASON = (
 )
 
 
+# The engine checks these caps after an iteration has run but before its
+# logger records it, so the iteration that tripped the cap is missing from the
+# captured trajectory and has to be counted on top of it.  (The time limit is
+# checked before an iteration starts, so the captured count is already right.)
+_LIMITS_CHECKED_BEFORE_LOGGING = frozenset({LIMIT_COST, LIMIT_TOKENS})
+
+
 class _ExclusiveHolder:
     """When the official run holding the in-process REPL runs out of time.
 
@@ -847,6 +854,8 @@ class RlmsEngineAdapter:
             # that genuinely used nothing must not apply.
             total_cost, cost_known = 0.0, False
         steps = len((captured or {}).get("iterations") or [])
+        if limit in _LIMITS_CHECKED_BEFORE_LOGGING:
+            steps += 1
         # Worded like Studio's own budget stops: the limit, where to change it.
         answer, error = budget_stop_outcome(
             limit,
