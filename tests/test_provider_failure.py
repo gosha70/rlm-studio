@@ -614,3 +614,45 @@ def test_direct_answer_names_a_context_length_overflow() -> None:
         "context length."
     )
     assert _format_error_answer(exc).startswith("⚠️ **Context window exceeded**")
+
+
+@pytest.mark.parametrize(
+    ("exc_class", "message"),
+    [
+        (
+            "BadRequestError",
+            'Lm_studioException - {"error":"Model was unloaded while the request was '
+            'still in queue.."}',
+        ),
+        (
+            "BadRequestError",
+            "OpenAIException - Error code: 400 - "
+            "{'error': 'Model has not started loading/has been unloaded.'}",
+        ),
+        (
+            "APIConnectionError",
+            "APIConnectionError: OpenAIException - Model has not started loading/has been "
+            "unloaded.",
+        ),
+    ],
+)
+def test_lm_studio_unloaded_model_says_to_load_it(exc_class: str, message: str) -> None:
+    """CHAT2-04: LM Studio's "unloaded / not loaded" replies came through raw
+    and unclassified, or as "could not reach the provider" mid-stream."""
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+    exc = getattr(litellm, exc_class)(message, llm_provider="openai", model="qwen")
+    assert classify_provider_failure(exc) is ProviderFailureKind.MODEL_NOT_LOADED
+
+    adapter = LiteLLMAdapter(
+        model="openai/qwen2.5-7b-instruct", api_base="http://localhost:1234/v1"
+    )
+    err = adapter._translate_exception(exc, "LiteLLM completion failed")
+    answer = failure_answer(err)
+
+    assert isinstance(err, ProviderFailureError)
+    assert err.kind is ProviderFailureKind.MODEL_NOT_LOADED
+    assert answer is not None
+    assert answer.startswith("⚠️ **Model not loaded**")
+    assert "Load the model in LM Studio, then retry." in answer

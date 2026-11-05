@@ -903,14 +903,17 @@ class LiteLLMAdapter:
         upstream detail is redacted before it is shown, because auth errors
         can echo the rejected key.
         """
-        if _is_timeout_error(exc):
+        kind = classify_provider_failure(exc)
+        # LM Studio can report an unloaded model as a connection error; the
+        # fix is to load the model, not to check the server.
+        if _is_timeout_error(exc) and kind is not ProviderFailureKind.MODEL_NOT_LOADED:
             return ProviderFailureError(
                 _timeout_error_message(self._timeout, exc),
                 describe_provider_failure(
                     ProviderFailureKind.TIMEOUT, model=self._model, api_base=self._api_base
                 ),
             )
-        if _is_connection_error(exc):
+        if _is_connection_error(exc) and kind is not ProviderFailureKind.MODEL_NOT_LOADED:
             return ProviderFailureError(
                 _connection_error_message(self._api_base, exc),
                 describe_provider_failure(
@@ -918,7 +921,6 @@ class LiteLLMAdapter:
                 ),
             )
 
-        kind = classify_provider_failure(exc)
         if kind is not ProviderFailureKind.UNKNOWN:
             failure = describe_provider_failure(kind, model=self._model, api_base=self._api_base)
             detail = redact_secrets(strip_html(str(exc)))

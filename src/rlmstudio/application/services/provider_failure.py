@@ -98,6 +98,7 @@ class ProviderFailureKind(str, Enum):
 
     AUTH = "auth"
     MODEL_UNAVAILABLE = "model_unavailable"
+    MODEL_NOT_LOADED = "model_not_loaded"
     CONNECTION = "connection"
     TIMEOUT = "timeout"
     RATE_LIMIT = "rate_limit"
@@ -118,6 +119,16 @@ _CLASS_NAME_KINDS: dict[str, ProviderFailureKind] = {
     "Timeout": ProviderFailureKind.TIMEOUT,
     "RateLimitError": ProviderFailureKind.RATE_LIMIT,
 }
+
+# LM Studio's replies for a model that is not (or no longer) loaded.  Checked
+# before the class names: LM Studio sends them as a 400 or mid-stream as a
+# connection error, and neither "bad request" nor "could not reach the
+# provider" points at the fix.
+_MODEL_NOT_LOADED_KEYWORDS: tuple[str, ...] = (
+    "model was unloaded",
+    "has been unloaded",
+    "has not started loading",
+)
 
 # Fallbacks for providers or httpx layers that surface a generic exception
 # class with a descriptive message. Ordered: the first kind whose keywords
@@ -206,12 +217,15 @@ def classify_provider_failure(exc: BaseException) -> ProviderFailureKind:
     ``UNKNOWN`` rather than guessing, so an unrecognised failure keeps its
     raw detail instead of being mislabelled.
     """
+    message = str(exc).lower()
+    if any(kw in message for kw in _MODEL_NOT_LOADED_KEYWORDS):
+        return ProviderFailureKind.MODEL_NOT_LOADED
+
     for cls in type(exc).__mro__:
         kind = _CLASS_NAME_KINDS.get(cls.__name__)
         if kind is not None:
             return kind
 
-    message = str(exc).lower()
     for kind, keywords in _KEYWORD_KINDS:
         if any(kw in message for kw in keywords):
             return kind
@@ -260,6 +274,13 @@ def describe_provider_failure(
                 "Pick a model from the provider's current list in "
                 "Settings → LLM Providers, which is fetched from your account."
             ),
+        )
+
+    if kind is ProviderFailureKind.MODEL_NOT_LOADED:
+        return ProviderFailure(
+            kind=kind,
+            cause=f"The model{named_model} is not loaded in LM Studio{where}.",
+            fix="Load the model in LM Studio, then retry.",
         )
 
     if kind is ProviderFailureKind.CONNECTION:
@@ -357,6 +378,7 @@ def failure_kind_value(exc: BaseException) -> str | None:
 _FAILURE_TITLES: dict[ProviderFailureKind, str] = {
     ProviderFailureKind.AUTH: "Authentication failed",
     ProviderFailureKind.MODEL_UNAVAILABLE: "Model not available",
+    ProviderFailureKind.MODEL_NOT_LOADED: "Model not loaded",
     ProviderFailureKind.CONNECTION: "Cannot reach the provider",
     ProviderFailureKind.TIMEOUT: "The provider did not respond in time",
     ProviderFailureKind.RATE_LIMIT: "Rate limited by the provider",
