@@ -218,3 +218,6 @@ export const HEALTH_RETRY_MS = 5_000;
 
 /** SWR key for the sidebar session list; revalidate it when a session is created. */
 export const SESSIONS_SWR_KEY = "sessions";
+
+/** SWR key for the user's Chat Providers (Chat, Dashboard, Settings share it). */
+export const CHAT_PROVIDERS_SWR_KEY = "chat-providers";

@@ -7,7 +7,8 @@
 
 import React from "react";
 import { render, screen, within } from "@testing-library/react";
-import { vi, describe, test, expect } from "vitest";
+import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
+import { CHAT_PROVIDERS_SWR_KEY } from "@/lib/constants";
 import { Hash } from "lucide-react";
 import { MetricCard } from "@/components/metrics/metric-card";
 import { ComparisonChart } from "@/components/metrics/comparison-chart";
@@ -57,6 +58,7 @@ vi.mock("recharts", () => {
       <div data-testid="y-axis" data-interval={String(interval)} data-width={String(width)} />
     ),
     CartesianGrid: () => null,
+    ReferenceLine: () => null,
     Tooltip: () => null,
     Legend: () => null,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -363,8 +365,9 @@ const makeMetrics = (): MetricsResponse => ({
   timeline: [],
 });
 
-// Helper: stub all five useSWR calls made by DashboardPage:
+// Helper: stub all six useSWR calls made by DashboardPage:
 //   1. sessions  2. metrics  3. failureMetrics  4. evalSummary  5. evalDetail
+//   6. chatProviders
 const noData = { data: undefined, isLoading: false } as ReturnType<typeof useSWR>;
 
 describe("DashboardPage", () => {
@@ -375,7 +378,8 @@ describe("DashboardPage", () => {
       .mockReturnValueOnce({ data: metrics, isLoading: false } as ReturnType<typeof useSWR>)
       .mockReturnValueOnce(noData)  // failureMetrics
       .mockReturnValueOnce(noData)  // evalSummary
-      .mockReturnValueOnce(noData); // evalDetail
+      .mockReturnValueOnce(noData)  // evalDetail
+      .mockReturnValueOnce(noData); // chatProviders
 
     render(<DashboardPage />);
     expect(screen.getByText("Total Tokens")).toBeInTheDocument();
@@ -391,7 +395,8 @@ describe("DashboardPage", () => {
       .mockReturnValueOnce({ data: metrics, isLoading: false } as ReturnType<typeof useSWR>)
       .mockReturnValueOnce(noData)  // failureMetrics
       .mockReturnValueOnce(noData)  // evalSummary
-      .mockReturnValueOnce(noData); // evalDetail
+      .mockReturnValueOnce(noData)  // evalDetail
+      .mockReturnValueOnce(noData); // chatProviders
 
     render(<DashboardPage />);
     expect(screen.getByText("Mode Comparison")).toBeInTheDocument();
@@ -404,7 +409,8 @@ describe("DashboardPage", () => {
       .mockReturnValueOnce(noData)  // metrics
       .mockReturnValueOnce(noData)  // failureMetrics
       .mockReturnValueOnce(noData)  // evalSummary
-      .mockReturnValueOnce(noData); // evalDetail
+      .mockReturnValueOnce(noData)  // evalDetail
+      .mockReturnValueOnce(noData); // chatProviders
 
     render(<DashboardPage />);
     expect(
@@ -418,7 +424,8 @@ describe("DashboardPage", () => {
       .mockReturnValueOnce(noData)  // metrics
       .mockReturnValueOnce(noData)  // failureMetrics
       .mockReturnValueOnce(noData)  // evalSummary
-      .mockReturnValueOnce(noData); // evalDetail
+      .mockReturnValueOnce(noData)  // evalDetail
+      .mockReturnValueOnce(noData); // chatProviders
 
     render(<DashboardPage />);
     // SWR was called at least twice: once for sessions, once for metrics
@@ -489,7 +496,8 @@ function renderDashboard(
     .mockReturnValueOnce({ data: metrics, isLoading: false } as ReturnType<typeof useSWR>)
     .mockReturnValueOnce({ data: failures, isLoading: false } as ReturnType<typeof useSWR>)
     .mockReturnValueOnce(noData) // evalSummary
-    .mockReturnValueOnce(noData); // evalDetail
+    .mockReturnValueOnce(noData) // evalDetail
+    .mockReturnValueOnce(noData); // chatProviders
   return render(<DashboardPage />);
 }
 
@@ -618,5 +626,104 @@ describe("Dashboard chart colours", () => {
         expect(screen.getByTestId(`bar-series-${name}`).dataset.fill).toBe(pie);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Browser pass 2 CMP2-05: LLM Tuner judge scores are not counted either.
+// ---------------------------------------------------------------------------
+
+describe("DashboardPage — judge cards (CMP2-05)", () => {
+  const TUNER_CP = "5f0c2a8e-0d7e-4e43-9a51-6f1f7c0b9d11";
+  const quality = (id: string, name: string, judge: number) => ({
+    chat_provider_id: id,
+    chat_provider_name: name,
+    thumb_up: 0,
+    thumb_down: 0,
+    thumb_score: 0,
+    best_picks: 0,
+    pick_rate: 0,
+    judge_avg_score: judge,
+    combined_score: 0.5,
+  });
+  const judgeScore = (cpId: string, score: number) => ({
+    id: `j-${cpId}`,
+    execution_id: `exec-${cpId}`,
+    session_id: "sess-1",
+    chat_provider_id: cpId,
+    judge_provider_id: "judge",
+    dimensions: { relevance: score, correctness: score },
+    overall_score: score,
+    reasoning: "",
+    created_at: "2026-11-04T10:00:00Z",
+  });
+
+  beforeEach(() => {
+    mockUseSWR.mockReset();
+  });
+  afterEach(() => {
+    mockUseSWR.mockReset();
+  });
+
+  // Keyed by SWR key, since the judge chart re-renders the page.
+  function renderWithJudges(summary: object, detail: object, chatProviders: object[]) {
+    mockUseSWR.mockImplementation(((key: string | null) => {
+      const data =
+        key === "sessions"
+          ? makeSessions()
+          : key === CHAT_PROVIDERS_SWR_KEY
+            ? chatProviders
+            : key?.startsWith("eval-summary-")
+              ? summary
+              : key?.startsWith("eval-detail-")
+                ? detail
+                : undefined;
+      return { data, isLoading: false };
+    }) as unknown as typeof useSWR);
+    return render(<DashboardPage />);
+  }
+
+  test("an LLM Tuner-only session shows no judge cards and no raw ids", () => {
+    // The Tuner's temporary Chat Provider is gone, so the server names it by its id.
+    renderWithJudges(
+      {
+        session_id: "sess-1",
+        by_chat_provider: { [TUNER_CP]: quality(TUNER_CP, TUNER_CP, 4) },
+        recommendation: TUNER_CP,
+        recommendation_reason: "Best quality: judge score 4/5",
+      },
+      { thumb_ratings: [], best_picks: [], judge_scores: [judgeScore(TUNER_CP, 4)], judge_pairwise: [] },
+      [{ id: "cp-chat", name: "Qwen Direct" }],
+    );
+    expect(screen.queryByText(/Judge Dimensions/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Judge Quality Scores")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Recommendation/)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(TUNER_CP);
+  });
+
+  test("Chat runs keep their judge cards, and the recommendation names the provider", () => {
+    renderWithJudges(
+      {
+        session_id: "sess-1",
+        by_chat_provider: {
+          "cp-chat": quality("cp-chat", "Qwen Direct", 4.5),
+          [TUNER_CP]: quality(TUNER_CP, "[compare] Qwen · RLM", 3),
+        },
+        recommendation: "cp-chat",
+        recommendation_reason: "Best quality: judge score 4.5/5",
+      },
+      {
+        thumb_ratings: [],
+        best_picks: [],
+        judge_scores: [judgeScore("cp-chat", 4.5), judgeScore(TUNER_CP, 3)],
+        judge_pairwise: [],
+      },
+      [{ id: "cp-chat", name: "Qwen Direct" }],
+    );
+    expect(screen.getByText(/Judge Dimensions/)).toBeInTheDocument();
+    expect(screen.getByTestId("bar-series-Qwen Direct")).toBeInTheDocument();
+    expect(screen.queryByTestId("bar-series-[compare] Qwen · RLM")).not.toBeInTheDocument();
+    expect(screen.getByText("Recommendation: Qwen Direct")).toBeInTheDocument();
+    expect(screen.queryByText(/\[compare\]/)).not.toBeInTheDocument();
   });
 });

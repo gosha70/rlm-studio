@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import { User, Bot, Sparkles, Loader2, ChevronDown, ChevronRight, Terminal, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/shared/app-shell";
-import { SESSIONS_SWR_KEY } from "@/lib/constants";
+import { CHAT_PROVIDERS_SWR_KEY, SESSIONS_SWR_KEY } from "@/lib/constants";
 import { ChatProviderSelector } from "@/components/chat/chat-provider-selector";
 import { ChatInput } from "@/components/chat/chat-input";
 import { FileAttachment } from "@/components/chat/file-attachment";
@@ -155,7 +155,7 @@ export default function ChatPage() {
         })
       : ids;
 
-  const { data: chatProviders = [] } = useSWR<ChatProviderConfig[]>("chat-providers", getChatProviders);
+  const { data: chatProviders = [] } = useSWR<ChatProviderConfig[]>(CHAT_PROVIDERS_SWR_KEY, getChatProviders);
   const { data: llmProviders = [] } = useSWR<LLMProviderConfig[]>("llm-providers", getLLMProviders);
   const { data: config } = useSWR<AppConfig>("config", getConfig);
   const { mutate } = useSWRConfig();

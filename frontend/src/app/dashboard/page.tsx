@@ -16,10 +16,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getSessions, getMetrics, getFailureMetrics, getEvaluationSummary, getSessionEvaluations, resetSessionEvaluations, type SessionSummary, type MetricsResponse, type FailureMetricsResponse, type EvaluationSummaryResponse, type SessionEvaluations } from "@/lib/api";
+import { getSessions, getMetrics, getFailureMetrics, getEvaluationSummary, getSessionEvaluations, getChatProviders, resetSessionEvaluations, type SessionSummary, type MetricsResponse, type FailureMetricsResponse, type EvaluationSummaryResponse, type SessionEvaluations, type ChatProviderConfig } from "@/lib/api";
 import { JudgeDimensionsChart } from "@/components/metrics/judge-dimensions-chart";
 import { FailureBreakdown } from "@/components/metrics/failure-breakdown";
-import { TRACE_EXEC_PARAM, displayModeName, displayProviderName } from "@/lib/constants";
+import { CHAT_PROVIDERS_SWR_KEY, TRACE_EXEC_PARAM, displayModeName, displayProviderName } from "@/lib/constants";
 import { providerColorMap } from "@/components/metrics/series-colors";
 import { formatUsd } from "@/lib/format";
 
@@ -81,9 +81,18 @@ export default function DashboardPage() {
     }
   }, [effectiveSession, mutate]);
 
-  const providerNames = Object.fromEntries(
-    Object.values(evalSummary?.by_chat_provider ?? {}).map((p) => [p.chat_provider_id, p.chat_provider_name]),
+  // The user's Chat Providers. LLM Tuner runs use temporary ones that are
+  // not in this list, so the judge cards leave them out like the rest of the
+  // page does (otherwise they show as raw ids and an unnamed recommendation).
+  const { data: chatProviders } = useSWR<ChatProviderConfig[]>(CHAT_PROVIDERS_SWR_KEY, getChatProviders);
+  const chatProviderIds = new Set((chatProviders ?? []).map((cp) => cp.id));
+  const judgedProviders = Object.values(evalSummary?.by_chat_provider ?? {}).filter((p) =>
+    chatProviderIds.has(p.chat_provider_id),
   );
+  const judgeScores = (evalDetail?.judge_scores ?? []).filter((s) => chatProviderIds.has(s.chat_provider_id));
+  const recommended = judgedProviders.find((p) => p.chat_provider_id === evalSummary?.recommendation);
+
+  const providerNames = Object.fromEntries(judgedProviders.map((p) => [p.chat_provider_id, p.chat_provider_name]));
 
   const summary = metrics?.summary;
   // Totals and averages cover successful runs only (the server leaves
@@ -239,16 +248,16 @@ export default function DashboardPage() {
         )}
 
         {/* Judge Dimensions Chart */}
-        {evalDetail && evalDetail.judge_scores.length > 0 && (
+        {judgeScores.length > 0 && (
           <JudgeDimensionsChart
-            judgeScores={evalDetail.judge_scores}
+            judgeScores={judgeScores}
             providerNames={providerNames}
             colors={providerColors}
           />
         )}
 
         {/* Judge Quality Scores */}
-        {evalSummary && Object.keys(evalSummary.by_chat_provider).length > 0 && (
+        {evalSummary && judgedProviders.length > 0 && (
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="flex items-center gap-2 text-base">
@@ -266,10 +275,10 @@ export default function DashboardPage() {
               </button>
             </CardHeader>
             <CardContent className="space-y-4">
-              {evalSummary.recommendation && (
+              {recommended && (
                 <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm dark:border-amber-800 dark:bg-amber-950">
                   <Trophy className="h-4 w-4 text-amber-500" />
-                  <span className="font-medium">Recommendation:</span>
+                  <span className="font-medium">Recommendation: {recommended.chat_provider_name}</span>
                   <span className="text-muted-foreground">{evalSummary.recommendation_reason}</span>
                 </div>
               )}
@@ -289,7 +298,7 @@ export default function DashboardPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {Object.values(evalSummary.by_chat_provider).map((p) => {
+                  {judgedProviders.map((p) => {
                     const isRecommended = p.chat_provider_id === evalSummary.recommendation;
                     const score = p.judge_avg_score;
                     const pct = score != null ? (score / 5) * 100 : null;
