@@ -146,6 +146,13 @@ body {
   border-radius: 0.25rem;
 }
 
+/* The typography plugin wraps inline code in literal backticks; the pill
+   above already marks it as code, so drop them. */
+.prose :where(code):not(:where([class~="not-prose"] *)):not(pre code)::before,
+.prose :where(code):not(:where([class~="not-prose"] *)):not(pre code)::after {
+  content: none;
+}
+
 .prose :where(pre):not(:where([class~="not-prose"] *)) {
   background: var(--muted);
   color: var(--foreground);

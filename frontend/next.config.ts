@@ -18,12 +18,19 @@ import type { NextConfig } from "next";
 // `trailingSlash: true` produces one `index.html` per route directory,
 // which is what FastAPI's `StaticFiles(html=True)` resolves cleanly.
 const isBundle = process.env.BUNDLE === "1";
+const BUNDLE_BASE_PATH = "/studio";
 
 const nextConfig: NextConfig = isBundle
   ? {
       output: "export",
-      basePath: "/studio",
+      basePath: BUNDLE_BASE_PATH,
       trailingSlash: true,
+      // Next prefixes its own links and assets with basePath, but not a plain
+      // fetch() of a file in public/; code reads this to build those URLs.
+      env: { NEXT_PUBLIC_BASE_PATH: BUNDLE_BASE_PATH },
+      // A static export has no image-optimization server: without this,
+      // <Image> points at /_next/image, which 404s under FastAPI.
+      images: { unoptimized: true },
     }
   : {
       async rewrites() {

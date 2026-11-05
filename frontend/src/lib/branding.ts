@@ -23,6 +23,13 @@ export const PERF_UI_ENABLED: boolean =
   process.env.NEXT_PUBLIC_RLM_STUDIO_PERF_UI === "1" ||
   process.env.NEXT_PUBLIC_RLMKIT_PERF_UI === "1";
 
+/**
+ * URL prefix the UI is served under: `/studio` in the bundled build (set in
+ * next.config.ts), empty otherwise. Prepend it to files fetched from
+ * `public/`; Next adds it to `<Link>` and its own assets by itself.
+ */
+export const BASE_PATH: string = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
 // ---------------------------------------------------------------------------
 // localStorage keys
 // ---------------------------------------------------------------------------

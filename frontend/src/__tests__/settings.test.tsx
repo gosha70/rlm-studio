@@ -11,13 +11,21 @@ import { BudgetConfig } from "@/components/settings/budget-config";
 import { ModelSelector } from "@/components/settings/model-selector";
 import { ConnectionTester } from "@/components/settings/connection-tester";
 import { ProviderCard } from "@/components/settings/provider-card";
+import { ExecutionConfig } from "@/components/settings/execution-config";
 import useSWR from "swr";
 import {
+  createChatProvider,
+  createProfile,
+  deleteLLMProvider,
+  updateChatProvider,
+  updateLLMProvider,
   getLLMProviderModelsForConfig,
   testLLMProviderConfig,
   testProvider,
+  updateConfig,
   type ProviderTestResponse,
 } from "@/lib/api";
+import { toast } from "sonner";
 import SettingsPage from "@/app/settings/page";
 import type { BudgetConfig as BudgetConfigType, ModelInfo, ProviderInfo } from "@/lib/api";
 
@@ -34,6 +42,12 @@ vi.mock("@/lib/api", async (importOriginal) => {
     // Keep the Settings form's debounced model discovery off the network.
     getProviderModels: vi.fn().mockResolvedValue([]),
     testLLMProviderConfig: vi.fn(),
+    updateConfig: vi.fn(),
+    createChatProvider: vi.fn(),
+    updateChatProvider: vi.fn(),
+    updateLLMProvider: vi.fn(),
+    createProfile: vi.fn(),
+    deleteLLMProvider: vi.fn(),
     getLLMProviderModelsForConfig: vi.fn().mockResolvedValue({
       models: [],
       source: "unavailable",
@@ -44,6 +58,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 vi.mock("swr", () => ({
   default: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
 
 vi.mock("next-themes", () => ({
@@ -182,8 +200,26 @@ describe("BudgetConfig", () => {
       max_time_seconds: 600,
       max_recursion_depth: 5,
       repeat_limit: 2,
-      nudge_at_fraction: 0.6,
+      // The server default (RLM_DEFAULT_NUDGE_AT_FRACTION), not 0.6.
+      nudge_at_fraction: 0.4,
     });
+  });
+
+  test.each([
+    ["Max Tokens", "-5", /Max Tokens must be between 1 and 500,000\. Not saved\./],
+    ["Max Tokens", "99999999999999", /Max Tokens must be between 1 and 500,000\. Not saved\./],
+    ["Max Tokens", "12.5", /Max Tokens must be a whole number\. Not saved\./],
+    ["Max Tokens", "", /Enter a value for Max Tokens\. Not saved\./],
+    ["Max Cost (USD)", "-1", /Max Cost must be between 0 and 100\. Not saved\./],
+    ["Max Cost (USD)", "99999999999999", /Max Cost must be between 0 and 100\. Not saved\./],
+    ["Max Cost (USD)", "", /Enter a value for Max Cost\. Not saved\./],
+  ])("refuses to save %s = %j and says why", (label, value, message) => {
+    const onChange = vi.fn();
+    render(<BudgetConfig config={DEFAULT_CONFIG} onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   test("Reset to Defaults updates displayed values", () => {
@@ -230,6 +266,30 @@ describe("BudgetConfig", () => {
       (s) => s.getAttribute("aria-valuenow") === "5"
     );
     expect(depthSlider).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ExecutionConfig
+// ---------------------------------------------------------------------------
+
+describe("ExecutionConfig", () => {
+  test("offers no Default Mode control: nothing reads default_mode", () => {
+    render(
+      <ExecutionConfig
+        config={{
+          enabled_modes: ["direct", "rlm"],
+          default_mode: "auto",
+          rag_config: { chunk_size: 1000, chunk_overlap: 200, top_k: 5, embedding_model: "text-embedding-3-small" },
+          rlm_max_steps: 16,
+          rlm_timeout_seconds: 600,
+        }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Default Mode")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Default mode" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/system decides/)).not.toBeInTheDocument();
   });
 });
 
@@ -602,6 +662,42 @@ describe("SettingsPage", () => {
     expect(screen.getByText(/update it in Settings/)).toBeInTheDocument();
   });
 
+  test.each([
+    [0, false],
+    [5, true],
+  ])(
+    "a connected provider with a failure says monitoring only when auto-testing is on (interval %i)",
+    (minutes, monitoring) => {
+      // SET2-01: with auto-testing off nothing re-checks the provider, so
+      // "monitoring" was untrue.
+      const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+      vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+        if (key === "config") return swrStub({ ...MOCK_CONFIG, connection_test_interval_minutes: minutes });
+        if (key === "llm-providers")
+          return swrStub([
+            {
+              id: "lp-flaky",
+              name: "Flaky",
+              backend: "vllm",
+              model: "m",
+              endpoint: "http://spark:8001/v1",
+              runtime_settings: { temperature: 0.7, top_p: 1.0, max_output_tokens: 4096, timeout_seconds: 30 },
+              status: "connected",
+              last_tested_at: "2026-11-01T13:05:58Z",
+              last_tested_by: "background",
+              consecutive_failures: 1,
+            },
+          ]);
+        return swrStub(undefined);
+      }) as typeof useSWR);
+
+      render(<SettingsPage />);
+
+      expect(screen.getByText(/1 recent failure/)).toBeInTheDocument();
+      expect(screen.queryByText(/monitoring/) !== null).toBe(monitoring);
+    },
+  );
+
   test("a provider row flags a model the provider does not offer", () => {
     const swrStub = (data: unknown) => ({ data, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
     vi.mocked(useSWR).mockImplementation(((key: unknown) => {
@@ -670,7 +766,7 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
 
     expect(
-      screen.getByText(/Model check could not reach the provider\./),
+      screen.getByText(/Model not checked: the provider's model list could not be read\./),
     ).toBeInTheDocument();
   });
 
@@ -748,5 +844,533 @@ describe("SettingsPage", () => {
     });
 
     expect(screen.queryByText(/Connected/)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SettingsPage — Wave 3 regressions
+// ---------------------------------------------------------------------------
+
+const RUNTIME = { temperature: 0.7, top_p: 1.0, max_output_tokens: 4096, timeout_seconds: 30 };
+
+const makeLLMProvider = (overrides: Record<string, unknown>) => ({
+  id: "lp-1",
+  name: "Local",
+  backend: "ollama",
+  model: "llama3.2",
+  endpoint: null,
+  runtime_settings: RUNTIME,
+  status: "configured",
+  last_tested_at: null,
+  last_tested_by: null,
+  consecutive_failures: 0,
+  ...overrides,
+});
+
+const RAG_PROFILE = {
+  id: "prof-rag",
+  name: "RAG profile",
+  description: "",
+  strategy: "rag",
+  runtime_settings: RUNTIME,
+  budget: MOCK_CONFIG.budget,
+  system_prompts: {},
+  prompt_template_name: null,
+  is_builtin: false,
+};
+
+/** Stub SWR keys for one render of the Settings page. */
+function stubSettingsData(data: Record<string, unknown>) {
+  const swrStub = (value: unknown) => ({ data: value, mutate: vi.fn(), error: undefined, isLoading: false, isValidating: false });
+  vi.mocked(useSWR).mockImplementation(((key: unknown) => {
+    if (key === "config") return swrStub(MOCK_CONFIG);
+    if (typeof key === "string" && key in data) return swrStub(data[key]);
+    return swrStub(undefined);
+  }) as typeof useSWR);
+}
+
+describe("SettingsPage — Wave 3", () => {
+  beforeEach(() => {
+    // Radix Select needs pointer-capture and scrolling APIs jsdom lacks.
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.releasePointerCapture = () => {};
+    Element.prototype.scrollIntoView = () => {};
+  });
+
+  const setupUser = async () => (await import("@testing-library/user-event")).default.setup();
+
+  const pick = async (
+    user: Awaited<ReturnType<typeof setupUser>>,
+    comboboxId: string,
+    optionName: RegExp,
+  ) => {
+    await user.click(document.getElementById(comboboxId)!);
+    await user.click(await screen.findByRole("option", { name: optionName }));
+  };
+
+  test.each([
+    ["ollama", "ollama/nomic-embed-text"],
+    ["lmstudio", "lm_studio/text-embedding-nomic-embed-text-v1.5"],
+    ["openai", "text-embedding-3-small"],
+  ])("a RAG Chat Provider on %s defaults to %s", async (backend, expected) => {
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ backend, name: `My ${backend}` })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    await pick(user, "cp-profile", /RAG profile/);
+    await pick(user, "cp-llm-provider", new RegExp(`My ${backend}`));
+
+    const embedding = screen.getByLabelText("Embedding Model") as HTMLInputElement;
+    expect(embedding.value).toBe(expected);
+    // Still editable.
+    await user.clear(embedding);
+    await user.type(embedding, "ollama/mxbai-embed-large");
+    expect(embedding.value).toBe("ollama/mxbai-embed-large");
+  });
+
+  /** Open Create Chat Provider on a RAG profile and set one RAG field. */
+  const fillRagChatProvider = async (field: string, value: string) => {
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ name: "My ollama" })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    await user.type(screen.getByLabelText("Name"), "Docs");
+    await pick(user, "cp-profile", /RAG profile/);
+    await pick(user, "cp-llm-provider", /My ollama/);
+    const input = screen.getByLabelText(field);
+    await user.clear(input);
+    if (value) await user.type(input, value);
+    return user;
+  };
+
+  test.each([
+    ["Chunk Size", "-5", "Chunk Size must be between 1 and 100,000."],
+    ["Chunk Size", "99999999999", "Chunk Size must be between 1 and 100,000."],
+    ["Chunk Size", "0", "Chunk Size must be between 1 and 100,000."],
+    ["Chunk Size", "12.5", "Chunk Size must be a whole number."],
+    ["Chunk Size", "", "Enter a value for Chunk Size."],
+    ["Chunk Overlap", "-1", "Chunk Overlap must be between 0 and 511."],
+    ["Chunk Overlap", "512", "Chunk Overlap must be between 0 and 511."],
+    ["Top K", "-1", "Top K must be between 1 and 100."],
+    ["Top K", "0", "Top K must be between 1 and 100."],
+    ["Top K", "100000", "Top K must be between 1 and 100."],
+    ["Embedding Model", "", "Enter an Embedding Model."],
+  ])("a RAG %s of %j is refused, not saved", async (field, value, message) => {
+    vi.mocked(createChatProvider).mockClear();
+    const user = await fillRagChatProvider(field, value);
+
+    expect(screen.getByRole("status")).toHaveTextContent(message);
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create).toBeDisabled();
+    await user.click(create);
+    expect(vi.mocked(createChatProvider)).not.toHaveBeenCalled();
+  });
+
+  test("the Chat Provider edit form refuses an invalid RAG value too", async () => {
+    vi.mocked(updateChatProvider).mockClear();
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ name: "My ollama" })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [
+        {
+          id: "cp-rag",
+          name: "Docs",
+          llm_provider_id: "lp-1",
+          llm_provider_name: "My ollama",
+          profile_id: RAG_PROFILE.id,
+          execution_mode: "rag",
+          runtime_settings: RUNTIME,
+          rlm_max_steps: 16,
+          rlm_timeout_seconds: 600,
+          rlm_repeat_limit: 2,
+          rag_config: {
+            chunk_size: 512,
+            chunk_overlap: 64,
+            top_k: 5,
+            embedding_model: "ollama/nomic-embed-text",
+          },
+        },
+      ],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const topK = screen.getByLabelText("Top K");
+    await user.clear(topK);
+    await user.type(topK, "0");
+
+    expect(screen.getByRole("status")).toHaveTextContent("Top K must be between 1 and 100.");
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(vi.mocked(updateChatProvider)).not.toHaveBeenCalled();
+  });
+
+  test("valid RAG settings are saved as typed", async () => {
+    vi.mocked(createChatProvider).mockClear();
+    vi.mocked(createChatProvider).mockResolvedValueOnce({} as never);
+    const user = await fillRagChatProvider("Top K", "12");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(createChatProvider)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rag_config: {
+            chunk_size: 512,
+            chunk_overlap: 64,
+            top_k: 12,
+            embedding_model: "ollama/nomic-embed-text",
+          },
+        }),
+      ),
+    );
+  });
+
+  test.each(["1e3", "-5", "0", "1", "1023", "12abc"])(
+    "an LLM Provider context window of %j is refused with a reason",
+    async (value) => {
+      stubSettingsData({ "llm-providers": [] });
+      render(<SettingsPage />);
+      const user = await setupUser();
+      await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+      await user.type(screen.getByLabelText("Name"), "Local");
+      await user.type(screen.getByLabelText("Model"), "llama3.2");
+      await user.type(screen.getByLabelText("Context Window (tokens)"), value);
+
+      expect(
+        screen.getByText(/Enter a whole number of tokens from 1,024 to 10,000,000/),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+    },
+  );
+
+  test.each(["1024", "8192"])("a context window of %s is accepted", async (value) => {
+    stubSettingsData({ "llm-providers": [] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+    await user.type(screen.getByLabelText("Name"), "Local");
+    await user.type(screen.getByLabelText("Model"), "llama3.2");
+    await user.type(screen.getByLabelText("Context Window (tokens)"), value);
+
+    expect(screen.queryByText(/Enter a whole number of tokens/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+
+  test("a negative connection-test interval is refused, not clamped and saved", async () => {
+    vi.mocked(updateConfig).mockClear();
+    stubSettingsData({});
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "General" }));
+    const input = await screen.findByLabelText(/Interval/i);
+    await user.clear(input);
+    await user.type(input, "-3");
+    await user.tab();
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/from 0 to 1440\. Not saved\./);
+    expect(vi.mocked(updateConfig)).not.toHaveBeenCalled();
+  });
+
+  test("a failed Budget save says so with the server's reason", async () => {
+    vi.mocked(updateConfig).mockRejectedValueOnce(
+      new Error('API error 422: {"detail":"max_tokens must be at least 1"}'),
+    );
+    vi.mocked(toast.error).mockClear();
+    stubSettingsData({});
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Budget" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "Budget limits not saved: max_tokens must be at least 1",
+      ),
+    );
+  });
+
+  test("a long unbroken name wraps inside its card and keeps the buttons on it", async () => {
+    const longName = "vLLM" + "dfs".repeat(60);
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ name: longName })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [
+        {
+          id: "cp-1",
+          name: longName,
+          llm_provider_id: "lp-1",
+          llm_provider_name: longName,
+          profile_id: RAG_PROFILE.id,
+          execution_mode: "rag",
+          runtime_settings: RUNTIME,
+          rlm_max_steps: 16,
+          rlm_timeout_seconds: 600,
+          rlm_repeat_limit: 2,
+        },
+      ],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+
+    const lpTitle = screen.getByText(longName);
+    expect(lpTitle).toHaveClass("wrap-anywhere");
+    expect(lpTitle.closest(".min-w-0.flex-1")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Delete" }).parentElement).toHaveClass("shrink-0");
+
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    const cpTitles = screen.getAllByText(longName);
+    expect(cpTitles.some((el) => el.classList.contains("wrap-anywhere"))).toBe(true);
+    for (const button of screen.getAllByRole("button", { name: "Delete" })) {
+      expect(button.parentElement).toHaveClass("shrink-0");
+    }
+
+    // The LLM Provider dropdown stays within the viewport.
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    await user.click(document.getElementById("cp-llm-provider")!);
+    const option = await screen.findByRole("option", { name: new RegExp(longName) });
+    expect(option).toHaveClass("wrap-anywhere");
+    expect(screen.getByRole("listbox").closest("[class*='max-w-[calc(100vw-2rem)]']")).not.toBeNull();
+  });
+
+  test("deleting an LLM Provider in use shows the server's reason", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(deleteLLMProvider).mockRejectedValueOnce(
+      new Error(
+        'API error 409: {"error":{"code":"ERROR","message":"Cannot delete: referenced by Chat Provider(s): Qwen RLM","details":{}}}',
+      ),
+    );
+    vi.mocked(toast.error).mockClear();
+    stubSettingsData({ "llm-providers": [makeLLMProvider({ name: "Local Qwen" })] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    // The dialog no longer claims the Chat Providers "will stop working":
+    // the server refuses the delete instead.
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('"Local Qwen"'));
+    expect(confirmSpy).not.toHaveBeenCalledWith(expect.stringContaining("stop working"));
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "LLM Provider not deleted: Cannot delete: referenced by Chat Provider(s): Qwen RLM",
+      ),
+    );
+    confirmSpy.mockRestore();
+  });
+
+  test("the edit form says a key is already stored", async () => {
+    stubSettingsData({
+      "llm-providers": [
+        makeLLMProvider({ id: "lp-k", name: "Keyed", backend: "openai", model: "gpt-4o", api_key_stored: true }),
+      ],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    const keyInput = screen.getByLabelText("API Key");
+    expect(keyInput).toHaveAttribute("placeholder", "Key stored (hidden)");
+    expect(screen.getByText(/A key is stored for this provider/)).toBeInTheDocument();
+  });
+
+  test("the edit form makes no stored-key claim without a key", async () => {
+    stubSettingsData({
+      "llm-providers": [
+        makeLLMProvider({ id: "lp-n", name: "Keyless", backend: "openai", model: "gpt-4o", api_key_stored: false }),
+      ],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("placeholder", "sk-...");
+    expect(screen.queryByText(/A key is stored for this provider/)).not.toBeInTheDocument();
+  });
+
+  test("a disabled Create says which fields are missing", async () => {
+    stubSettingsData({ "llm-providers": [], profiles: [RAG_PROFILE], "chat-providers": [] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+    expect(screen.getByText("Fill in Name, Model to create.")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Name"), "Local");
+    expect(screen.getByText("Fill in Model to create.")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Model"), "llama3.2");
+    expect(screen.queryByText(/^Fill in/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    expect(screen.getByText("Fill in Name, LLM Provider, Profile to create.")).toBeInTheDocument();
+  });
+
+  test("picking a discovered model does not flip the Select to controlled", async () => {
+    vi.mocked(getLLMProviderModelsForConfig).mockResolvedValueOnce({
+      models: [{ name: "qwen2.5-7b-instruct", input_cost_per_1k: 0, output_cost_per_1k: 0 }],
+      source: "live",
+      error: null,
+    });
+    // Radix reports the flip through console.warn.
+    const errors = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubSettingsData({ "llm-providers": [] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: /add llm provider/i }));
+    await screen.findByText(/1 model loaded/, undefined, { timeout: 3000 });
+    await pick(user, "llmp-model", /qwen2\.5-7b-instruct/);
+
+    const flips = errors.mock.calls.filter((args) =>
+      String(args[0]).includes("from uncontrolled to controlled"),
+    );
+    errors.mockRestore();
+    expect(flips).toEqual([]);
+  });
+
+  test("the tab strip wraps inside its container instead of overflowing at 768 px", () => {
+    stubSettingsData({});
+    render(<SettingsPage />);
+    // jsdom has no layout; the classes are what keep all seven tabs on
+    // screen (verified in Chromium at 768 px: two rows, no page scroll).
+    const tablist = screen.getByRole("tablist");
+    expect(tablist).toHaveClass("flex-wrap", "max-w-full", "h-auto");
+    expect(tablist).not.toHaveClass("h-10");
+  });
+
+  test("a successful Budget save is confirmed", async () => {
+    vi.mocked(updateConfig).mockResolvedValueOnce(MOCK_CONFIG as never);
+    vi.mocked(toast.success).mockClear();
+    stubSettingsData({});
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Budget" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.success)).toHaveBeenCalledWith("Budget limits saved"),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SettingsPage — Wave 3c (browser pass 3)
+// ---------------------------------------------------------------------------
+
+describe("SettingsPage — Wave 3c", () => {
+  beforeEach(() => {
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.releasePointerCapture = () => {};
+    Element.prototype.scrollIntoView = () => {};
+    vi.mocked(updateLLMProvider).mockReset();
+    vi.mocked(updateLLMProvider).mockResolvedValue({} as never);
+    vi.mocked(toast.error).mockClear();
+  });
+
+  const setupUser = async () => (await import("@testing-library/user-event")).default.setup();
+
+  /** Open Edit on a saved provider with a stored context window and blank the field. */
+  const blankContextWindowOnEdit = async () => {
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ id: "lp-cw", context_window: 8192 })],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const field = screen.getByLabelText("Context Window (tokens)") as HTMLInputElement;
+    expect(field.value).toBe("8192");
+    await user.clear(field);
+    return user;
+  };
+
+  test("SC3-01: blanking the context window on Edit clears the stored value", async () => {
+    const user = await blankContextWindowOnEdit();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(updateLLMProvider)).toHaveBeenCalledWith(
+        "lp-cw",
+        expect.objectContaining({ context_window: 0 }),
+      ),
+    );
+  });
+
+  test("SC3-01: a blank context window with a new endpoint leaves discovery to the server", async () => {
+    const user = await blankContextWindowOnEdit();
+    await user.type(screen.getByLabelText("Endpoint"), "http://localhost:11500");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(updateLLMProvider)).toHaveBeenCalledWith(
+        "lp-cw",
+        expect.objectContaining({ context_window: null, endpoint: "http://localhost:11500" }),
+      ),
+    );
+  });
+
+  test("SC3-05: a refused Chat Provider save shows the server's reason", async () => {
+    vi.mocked(createChatProvider).mockRejectedValueOnce(
+      new Error(
+        'API error 409: {"error":{"code":"ERROR","message":"Chat Provider with name \'Docs\' already exists","details":{}}}',
+      ),
+    );
+    stubSettingsData({
+      "llm-providers": [makeLLMProvider({ name: "My ollama" })],
+      profiles: [RAG_PROFILE],
+      "chat-providers": [],
+    });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Chat Providers" }));
+    await user.click(screen.getByRole("button", { name: /create chat provider/i }));
+    await user.type(screen.getByLabelText("Name"), "Docs");
+    await user.click(document.getElementById("cp-profile")!);
+    await user.click(await screen.findByRole("option", { name: /RAG profile/ }));
+    await user.click(document.getElementById("cp-llm-provider")!);
+    await user.click(await screen.findByRole("option", { name: /My ollama/ }));
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "Chat Provider not saved: Chat Provider with name 'Docs' already exists",
+      ),
+    );
+  });
+
+  test("SC3-05: a refused profile create shows the server's reason", async () => {
+    vi.mocked(createProfile).mockRejectedValueOnce(
+      new Error('API error 422: {"detail":"strategy must be one of direct, rlm, rag"}'),
+    );
+    stubSettingsData({ profiles: [] });
+    render(<SettingsPage />);
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "Profiles" }));
+    await user.type(screen.getByLabelText("New profile name"), "Fresh");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        "Profile not created: strategy must be one of direct, rlm, rag",
+      ),
+    );
+  });
+
+  test("SC3-07: the General tab and the LLM Providers banner agree on the startup check", async () => {
+    stubSettingsData({});
+    render(<SettingsPage />);
+    expect(screen.getByText(/A one-time check runs at startup/)).toBeInTheDocument();
+    const user = await setupUser();
+    await user.click(screen.getByRole("tab", { name: "General" }));
+    expect(screen.queryByText(/not at server startup/)).not.toBeInTheDocument();
+    expect(screen.getByText(/checked once shortly after the server starts/)).toBeInTheDocument();
   });
 });

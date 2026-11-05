@@ -49,6 +49,7 @@ import { hasLearnErrorBadge } from "@/components/shared/sidebar";
 import { DiagnosticsStrip } from "@/components/learn/diagnostics-strip";
 import { DiagnosticsPanel } from "@/components/learn/diagnostics-panel";
 import { MarkdownDoc } from "@/components/learn/markdown-doc";
+import { GITHUB_BLOB_BASE, docDirForSlug, resolveDocHref } from "@/components/learn/doc-links";
 import { ProviderCard } from "@/components/learn/provider-card";
 import { TroubleshootEntry } from "@/components/learn/troubleshoot-entry";
 import { TroubleshootSearch } from "@/components/learn/troubleshoot-search";
@@ -304,6 +305,48 @@ describe("MarkdownDoc", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("world")).toBeInTheDocument();
     expect(container.querySelector("[data-slug='rlm-concepts']")).not.toBeNull();
+  });
+
+  // SH2-3: relative links to repo files used to open "Page not found".
+  test("links to other docs open their Learn page or GitHub, never a relative path", () => {
+    mockUseSWR.mockReturnValue({
+      data: {
+        slug: "hosts-dgx-spark",
+        content: [
+          "See [what Studio needs](README.md#3-what-rlm-studio-needs),",
+          "[the vLLM recipe](dgx-spark-vllm.md), [vLLM](vllm.md),",
+          "[the start script](../../scripts/dgx-spark/vllm/start.sh),",
+          "[concepts](../rlm-concepts.md#budgets), [below](#install) and",
+          "[LiteLLM](https://docs.litellm.ai/).",
+        ].join(" "),
+      },
+      error: undefined,
+      isLoading: false,
+    } as ReturnType<typeof useSWR>);
+
+    render(<MarkdownDoc slug="hosts-dgx-spark" />);
+    const hrefOf = (name: string) => screen.getByRole("link", { name }).getAttribute("href");
+    expect(hrefOf("what Studio needs")).toBe(`${GITHUB_BLOB_BASE}/docs/hosts/README.md#3-what-rlm-studio-needs`);
+    expect(hrefOf("the vLLM recipe")).toBe(`${GITHUB_BLOB_BASE}/docs/hosts/dgx-spark-vllm.md`);
+    expect(hrefOf("vLLM")).toBe("/learn/cookbook?provider=vllm");
+    expect(hrefOf("the start script")).toBe(`${GITHUB_BLOB_BASE}/scripts/dgx-spark/vllm/start.sh`);
+    expect(hrefOf("concepts")).toBe("/learn/concepts#budgets");
+    expect(hrefOf("below")).toBe("#install");
+    expect(hrefOf("LiteLLM")).toBe("https://docs.litellm.ai/");
+    expect(screen.getByRole("link", { name: "the vLLM recipe" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "below" })).not.toHaveAttribute("target");
+  });
+
+  test("a top-level doc resolves links from docs/, not docs/hosts/", () => {
+    expect(resolveDocHref("hosts/dgx-spark.md", docDirForSlug("rlm-concepts"))).toEqual({
+      href: "/learn/cookbook?provider=dgx-spark",
+      internal: true,
+    });
+    expect(resolveDocHref("troubleshoot.yaml", docDirForSlug("rlm-studio-guide")).href).toBe("/learn/troubleshoot");
+    expect(resolveDocHref("../BENCHMARKS.md", docDirForSlug("rlm-studio-guide")).href).toBe(
+      `${GITHUB_BLOB_BASE}/BENCHMARKS.md`,
+    );
+    expect(GITHUB_BLOB_BASE).toBe("https://github.com/gosha70/rlm-studio/blob/master");
   });
 });
 
@@ -1082,6 +1125,24 @@ describe("TroubleshootEntry card", () => {
     expect(screen.getByText("cookbook/groq")).toBeInTheDocument();
     expect(screen.getByText("cookbook/anthorpic")).toBeInTheDocument();
   });
+
+  test("fix steps render `code` as code, not literal backticks (SH2-6)", () => {
+    render(
+      <TroubleshootEntry
+        entry={{
+          ...entry,
+          id: "ollama-model",
+          fix: ["Run `ollama pull <model-name>` on the host running Ollama", "A stray ` stays as written"],
+        }}
+      />,
+    );
+    const code = screen.getByText("ollama pull <model-name>");
+    expect(code.tagName).toBe("CODE");
+    const step = code.closest("li")!;
+    expect(step).toHaveTextContent("Run ollama pull <model-name> on the host running Ollama");
+    expect(step.textContent).not.toContain("`");
+    expect(screen.getByText("A stray ` stays as written")).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1372,15 +1433,23 @@ describe("ConceptsPage", () => {
     ).toBeInTheDocument();
   });
 
-  test("mode guide covers all four modes including Auto", () => {
+  test("mode guide covers the four Chat Provider modes (SH2-2)", () => {
     mockUseSWR.mockImplementation(conceptsSwr);
     render(<ConceptsPage />);
     // Strong-text labels inside the mode list are unique; matching with
     // exact text avoids colliding with the body paragraphs.
-    for (const mode of ["Direct", "RLM", "Compare", "Auto"]) {
+    for (const mode of ["Direct", "RLM", "RAG", "Official RLM (rlms)"]) {
       expect(screen.getByText(mode, { selector: "span.font-semibold" }))
         .toBeInTheDocument();
     }
+  });
+
+  test("never recommends Auto, which 1.0 does not offer (SH2-2)", () => {
+    mockUseSWR.mockImplementation(conceptsSwr);
+    const { container } = render(<ConceptsPage />);
+    // The deep-dive markdown is fetched separately; the page's own copy is what is checked.
+    expect(container.textContent).not.toMatch(/\bAuto\b/);
+    expect(screen.getByText(/four modes a Chat Provider can run/)).toBeInTheDocument();
   });
 
   test("includes the 'When not to use RLM' callout near the mode guide", () => {

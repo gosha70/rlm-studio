@@ -13,6 +13,7 @@ from rlmstudio.application.ports.embedding_port import EmbeddingPort
 from rlmstudio.application.ports.llm_port import LLMPort
 from rlmstudio.application.ports.storage_port import StoragePort
 from rlmstudio.application.sandbox_vars import (
+    EXTRA_KEY_RAG_CHUNK_OVERLAP,
     MODE_RAG,
     TRACE_KEY_CONTENT,
     TRACE_KEY_ELAPSED_SECONDS,
@@ -24,6 +25,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_STEP,
 )
 from rlmstudio.application.services.provider_failure import (
+    as_provider_failure,
     failure_answer,
     failure_kind_value,
 )
@@ -131,12 +133,13 @@ class RunRAGUseCase:
         start = time.time()
         top_k = config.extra.get("top_k", 5)
         chunk_size = config.extra.get("chunk_size", 1000)
+        chunk_overlap = config.extra.get(EXTRA_KEY_RAG_CHUNK_OVERLAP, 0)
         collection = config.extra.get("collection", "rag_temp")
 
         try:
             if not skip_indexing:
                 # 1. Chunk the content
-                chunks = self._chunk_text(content, chunk_size)
+                chunks = self._chunk_text(content, chunk_size, chunk_overlap)
 
                 # 2. Embed all chunks and store (may be slow for large docs)
                 embeddings = self._embedder.embed_batch(chunks)
@@ -245,8 +248,13 @@ class RunRAGUseCase:
                     "collection": collection,
                 },
             )
-        except Exception as exc:
+        except Exception as raw:
             elapsed = time.time() - start
+            # The chat model's errors arrive classified by the LLM adapter;
+            # the embedder calls LiteLLM itself, so its raw errors (LM Studio
+            # failing to load the embedding model, a bad key) are classified
+            # here the same way, naming the embedding model.
+            exc = as_provider_failure(raw, model=getattr(self._embedder, "model", None))
             error_msg = _humanize_rag_error(exc)
             answer = _format_rag_warning(exc, error_msg)
             return RunResultDTO(
@@ -259,11 +267,21 @@ class RunRAGUseCase:
             )
 
     @staticmethod
-    def _chunk_text(text: str, chunk_size: int = 1000) -> list[str]:
-        """Split text into chunks of approximately chunk_size characters."""
+    def _chunk_text(text: str, chunk_size: int = 1000, overlap: int = 0) -> list[str]:
+        """Split text into chunks of approximately chunk_size characters.
+
+        Neighbouring chunks share ``overlap`` characters, so a fact cut at a
+        boundary is still whole in one of them.  An overlap outside
+        ``[0, chunk_size)`` is ignored rather than looping forever.
+        """
+        step = chunk_size - overlap if 0 <= overlap < chunk_size else chunk_size
         chunks = []
-        for i in range(0, len(text), chunk_size):
+        for i in range(0, len(text), step):
             chunk = text[i : i + chunk_size]
             if chunk.strip():
                 chunks.append(chunk)
+            # Stop once a chunk reaches the end: the next one would lie wholly
+            # inside it (with an overlap) and only add a duplicate tail.
+            if i + chunk_size >= len(text):
+                break
         return chunks

@@ -87,6 +87,8 @@ _LEGACY_SESSIONS_FILE = Path(".rlmkit_sessions.json")
 _LEGACY_EVALUATIONS_FILE = Path(".rlmkit_evaluations.json")
 _MAX_PERSISTED_SESSIONS = 50
 _MAX_PERSISTED_FILES = 100
+# Default session names use the server's local time (the user's clock).
+_SESSION_NAME_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # ---------------------------------------------------------------------------
 # In-memory stores (replaced by real persistence in production)
@@ -254,6 +256,18 @@ class AppState:
         active = self.config.active_provider
         configs = self.config.provider_configs
 
+        # No legacy entries and the untouched default active provider: the
+        # user never configured a legacy provider, so there is nothing to
+        # repair.  Creating an entry here would make the Chat Provider
+        # migration invent an "OpenAI (gpt-4o)" provider on restart.
+        defaults = ConfigResponse.model_fields
+        if (
+            not configs
+            and active == defaults["active_provider"].default
+            and self.config.active_model == defaults["active_model"].default
+        ):
+            return
+
         # Find the active provider's entry
         active_entry: ProviderConfig | None = None
         for pc in configs:
@@ -304,10 +318,16 @@ class AppState:
     def _migrate_chat_providers(self) -> None:
         """Auto-create Chat Providers from existing provider_configs on first load.
 
-        Also performs a second pass to replace stale model IDs that are no longer
-        present in the hardcoded catalog with the provider's current default model.
+        Only a config that predates LLM Providers is converted, and only once:
+        once named LLM Providers exist, or the conversion has run, an empty
+        provider list is the user's choice (for example, after deleting them
+        all) and must not be refilled.  ``legacy_providers_migrated`` records
+        that, so it survives the user deleting everything.
         """
-        if not self.config.chat_providers:
+        if self.config.legacy_providers_migrated:
+            self._migrate_to_llm_providers()
+            return
+        if not self.config.chat_providers and not self.config.llm_providers:
             now = datetime.now(timezone.utc)
             for pc in self.config.provider_configs:
                 if not pc.enabled:
@@ -333,6 +353,8 @@ class AppState:
                 self.save_config()
 
         self._migrate_to_llm_providers()
+        self.config.legacy_providers_migrated = True
+        self.save_config()
 
     def _migrate_to_llm_providers(self) -> None:
         """Create named LLM Provider instances from legacy ChatProvider configs.
@@ -445,6 +467,8 @@ class AppState:
     _PROVIDER_TEST_TIMEOUT_S: float = 10.0
     # Connected → offline requires this many consecutive failures.
     _OFFLINE_FAILURE_THRESHOLD: int = 2
+    # A one-shot check (the startup probe) has no follow-up to confirm with.
+    _ONE_SHOT_FAILURE_THRESHOLD: int = 1
     # Parallelism inside a single cycle.
     _CYCLE_MAX_WORKERS: int = 5
     # Test-only override for the interval, in seconds (never documented to
@@ -595,7 +619,7 @@ class AppState:
         if delay > 0 and stop_event.wait(timeout=delay):
             return
         try:
-            self._run_test_cycle(stop_event)
+            self._run_test_cycle(stop_event, one_shot=True)
         except Exception:  # noqa: BLE001 — a failed probe must not kill anything
             self._connection_test_logger.exception("startup provider probe failed")
         try:
@@ -712,8 +736,14 @@ class AppState:
                 error_message=f"internal error: {exc!s}"[:200],
             )
 
-    def _run_test_cycle(self, stop_event: threading.Event | None = None) -> None:
+    def _run_test_cycle(
+        self, stop_event: threading.Event | None = None, *, one_shot: bool = False
+    ) -> None:
         """One cycle: snapshot → probe in parallel → apply under lock.
+
+        ``one_shot`` marks a check no recurring check follows up on (the
+        startup probe): its failures set the status at once, like a manual
+        Test, instead of waiting for a second failure that never comes.
 
         ``stop_event`` is the event this cycle was started under.  It is
         captured by the caller because a restart replaces
@@ -775,7 +805,7 @@ class AppState:
         # Step 3: apply results under lock
         with self._config_lock:
             transitions, discarded = self._apply_test_results(
-                results, snapshot=provider_snapshot, source="background"
+                results, snapshot=provider_snapshot, source="background", one_shot=one_shot
             )
             self.save_config()
 
@@ -815,8 +845,13 @@ class AppState:
         *,
         snapshot: dict[str, LLMProviderConfig],
         source: Literal["background", "manual"],
+        one_shot: bool = False,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Merge cycle results back into self.config.llm_providers.
+
+        A ``one_shot`` check flips a failed provider offline on its first
+        failure; the two-failure threshold is for recurring checks, where a
+        second check follows to confirm.
 
         Returns (transitions, discarded) for logging AFTER the lock is
         released.  MUST be called with ``_config_lock`` held.
@@ -834,6 +869,9 @@ class AppState:
         transitions: list[dict[str, Any]] = []
         discarded: list[dict[str, Any]] = []
         current_by_id = {lp.id: lp for lp in self.config.llm_providers}
+        offline_threshold = (
+            self._ONE_SHOT_FAILURE_THRESHOLD if one_shot else self._OFFLINE_FAILURE_THRESHOLD
+        )
 
         for pid, result in results.items():
             current = current_by_id.get(pid)
@@ -884,7 +922,7 @@ class AppState:
                 current.status = "error"
             else:  # offline (graceful failure)
                 current.consecutive_failures += 1
-                if current.consecutive_failures >= self._OFFLINE_FAILURE_THRESHOLD:
+                if current.consecutive_failures >= offline_threshold:
                     current.status = "offline"
                 # else: stay at old status (likely "connected"); surface
                 # the brewing failure via consecutive_failures counter in UI.
@@ -1551,9 +1589,11 @@ class AppState:
             return self.sessions[session_id]
         now = datetime.now(timezone.utc)
         sid = session_id or str(uuid.uuid4())
+        # The name is for people: local time, to the second, so sessions
+        # started within the same minute stay distinguishable.
         session = SessionRecord(
             id=sid,
-            name=f"Session {now.strftime('%Y-%m-%d %H:%M')}",
+            name=f"Session {now.astimezone().strftime(_SESSION_NAME_TIME_FORMAT)}",
             created_at=now,
             updated_at=now,
         )

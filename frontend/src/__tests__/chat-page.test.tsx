@@ -1,0 +1,403 @@
+/**
+ * Chat page behaviour found by the browser pre-pass (Wave 3, area D).
+ *
+ * - M7: upload rejections carry the server's reason; empty and oversized
+ *   files are refused before any bytes are sent.
+ * - M8: a Chat Provider whose LLM provider went offline is dropped from the
+ *   selection restored from localStorage, so it cannot run.
+ * - M10: the session created by the first message shows in the sidebar.
+ */
+
+import React from "react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
+import { vi, describe, test, expect, beforeEach } from "vitest";
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), warning: vi.fn(), success: vi.fn() },
+}));
+// The real AppShell, with a sidebar that just lists the sessions it is given.
+vi.mock("@/components/shared/sidebar", () => ({
+  Sidebar: ({ sessions = [] }: { sessions?: { id: string; name: string }[] }) => (
+    <ul aria-label="Sessions">
+      {sessions.map((s) => (
+        <li key={s.id}>{s.name}</li>
+      ))}
+    </ul>
+  ),
+}));
+vi.mock("@/components/shared/theme-toggle", () => ({ ThemeToggle: () => null }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  getHealth: vi.fn(),
+  getSessions: vi.fn(),
+  getChatProviders: vi.fn(),
+  getLLMProviders: vi.fn(),
+  getConfig: vi.fn(),
+  getSession: vi.fn(),
+  getSessionEvaluations: vi.fn(),
+  getExecutions: vi.fn(),
+  getTrace: vi.fn(),
+  submitChat: vi.fn(),
+  uploadFile: vi.fn(),
+}));
+
+import { toast } from "sonner";
+import * as api from "@/lib/api";
+import ChatPage from "@/app/page";
+import { STORAGE_KEY_SELECTED_CHAT_PROVIDERS } from "@/lib/branding";
+import type { ChatProviderConfig, LLMProviderConfig } from "@/lib/api";
+
+const mocked = vi.mocked(api);
+const MB = 1024 * 1024;
+
+const llm = (overrides: Partial<LLMProviderConfig> = {}): LLMProviderConfig =>
+  ({
+    id: "llmp-1",
+    name: "Local",
+    backend: "ollama",
+    model: "llama3.2",
+    status: "connected",
+    runtime_settings: { temperature: 0.7, top_p: 1, max_output_tokens: 2048, timeout_seconds: 30 },
+    ...overrides,
+  }) as LLMProviderConfig;
+
+const cp = (overrides: Partial<ChatProviderConfig> = {}): ChatProviderConfig =>
+  ({
+    id: "cp-1",
+    name: "Llama Direct",
+    llm_provider_id: "llmp-1",
+    execution_mode: "direct",
+    runtime_settings: { temperature: 0.7, top_p: 1, max_output_tokens: 2048, timeout_seconds: 30 },
+    ...overrides,
+  }) as ChatProviderConfig;
+
+function renderPage() {
+  return render(
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <ChatPage />
+    </SWRConfig>,
+  );
+}
+
+function fileOfSize(name: string, size: number): File {
+  const file = new File(["x"], name, { type: "text/plain" });
+  Object.defineProperty(file, "size", { value: size });
+  return file;
+}
+
+async function pickFiles(container: HTMLElement, files: File[]) {
+  const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+  fireEvent.change(input, { target: { files } });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  localStorage.clear();
+  Element.prototype.scrollIntoView = vi.fn();
+  mocked.getChatProviders.mockResolvedValue([cp()]);
+  mocked.getLLMProviders.mockResolvedValue([llm()]);
+  mocked.getConfig.mockResolvedValue({} as Awaited<ReturnType<typeof api.getConfig>>);
+  mocked.getSessionEvaluations.mockResolvedValue({ thumb_ratings: [], best_picks: [], judge_scores: [] } as unknown as Awaited<
+    ReturnType<typeof api.getSessionEvaluations>
+  >);
+  mocked.getExecutions.mockResolvedValue([]);
+  mocked.getHealth.mockResolvedValue({ status: "ok" } as Awaited<ReturnType<typeof api.getHealth>>);
+  mocked.getSessions.mockResolvedValue([]);
+});
+
+describe("Chat uploads (M7)", () => {
+  test("a rejected upload shows the server's reason", async () => {
+    mocked.uploadFile.mockRejectedValue(new Error("Unsupported file type: .zip. Allowed: .csv, .docx"));
+    const { container } = renderPage();
+    await pickFiles(container, [fileOfSize("fake.txt", 10)]);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'Couldn\'t upload "fake.txt": Unsupported file type: .zip. Allowed: .csv, .docx',
+      ),
+    );
+  });
+
+  test("an empty file is refused without uploading", async () => {
+    const { container } = renderPage();
+    await pickFiles(container, [fileOfSize("empty.txt", 0)]);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/"empty.txt" is empty/)));
+    expect(mocked.uploadFile).not.toHaveBeenCalled();
+  });
+
+  test("a text file over the per-message limit is refused before uploading", async () => {
+    const { container } = renderPage();
+    await pickFiles(container, [fileOfSize("big60.txt", 60 * MB)]);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/"big60.txt" skipped .* 50 MB per-message limit/)),
+    );
+    expect(mocked.uploadFile).not.toHaveBeenCalled();
+  });
+
+  test("a file over the server's upload limit is refused before uploading", async () => {
+    const { container } = renderPage();
+    await pickFiles(container, [fileOfSize("huge.pdf", 205 * MB)]);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/"huge.pdf" is larger than the 200 MB upload limit/)),
+    );
+    expect(mocked.uploadFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("uploadFile error reason (M7)", () => {
+  test("rejects with the server's message, not the status code", async () => {
+    const { uploadFile } = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+    class FakeXHR {
+      status = 422;
+      responseText = JSON.stringify({ error: { code: "ERROR", message: "Could not extract text from file: EOF marker not found" } });
+      upload = {};
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      open() {}
+      send() {
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXHR);
+    try {
+      await expect(uploadFile(fileOfSize("corrupt.pdf", 10))).rejects.toThrow(
+        "Could not extract text from file: EOF marker not found",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("Chat Provider selection (M8)", () => {
+  async function sendMessage(text: string) {
+    const input = await screen.findByLabelText("Message input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+  }
+
+  beforeEach(() => {
+    mocked.submitChat.mockResolvedValue({ execution_id: "exec-1", session_id: "sess-1", status: "accepted" });
+    mocked.getTrace.mockReturnValue(new Promise(() => {}));
+    mocked.getChatProviders.mockResolvedValue([
+      cp({ id: "cp-on", name: "Online", llm_provider_id: "llmp-on" }),
+      cp({ id: "cp-off", name: "Offline", llm_provider_id: "llmp-off" }),
+      cp({ id: "cp-on2", name: "Online 2", llm_provider_id: "llmp-on" }),
+    ]);
+    mocked.getLLMProviders.mockResolvedValue([
+      llm({ id: "llmp-on", status: "connected" }),
+      llm({ id: "llmp-off", status: "offline" }),
+    ]);
+  });
+
+  test("a saved provider that went offline is not used to run", async () => {
+    localStorage.setItem(STORAGE_KEY_SELECTED_CHAT_PROVIDERS, JSON.stringify(["cp-off"]));
+    renderPage();
+    await sendMessage("hello");
+    await waitFor(() => expect(mocked.submitChat).toHaveBeenCalled());
+    const used = mocked.submitChat.mock.calls.map(([req]) => req.chat_provider_id);
+    expect(used).not.toContain("cp-off");
+    expect(used).toEqual(["cp-on"]);
+  });
+
+  test("a saved online selection is kept, not reset to the first provider", async () => {
+    localStorage.setItem(STORAGE_KEY_SELECTED_CHAT_PROVIDERS, JSON.stringify(["cp-on2"]));
+    renderPage();
+    await sendMessage("hello");
+    await waitFor(() => expect(mocked.submitChat).toHaveBeenCalled());
+    expect(mocked.submitChat.mock.calls.map(([req]) => req.chat_provider_id)).toEqual(["cp-on2"]);
+  });
+});
+
+describe("Sessions sidebar (M10)", () => {
+  test("the session created by the first message appears without a reload", async () => {
+    mocked.submitChat.mockResolvedValue({ execution_id: "exec-1", session_id: "sess-new", status: "accepted" });
+    mocked.getTrace.mockReturnValue(new Promise(() => {}));
+    mocked.getSessions.mockResolvedValueOnce([]).mockResolvedValue([
+      { id: "sess-new", name: "Session 17:45" } as Awaited<ReturnType<typeof api.getSessions>>[number],
+    ]);
+    renderPage();
+    const input = await screen.findByLabelText("Message input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: "hello" } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+    expect(await screen.findByText("Session 17:45")).toBeInTheDocument();
+  });
+});
+
+describe("Switching Chat Providers between turns (CHAT2-01)", () => {
+  const ANSWERS: Record<string, string> = { "exec-q1-cp-a": "Answer A1", "exec-q2-cp-b": "Answer B2" };
+
+  /** The turn (question + answer cards) that a question heads. */
+  const turnOf = (question: string) =>
+    screen.getByText(question).closest("div.space-y-4") as HTMLElement;
+
+  async function send(text: string) {
+    const input = await screen.findByLabelText("Message input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+  }
+
+  beforeEach(() => {
+    mocked.getChatProviders.mockResolvedValue([
+      cp({ id: "cp-a", name: "Provider A" }),
+      cp({ id: "cp-b", name: "Provider B" }),
+    ]);
+    localStorage.setItem(STORAGE_KEY_SELECTED_CHAT_PROVIDERS, JSON.stringify(["cp-a"]));
+    mocked.submitChat.mockImplementation(async (req) => ({
+      execution_id: `exec-${req.query === "Q1?" ? "q1" : "q2"}-${req.chat_provider_id}`,
+      session_id: "sess-1",
+      status: "accepted",
+    }));
+    mocked.getTrace.mockImplementation(
+      async (execId) =>
+        ({
+          execution_id: execId,
+          status: "complete",
+          started_at: "2026-11-04T10:00:00Z",
+          completed_at: "2026-11-04T10:00:02Z",
+          result: { answer: ANSWERS[execId], success: true, total_cost: 0 },
+          budget: { tokens_used: 10, cost_used: 0, steps_used: 1 },
+          steps: [],
+        }) as unknown as Awaited<ReturnType<typeof api.getTrace>>,
+    );
+    const msg = (cpId: string, role: string, content: string, ts: string, execId?: string) => ({
+      id: `${cpId}-${ts}`,
+      role,
+      content,
+      chat_provider_id: cpId,
+      chat_provider_name: cpId === "cp-a" ? "Provider A" : "Provider B",
+      execution_id: execId,
+      timestamp: ts,
+    });
+    mocked.getSession.mockResolvedValue({
+      id: "sess-1",
+      name: "Session",
+      created_at: "2026-11-04T10:00:00Z",
+      updated_at: "2026-11-04T10:01:00Z",
+      messages: [],
+      conversations: {
+        "cp-a": [
+          msg("cp-a", "user", "Q1?", "2026-11-04T10:00:00"),
+          msg("cp-a", "assistant", "Answer A1", "2026-11-04T10:00:02", "exec-q1-cp-a"),
+        ],
+        "cp-b": [
+          msg("cp-b", "user", "Q2?", "2026-11-04T10:01:00"),
+          msg("cp-b", "assistant", "Answer B2", "2026-11-04T10:01:02", "exec-q2-cp-b"),
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof api.getSession>>);
+  });
+
+  test("each turn keeps its own provider and answer, before and after reload", async () => {
+    const { unmount } = renderPage();
+    await send("Q1?");
+    await screen.findByText("Answer A1");
+
+    // Switch the selection to B only, then ask Q2.
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Provider B,/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Provider A,/ }));
+    await send("Q2?");
+    await screen.findByText("Answer B2");
+
+    // Before reload: Q1 still shows A's answer and no card for B.
+    expect(turnOf("Q1?")).toHaveTextContent("Answer A1");
+    expect(turnOf("Q1?")).not.toHaveTextContent("Provider B");
+    expect(turnOf("Q2?")).toHaveTextContent("Answer B2");
+    expect(turnOf("Q2?")).not.toHaveTextContent("Provider A");
+
+    // Reload: the session is rebuilt from the server's per-provider conversations.
+    unmount();
+    renderPage();
+    await screen.findByText("Q2?");
+    await waitFor(() => expect(turnOf("Q2?")).toHaveTextContent("Answer B2"));
+    expect(turnOf("Q1?")).toHaveTextContent("Answer A1");
+    expect(turnOf("Q1?")).not.toHaveTextContent("Answer B2");
+    expect(turnOf("Q1?")).not.toHaveTextContent("Provider B");
+    expect(turnOf("Q2?")).not.toHaveTextContent("Provider A");
+    // Questions stay in the order they were asked.
+    const q1 = screen.getByText("Q1?");
+    expect(q1.compareDocumentPosition(screen.getByText("Q2?")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The selection is the one Q2 was sent with, not every provider in the session.
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: /^Provider B,/ })).toHaveAttribute("aria-checked", "true"),
+    );
+    expect(screen.getByRole("checkbox", { name: /^Provider A,/ })).toHaveAttribute("aria-checked", "false");
+  });
+});
+
+describe("Multi-provider turn (Chat Lows)", () => {
+  type Outcome = { answer: string; seconds: number; steps: number; status?: string };
+
+  /** Two selected providers; each run finishes with the given outcome. */
+  async function runTurn(outcomes: Record<string, Outcome>) {
+    const ids = Object.keys(outcomes);
+    mocked.getChatProviders.mockResolvedValue(ids.map((id) => cp({ id, name: `Provider ${id}` })));
+    localStorage.setItem(STORAGE_KEY_SELECTED_CHAT_PROVIDERS, JSON.stringify(ids));
+    mocked.submitChat.mockImplementation(async (req) => ({
+      execution_id: `exec-${req.chat_provider_id}`,
+      session_id: "sess-1",
+      status: "accepted",
+    }));
+    mocked.getTrace.mockImplementation(async (execId) => {
+      const o = outcomes[execId.replace("exec-", "")];
+      if (o.status === "running") return new Promise(() => {});
+      const start = new Date("2026-11-04T10:00:00Z");
+      return {
+        execution_id: execId,
+        status: o.status ?? "complete",
+        started_at: start.toISOString(),
+        completed_at: new Date(start.getTime() + o.seconds * 1000).toISOString(),
+        result: { answer: o.answer, success: (o.status ?? "complete") === "complete", total_cost: 0 },
+        budget: { tokens_used: 100, cost_used: 0, steps_used: o.steps },
+        steps: Array.from({ length: o.steps }, (_, i) => ({ index: i, action_type: "final" })),
+      } as unknown as Awaited<ReturnType<typeof api.getTrace>>;
+    });
+    renderPage();
+    const input = await screen.findByLabelText("Message input");
+    await waitFor(() => expect(input).not.toBeDisabled());
+    fireEvent.change(input, { target: { value: "Where is the needle?" } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+    for (const o of Object.values(outcomes)) {
+      if (o.status !== "running") await screen.findByText(o.answer);
+    }
+  }
+
+  test("one success among failures is not crowned Cheapest or Fastest", async () => {
+    await runTurn({
+      a: { answer: "⚠️ The provider did not respond in time", seconds: 30, steps: 0, status: "error" },
+      b: { answer: "The window is Friday 00:00-02:00 UTC.", seconds: 6, steps: 2 },
+    });
+    expect(screen.getByText(/Provider a \(failed\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Cheapest:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Fastest:/)).not.toBeInTheDocument();
+  });
+
+  test("an all-$0 tie names no Cheapest; a real time difference still names Fastest", async () => {
+    await runTurn({
+      a: { answer: "Answer A", seconds: 9, steps: 1 },
+      b: { answer: "Answer B", seconds: 4, steps: 3 },
+    });
+    expect(screen.queryByText(/Cheapest:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Fastest:/)).toHaveTextContent("Fastest: Provider b");
+  });
+
+  test("step counts are pluralised", async () => {
+    await runTurn({
+      a: { answer: "Answer A", seconds: 9, steps: 1 },
+      b: { answer: "Answer B", seconds: 4, steps: 3 },
+    });
+    expect(screen.getByText("1 step")).toBeInTheDocument();
+    expect(screen.getByText("3 steps")).toBeInTheDocument();
+  });
+
+  test("a pending response says Generating once, not again below the turn", async () => {
+    await runTurn({
+      a: { answer: "Answer A", seconds: 9, steps: 1 },
+      b: { answer: "", seconds: 0, steps: 0, status: "running" },
+    });
+    expect(screen.getAllByRole("status", { name: "Generating response" })).toHaveLength(1);
+  });
+});

@@ -21,17 +21,18 @@ from pydantic import BaseModel, Field, model_validator
 from rlmstudio.application.dto import RunConfigDTO
 from rlmstudio.application.sandbox_vars import (
     EPHEMERAL_CP_PREFIX,
+    EXTRA_KEY_RAG_CHUNK_OVERLAP,
     MODE_COMPARE,
     MODE_RAG,
     MODE_RLM,
     MODE_RLM_OFFICIAL,
     MODES_RLM_INTERNAL,
-    RESULT_KEY_COST_KNOWN,
     RLM_DEFAULT_MAX_STEPS,
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
     RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS,
     ExecutionMode,
+    slot_mode_label,
 )
 from rlmstudio.application.use_cases.run_matrix_comparison import (
     MatrixComparisonResultDTO,
@@ -202,6 +203,9 @@ class CompareMatrixSlotResponse(BaseModel):
     # False when the run's price is unknown (an unpriced model): its $0 is
     # not free, and the page must rank it last on cost like the server does.
     cost_known: bool = True
+    # False when the run reported no token count (an official-engine
+    # timeout or cost breach): its token fields are 0 by ignorance.
+    tokens_known: bool = True
 
 
 class CompareMatrixResponse(BaseModel):
@@ -266,7 +270,7 @@ def _get_or_create_ephemeral_cp(
     name is removed from the provider list first.
     """
     now = datetime.now(timezone.utc)
-    name = f"{EPHEMERAL_CP_PREFIX}{lp.name} \u00b7 {mode}"
+    name = f"{EPHEMERAL_CP_PREFIX}{lp.name} \u00b7 {slot_mode_label(mode)}"
 
     # Remove stale ephemeral with the same name (dedup / garbage-collect).
     state.config.chat_providers = [
@@ -415,6 +419,7 @@ async def _compare_matrix_v2(
                 slot_extra = {
                     "collection": f"rag_{uuid.uuid4().hex}",
                     "chunk_size": rag_cfg_resolved.chunk_size,
+                    EXTRA_KEY_RAG_CHUNK_OVERLAP: rag_cfg_resolved.chunk_overlap,
                     "top_k": rag_cfg_resolved.top_k,
                 }
 
@@ -430,7 +435,7 @@ async def _compare_matrix_v2(
                     sandbox=sandbox,
                     embedder=embedder,
                     storage=storage,
-                    label=f"{lp.name} \u00b7 {mode}",
+                    label=f"{lp.name} \u00b7 {slot_mode_label(mode)}",
                     provider=backend,
                     model=model_name,
                     config=slot_config,
@@ -456,6 +461,7 @@ async def _compare_matrix_v2(
             )
 
     # --- Fan out -------------------------------------------------------
+    slot_steps_limit = {s.slot_id: s.config.max_steps for s in slots if s.config}
     uc = RunMatrixComparisonUseCase(serial_modes=_serial_modes(state))
     result: MatrixComparisonResultDTO = await asyncio.to_thread(
         uc.execute,
@@ -472,7 +478,9 @@ async def _compare_matrix_v2(
     for slot_result in result.slots:
         meta = slot_meta[slot_result.slot_id]
         execution = state.executions[meta.execution_id]
-        _update_execution_record(execution, slot_result, finish)
+        _update_execution_record(
+            execution, slot_result, finish, slot_steps_limit.get(slot_result.slot_id)
+        )
         _record_slot_telemetry(
             state=state,
             slot_result=slot_result,
@@ -502,6 +510,7 @@ async def _compare_matrix_v2(
                 "cost_usd": slot_result.result.total_cost,
                 "elapsed_seconds": slot_result.result.elapsed_time,
                 "steps": slot_result.result.steps,
+                **slot_result.result.usage_flags(),
             },
             "timestamp": finish.isoformat(),
             "comparison_group_id": result.comparison_group_id,
@@ -530,7 +539,8 @@ async def _compare_matrix_v2(
             total_cost=s.result.total_cost,
             elapsed_seconds=s.result.elapsed_time,
             steps=s.result.steps,
-            cost_known=s.result.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False,
+            cost_known=s.result.cost_known,
+            tokens_known=s.result.tokens_known,
             **_slot_perf_aggregates(s.result.trace),
         )
         for s in result.slots
@@ -671,6 +681,7 @@ async def compare_matrix(
                 slot_extra = {
                     "collection": f"rag_{uuid.uuid4().hex}",
                     "chunk_size": rag_cfg.chunk_size,
+                    EXTRA_KEY_RAG_CHUNK_OVERLAP: rag_cfg.chunk_overlap,
                     "top_k": rag_cfg.top_k,
                 }
 
@@ -689,7 +700,7 @@ async def compare_matrix(
                     sandbox=sandbox,
                     embedder=embedder,
                     storage=storage,
-                    label=f"{cp.name} · {mode}",
+                    label=f"{cp.name} · {slot_mode_label(mode)}",
                     provider=backend,
                     model=model_name,
                     config=slot_config,
@@ -720,6 +731,7 @@ async def compare_matrix(
             )
 
     # --- Fan out via the use case (ThreadPoolExecutor under the hood) -
+    slot_steps_limit = {s.slot_id: s.config.max_steps for s in slots if s.config}
     uc = RunMatrixComparisonUseCase(serial_modes=_serial_modes(state))
     result: MatrixComparisonResultDTO = await asyncio.to_thread(
         uc.execute,
@@ -738,7 +750,9 @@ async def compare_matrix(
         execution = state.executions[meta.execution_id]
 
         # Update in-memory ExecutionRecord so judge/best-pick/quality see it.
-        _update_execution_record(execution, slot_result, finish)
+        _update_execution_record(
+            execution, slot_result, finish, slot_steps_limit.get(slot_result.slot_id)
+        )
 
         # Persist to telemetry store.
         _record_slot_telemetry(
@@ -773,6 +787,7 @@ async def compare_matrix(
                 "cost_usd": slot_result.result.total_cost,
                 "elapsed_seconds": slot_result.result.elapsed_time,
                 "steps": slot_result.result.steps,
+                **slot_result.result.usage_flags(),
             },
             "timestamp": finish.isoformat(),
             "comparison_group_id": result.comparison_group_id,
@@ -802,7 +817,8 @@ async def compare_matrix(
             total_cost=s.result.total_cost,
             elapsed_seconds=s.result.elapsed_time,
             steps=s.result.steps,
-            cost_known=s.result.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False,
+            cost_known=s.result.cost_known,
+            tokens_known=s.result.tokens_known,
             **_slot_perf_aggregates(s.result.trace),
         )
         for s in result.slots
@@ -848,13 +864,15 @@ def _build_slot_run_config(
     llm_provider = state.get_llm_provider(cp.llm_provider_id) if cp.llm_provider_id else None
     provider_key = (llm_provider.backend if llm_provider else None) or cp.llm_provider
     run_config = state.create_run_config(mode=mode, provider_key=provider_key)
+    # The slot's time limit (the LLM Tuner's "Max time", or the profile's)
+    # applies to every mode, not only the RLM ones.
+    run_config.max_time_seconds = float(cp.rlm_timeout_seconds)
 
     # Apply per-provider RLM knobs the same way /api/chat does.  The official
     # engine shares the step/time budgets but runs its own prompts, so the
     # profile system prompt applies to Studio's loop only.
     if mode in MODES_RLM_INTERNAL:
         run_config.max_steps = cp.rlm_max_steps
-        run_config.max_time_seconds = float(cp.rlm_timeout_seconds)
         run_config.repeat_limit = cp.rlm_repeat_limit
         run_config.nudge_at_fraction = cp.rlm_nudge_at_fraction
         if cp.profile_id and mode == MODE_RLM:
@@ -876,6 +894,7 @@ def _update_execution_record(
     execution: ExecutionRecord,
     slot_result: MatrixSlotResultDTO,
     completed_at: datetime,
+    steps_limit: int | None = None,
 ) -> None:
     """Fill in the in-memory :class:`ExecutionRecord` from a slot result.
 
@@ -897,5 +916,10 @@ def _update_execution_record(
         "total_cost": result.total_cost,
         "elapsed_time": result.elapsed_time,
         "steps_count": result.steps,
+        # The slot's own step limit, which Traces shows (not the global one).
+        "steps_limit": steps_limit,
+        # Same as Chat's record: without these Traces showed an unknown
+        # usage as 0 / $0.0000 until the record was re-read from telemetry.
+        **result.usage_flags(),
     }
     execution.steps = list(result.trace)

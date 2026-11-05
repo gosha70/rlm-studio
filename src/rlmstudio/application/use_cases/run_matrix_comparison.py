@@ -12,6 +12,7 @@ matrix run.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -26,11 +27,13 @@ from rlmstudio.application.ports.sandbox_port import SandboxPort
 from rlmstudio.application.ports.storage_port import StoragePort
 from rlmstudio.application.sandbox_vars import (
     MODE_DIRECT,
+    MODE_DISPLAY_NAMES,
     MODE_RAG,
     MODE_RLM,
     MODE_RLM_OFFICIAL,
     RESULT_KEY_COST_KNOWN,
     ExecutionMode,
+    slot_mode_label,
 )
 from rlmstudio.application.use_cases.run_direct import RunDirectUseCase
 from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
@@ -307,6 +310,53 @@ class RunMatrixComparisonUseCase:
             cfg = _copy_config_for_slot(slot.config, slot.mode)
         else:
             cfg = _copy_config_for_slot(base_config, slot.mode)
+        # The official use case enforces its own wall clock; Studio's modes
+        # check time only between steps (Direct and RAG not at all), so a
+        # slow call ran far past the slot's max time and still counted.
+        if slot.mode == MODE_RLM_OFFICIAL or not cfg.max_time_seconds:
+            return self._run_slot(slot, content, query, cfg)
+        return self._run_slot_within_wall_clock(slot, content, query, cfg)
+
+    def _run_slot_within_wall_clock(
+        self,
+        slot: MatrixSlotDTO,
+        content: str,
+        query: str,
+        cfg: RunConfigDTO,
+    ) -> MatrixSlotResultDTO:
+        """Run a Studio slot and give up waiting after ``cfg.max_time_seconds``.
+
+        Mirrors the official engine's guard: the worker is a daemon thread
+        that is not joined on timeout, so the slot gets its classified result
+        on time; the run's own time budget stops the worker at its next step.
+        """
+        timeout = cfg.max_time_seconds or 0.0
+        start = time.time()
+        box: dict[str, MatrixSlotResultDTO] = {}
+
+        def _target() -> None:
+            box["result"] = self._run_slot(slot, content, query, cfg)
+
+        worker = threading.Thread(target=_target, name=f"matrix-slot-{slot.slot_id}", daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if "result" in box:
+            return box["result"]
+        logger.warning(
+            "Matrix slot %s exceeded its %.1fs max time; abandoning the worker thread",
+            slot.slot_id,
+            timeout,
+        )
+        return _timed_out_slot_result(slot, timeout, time.time() - start)
+
+    def _run_slot(
+        self,
+        slot: MatrixSlotDTO,
+        content: str,
+        query: str,
+        cfg: RunConfigDTO,
+    ) -> MatrixSlotResultDTO:
+        """Run one slot to completion; an exception becomes a failed result."""
         try:
             if slot.mode == "direct":
                 result = RunDirectUseCase(slot.llm).execute(content, query, cfg)
@@ -397,6 +447,10 @@ class RunMatrixComparisonUseCase:
                     return (float("inf"), i)
                 return (r.total_cost, i)
             if metric == "tokens":
+                # An unreported token count's 0 is not "fewest": it sorts
+                # last among successes, like an unknown cost.
+                if not r.tokens_known:
+                    return (float("inf"), i)
                 return (float(r.total_tokens), i)
             if metric == "latency":
                 return (r.elapsed_time, i)
@@ -459,7 +513,37 @@ def _copy_config_for_slot(base: RunConfigDTO, mode: str) -> RunConfigDTO:
 def _default_label(slot: MatrixSlotDTO) -> str:
     parts = [p for p in (slot.provider, slot.model) if p]
     base = "/".join(parts) if parts else slot.slot_id
-    return f"{base} · {slot.mode}"
+    return f"{base} · {slot_mode_label(slot.mode)}"
+
+
+def _timed_out_slot_result(
+    slot: MatrixSlotDTO, timeout: float, elapsed: float
+) -> MatrixSlotResultDTO:
+    """A slot abandoned at its max time: a classified timeout, cost unknown."""
+    mode_name = MODE_DISPLAY_NAMES.get(slot.mode, slot.mode)
+    return MatrixSlotResultDTO(
+        slot_id=slot.slot_id,
+        label=slot.label or _default_label(slot),
+        mode=slot.mode,
+        provider=slot.provider,
+        model=slot.model,
+        result=RunResultDTO(
+            answer=(
+                f"⚠️ **{mode_name} run timed out** after {timeout:.0f}s.\n\n"
+                "The run did not finish within its max time.\n\n"
+                "**How to fix:** raise **Max time** in the LLM Tuner (or **Max "
+                "Execution Time (s)** on the Chat Provider's profile), or ask a "
+                "more focused question."
+            ),
+            mode_used=slot.mode,
+            success=False,
+            error=f"{mode_name} run timed out after {timeout:.0f}s (max time)",
+            elapsed_time=elapsed,
+            # The abandoned run spent something this guard cannot see; a known
+            # $0 would understate exactly the runs that ran longest.
+            metadata={RESULT_KEY_COST_KNOWN: False},
+        ),
+    )
 
 
 def _failed_slot_result(slot: MatrixSlotDTO, error: str) -> MatrixSlotResultDTO:

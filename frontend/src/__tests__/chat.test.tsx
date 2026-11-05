@@ -338,7 +338,7 @@ describe("ChatProviderSelector", () => {
     expect(screen.getByRole("button", { name: "Select all providers" })).toBeInTheDocument();
   });
 
-  test("toggle button shows '1' when all selected", () => {
+  test("toggle button reads 'First only' (not a bare '1') when all selected", () => {
     const cp1 = makeCP({ id: "cp-1", name: "GPT-4o Direct", llm_provider_id: "llmp-1" });
     const cp2 = makeCP({ id: "cp-2", name: "Claude Direct", llm_provider_id: "llmp-2" });
     const lp1 = makeLLMProvider({ id: "llmp-1" });
@@ -353,7 +353,37 @@ describe("ChatProviderSelector", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Select first only" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select first only" })).toHaveTextContent(/^First only$/);
+  });
+
+  test("the mode badge letter is explained: chip name and badge tooltip say the mode", () => {
+    const cp1 = makeCP({ id: "cp-1", name: "Qwen RLM", execution_mode: "rlm" });
+    render(
+      <ChatProviderSelector
+        chatProviders={[cp1]}
+        llmProviders={[makeLLMProvider()]}
+        selectedIds={["cp-1"]}
+        onSelectionChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("checkbox", { name: "Qwen RLM, RLM mode (connected)" })).toBeInTheDocument();
+    expect(screen.getByText("R")).toHaveAttribute("title", "RLM mode");
+  });
+
+  test("a long provider name truncates inside its chip (M13)", () => {
+    const longName = "ChatProvLongName" + "a".repeat(140);
+    render(
+      <ChatProviderSelector
+        chatProviders={[makeCP({ name: longName })]}
+        llmProviders={[makeLLMProvider()]}
+        selectedIds={["cp-1"]}
+        onSelectionChange={vi.fn()}
+      />
+    );
+    const chip = screen.getByRole("checkbox", { name: new RegExp(longName) });
+    expect(chip).toHaveAttribute("title", expect.stringContaining(longName));
+    const nameSpan = screen.getByText(longName);
+    expect(nameSpan.className.split(" ")).toEqual(expect.arrayContaining(["truncate", "min-w-0"]));
   });
 
   test("calls onSelectionChange when a provider chip is clicked", () => {
@@ -531,6 +561,12 @@ describe("ResponseRating", () => {
     expect(screen.getByLabelText("Thumbs up").className).not.toMatch(/emerald/);
     expect(screen.getByLabelText("Thumbs down").className).not.toMatch(/red/);
   });
+
+  test("exposes the current rating to assistive tech with aria-pressed", () => {
+    render(<ResponseRating {...baseProps} currentRating="up" />);
+    expect(screen.getByRole("button", { name: "Thumbs up" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Thumbs down" })).toHaveAttribute("aria-pressed", "false");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -591,6 +627,14 @@ describe("PickWinner", () => {
     expect(winnerBtn.className).toMatch(/amber/);
     const otherBtn = screen.getByRole("button", { name: "Claude" });
     expect(otherBtn.className).not.toMatch(/amber/);
+  });
+
+  test("exposes the chosen winner to assistive tech with aria-pressed", () => {
+    render(
+      <PickWinner sessionId="sess-1" responses={responses} currentWinnerId="exec-2" onPick={vi.fn()} />
+    );
+    expect(screen.getByRole("button", { name: "Claude" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "GPT-4o" })).toHaveAttribute("aria-pressed", "false");
   });
 
   test("no highlight when no winner selected", () => {

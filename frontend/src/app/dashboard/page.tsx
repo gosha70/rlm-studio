@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import useSWR, { useSWRConfig } from "swr";
 import { Hash, DollarSign, Clock, Activity, Star, ThumbsUp, ThumbsDown, Trophy, Trash2 } from "lucide-react";
@@ -15,9 +16,28 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getSessions, getMetrics, getFailureMetrics, getEvaluationSummary, getSessionEvaluations, resetSessionEvaluations, type SessionSummary, type MetricsResponse, type FailureMetricsResponse, type EvaluationSummaryResponse, type SessionEvaluations } from "@/lib/api";
+import { getSessions, getMetrics, getFailureMetrics, getEvaluationSummary, getSessionEvaluations, getChatProviders, resetSessionEvaluations, type SessionSummary, type MetricsResponse, type FailureMetricsResponse, type EvaluationSummaryResponse, type SessionEvaluations, type ChatProviderConfig } from "@/lib/api";
 import { JudgeDimensionsChart } from "@/components/metrics/judge-dimensions-chart";
 import { FailureBreakdown } from "@/components/metrics/failure-breakdown";
+import { CHAT_PROVIDERS_SWR_KEY, TRACE_EXEC_PARAM, displayModeName, displayProviderName } from "@/lib/constants";
+import { providerColorMap } from "@/components/metrics/series-colors";
+import { formatCostOrUnknown, formatTokensOrUnknown } from "@/lib/format";
+
+/** Shown in a summary card when there is no run to compute it from. */
+const NO_VALUE = "—";
+
+/**
+ * The fourth summary card. The server's figure is RLM's token saving over
+ * Direct in percent; when RLM used more, a negative percentage such as
+ * "-1734%" says nothing useful, so the card shows how many times Direct's
+ * tokens RLM used instead.
+ */
+function tokenComparisonCard(savingsPercent: number | null | undefined): { label: string; value: string } {
+  if (savingsPercent == null) return { label: "Token Savings", value: "N/A" };
+  if (savingsPercent >= 0) return { label: "Token Savings", value: `${savingsPercent.toFixed(0)}%` };
+  const ratio = 1 - savingsPercent / 100;
+  return { label: "RLM Tokens vs Direct", value: `${ratio.toFixed(1)}×` };
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -61,17 +81,51 @@ export default function DashboardPage() {
     }
   }, [effectiveSession, mutate]);
 
-  const providerNames = Object.fromEntries(
-    Object.values(evalSummary?.by_chat_provider ?? {}).map((p) => [p.chat_provider_id, p.chat_provider_name]),
+  // The user's Chat Providers. LLM Tuner runs use temporary ones that are
+  // not in this list, so the judge cards leave them out like the rest of the
+  // page does (otherwise they show as raw ids and an unnamed recommendation).
+  const { data: chatProviders } = useSWR<ChatProviderConfig[]>(CHAT_PROVIDERS_SWR_KEY, getChatProviders);
+  const chatProviderIds = new Set((chatProviders ?? []).map((cp) => cp.id));
+  const judgedProviders = Object.values(evalSummary?.by_chat_provider ?? {}).filter((p) =>
+    chatProviderIds.has(p.chat_provider_id),
   );
+  const judgeScores = (evalDetail?.judge_scores ?? []).filter((s) => chatProviderIds.has(s.chat_provider_id));
+  const recommended = judgedProviders.find((p) => p.chat_provider_id === evalSummary?.recommendation);
+
+  const providerNames = Object.fromEntries(judgedProviders.map((p) => [p.chat_provider_id, p.chat_provider_name]));
 
   const summary = metrics?.summary;
+  // Totals and averages cover successful runs only (the server leaves
+  // failures out), so with none of those there is nothing to show — not 0.
+  const hasUsableRuns = Object.values(metrics?.by_mode ?? {}).some((m) => (m?.queries ?? 0) > 0);
+
+  const costData =
+    metrics?.by_chat_provider && Object.keys(metrics.by_chat_provider).length > 0
+      ? metrics.by_chat_provider
+      : metrics?.by_provider ?? {};
+  // One colour per Chat Provider across every chart on the page, so a
+  // provider is not blue in the cost pie and green in the trend line.
+  const providerColors = providerColorMap([
+    ...Object.keys(costData).map(displayProviderName),
+    ...(metrics?.timeline ?? []).map((e) => e.chat_provider_name || e.provider || "unknown"),
+    ...Object.keys(failureMetrics?.by_provider ?? {}),
+    ...Object.values(providerNames),
+  ]);
 
   return (
     <AppShell>
       <div className="mx-auto max-w-[1200px] space-y-6 p-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-2xl font-semibold">Dashboard</h2>
+          <div>
+            <h2 className="text-2xl font-semibold">Dashboard</h2>
+            <p className="text-sm text-muted-foreground" data-testid="dashboard-tuner-note">
+              LLM Tuner runs are not counted here; find them in{" "}
+              <Link href="/traces" className="underline hover:text-foreground">
+                Traces
+              </Link>
+              .
+            </p>
+          </div>
           <Select value={effectiveSession} onValueChange={setSelectedSession}>
             <SelectTrigger className="w-56" aria-label="Select session">
               <SelectValue placeholder="Select session..." />
@@ -90,26 +144,29 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <MetricCard
             label="Total Tokens"
-            value={summary ? summary.total_tokens.toLocaleString() : "0"}
+            value={summary && hasUsableRuns ? summary.total_tokens.toLocaleString() : NO_VALUE}
             icon={Hash}
           />
           <MetricCard
             label="Total Cost"
-            value={summary ? `$${summary.total_cost_usd.toFixed(2)}` : "$0.00"}
+            value={summary && hasUsableRuns ? `$${summary.total_cost_usd.toFixed(2)}` : NO_VALUE}
             icon={DollarSign}
           />
           <MetricCard
             label="Avg Latency"
-            value={summary ? summary.avg_latency_seconds.toFixed(1) : "0.0"}
-            unit="s"
+            value={summary && hasUsableRuns ? summary.avg_latency_seconds.toFixed(1) : NO_VALUE}
+            unit={summary && hasUsableRuns ? "s" : undefined}
             icon={Clock}
           />
-          <MetricCard
-            label="Token Savings"
-            value={summary?.avg_token_savings_percent != null ? `${summary.avg_token_savings_percent.toFixed(0)}%` : "N/A"}
-            icon={Activity}
-          />
+          <MetricCard {...tokenComparisonCard(summary?.avg_token_savings_percent)} icon={Activity} />
         </div>
+        {summary && hasUsableRuns && ((summary.cost_unknown_runs ?? 0) > 0 || (summary.tokens_unknown_runs ?? 0) > 0) && (
+          <p className="text-xs text-muted-foreground">
+            Totals are a lower bound:{" "}
+            {Math.max(summary.cost_unknown_runs ?? 0, summary.tokens_unknown_runs ?? 0)} run(s) did not
+            report their full cost or token usage.
+          </p>
+        )}
 
         {isLoading && (
           <div className="grid grid-cols-2 gap-4">
@@ -127,12 +184,7 @@ export default function DashboardPage() {
               ragData={metrics.by_mode.rag}
               officialData={metrics.by_mode.rlm_official}
             />
-            <CostBreakdown
-              data={metrics.by_chat_provider && Object.keys(metrics.by_chat_provider).length > 0
-                ? metrics.by_chat_provider
-                : metrics.by_provider}
-              title="Cost by Chat Provider"
-            />
+            <CostBreakdown data={costData} title="Cost by Chat Provider" colors={providerColors} />
           </div>
         )}
 
@@ -145,12 +197,12 @@ export default function DashboardPage() {
 
         {/* Performance trend */}
         {metrics && metrics.timeline.length > 0 && (
-          <PerformanceTrend timeline={metrics.timeline} />
+          <PerformanceTrend timeline={metrics.timeline} colors={providerColors} />
         )}
 
         {/* Failure breakdown */}
         {failureMetrics && (
-          <FailureBreakdown data={failureMetrics} />
+          <FailureBreakdown data={failureMetrics} colors={providerColors} />
         )}
 
         {/* Recent executions table */}
@@ -176,20 +228,20 @@ export default function DashboardPage() {
                     <TableRow
                       key={i}
                       className={entry.execution_id ? "cursor-pointer hover:bg-muted/50" : undefined}
-                      onClick={entry.execution_id ? () => router.push(`/traces?exec=${entry.execution_id}`) : undefined}
+                      onClick={entry.execution_id ? () => router.push(`/traces?${TRACE_EXEC_PARAM}=${entry.execution_id}`) : undefined}
                     >
                       <TableCell>{i + 1}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{entry.mode.toUpperCase()}</Badge>
+                        <Badge variant="outline">{displayModeName(entry.mode)}</Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">
                         {entry.chat_provider_name || entry.provider || "—"}
                       </TableCell>
                       <TableCell className="text-right">
-                        {entry.tokens.toLocaleString()}
+                        {formatTokensOrUnknown(entry.tokens, entry.tokens_known)}
                       </TableCell>
                       <TableCell className="text-right">
-                        ${entry.cost_usd.toFixed(4)}
+                        {formatCostOrUnknown(entry.cost_usd, entry.cost_known)}
                       </TableCell>
                       <TableCell className="text-right">
                         {entry.latency_seconds.toFixed(1)}s
@@ -203,15 +255,16 @@ export default function DashboardPage() {
         )}
 
         {/* Judge Dimensions Chart */}
-        {evalDetail && evalDetail.judge_scores.length > 0 && (
+        {judgeScores.length > 0 && (
           <JudgeDimensionsChart
-            judgeScores={evalDetail.judge_scores}
+            judgeScores={judgeScores}
             providerNames={providerNames}
+            colors={providerColors}
           />
         )}
 
         {/* Judge Quality Scores */}
-        {evalSummary && Object.keys(evalSummary.by_chat_provider).length > 0 && (
+        {evalSummary && judgedProviders.length > 0 && (
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="flex items-center gap-2 text-base">
@@ -229,10 +282,10 @@ export default function DashboardPage() {
               </button>
             </CardHeader>
             <CardContent className="space-y-4">
-              {evalSummary.recommendation && (
+              {recommended && (
                 <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm dark:border-amber-800 dark:bg-amber-950">
                   <Trophy className="h-4 w-4 text-amber-500" />
-                  <span className="font-medium">Recommendation:</span>
+                  <span className="font-medium">Recommendation: {recommended.chat_provider_name}</span>
                   <span className="text-muted-foreground">{evalSummary.recommendation_reason}</span>
                 </div>
               )}
@@ -252,7 +305,7 @@ export default function DashboardPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {Object.values(evalSummary.by_chat_provider).map((p) => {
+                  {judgedProviders.map((p) => {
                     const isRecommended = p.chat_provider_id === evalSummary.recommendation;
                     const score = p.judge_avg_score;
                     const pct = score != null ? (score / 5) * 100 : null;

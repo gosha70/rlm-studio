@@ -16,6 +16,7 @@ from rlmstudio.server.models import (
     LLMProviderModelsRequest,
     LLMProviderModelsResponse,
     LLMProviderUpdateRequest,
+    LLMProviderView,
     ModelInfo,
     ProviderTestResponse,
     RuntimeSettings,
@@ -57,6 +58,24 @@ def _get_api_key(llm_provider_id: str, backend: str) -> str | None:
     if entry and entry.env_var:
         return os.environ.get(entry.env_var)
     return None
+
+
+def _has_saved_key(llm_provider_id: str) -> bool:
+    """Whether a key is stored for this instance (the environment does not count)."""
+    store = KeyringSecretStore() if KeyringSecretStore.is_available() else FileSecretStore()
+    return bool(store.get(f"llm_provider:{llm_provider_id}"))
+
+
+def _view(lp: LLMProviderConfig) -> LLMProviderView:
+    """The API view of *lp*: computed status, and whether a key is stored."""
+    entry = PROVIDERS_BY_KEY.get(lp.backend)
+    view = LLMProviderView(
+        **lp.model_dump(),
+        # Only cloud backends have a key field in the form.
+        api_key_stored=bool(entry and entry.requires_api_key and _has_saved_key(lp.id)),
+    )
+    view.status = _compute_status(lp)
+    return view
 
 
 def _discover_context_window(backend: str, model: str, endpoint: str | None) -> int | None:
@@ -162,14 +181,9 @@ def _compute_status(lp: LLMProviderConfig) -> str:
 @router.get("/api/llm-providers")
 async def list_llm_providers(
     state: AppState = Depends(get_state),  # noqa: B008
-) -> list[LLMProviderConfig]:
+) -> list[LLMProviderView]:
     """List all named LLM Provider instances with computed status."""
-    result = []
-    for lp in state.config.llm_providers:
-        copy = lp.model_copy()
-        copy.status = _compute_status(lp)
-        result.append(copy)
-    return result
+    return [_view(lp) for lp in state.config.llm_providers]
 
 
 @router.post("/api/llm-providers", status_code=201)
@@ -234,14 +248,12 @@ async def create_llm_provider(
 async def get_llm_provider(
     llm_provider_id: str,
     state: AppState = Depends(get_state),  # noqa: B008
-) -> LLMProviderConfig:
+) -> LLMProviderView:
     """Get a single named LLM Provider by ID."""
     lp = state.get_llm_provider(llm_provider_id)
     if not lp:
         raise HTTPException(status_code=404, detail="LLM Provider not found")
-    result = lp.model_copy()
-    result.status = _compute_status(lp)
-    return result
+    return _view(lp)
 
 
 @router.put("/api/llm-providers/{llm_provider_id}")

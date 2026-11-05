@@ -25,6 +25,7 @@ import {
   deleteProfile,
   updateProfile,
   getPromptTemplates,
+  apiErrorMessage,
   type RunProfile,
   type ChatProviderConfig,
   type SystemPromptTemplate,
@@ -32,8 +33,26 @@ import {
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Trash2, Lock, Edit2, Copy, Download, ChevronDown, ChevronUp, FlaskConical } from "lucide-react";
-import { MODE_RLM, displayModeName } from "@/lib/constants";
+import {
+  MAX_OUTPUT_TOKENS_LIMIT,
+  MODE_RLM,
+  RLM_DEFAULT_NUDGE_AT_FRACTION,
+  displayModeName,
+} from "@/lib/constants";
 import { StrategySelectItems } from "./strategy-select-items";
+import {
+  BUDGET_MAX_COST_USD,
+  BUDGET_MAX_RECURSION_DEPTH,
+  BUDGET_MAX_REPEAT_LIMIT,
+  BUDGET_MAX_STEPS,
+  BUDGET_MAX_TIME_SECONDS,
+  BUDGET_MAX_TOKENS,
+  BUDGET_MIN_COST_USD,
+  BUDGET_MIN_TOKENS,
+  RUNTIME_MAX_TIMEOUT_SECONDS,
+  decimalProblem,
+  wholeNumberProblem,
+} from "./input-limits";
 import { RefinementPanel } from "./refinement-panel";
 
 interface ProfileCardProps {
@@ -76,10 +95,16 @@ export function ProfileCard({
     max_time_seconds: String(profile.budget.max_time_seconds),
     max_recursion_depth: String(profile.budget.max_recursion_depth),
     repeat_limit: String(profile.budget.repeat_limit ?? 2),
-    nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? 0.6),
+    nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? RLM_DEFAULT_NUDGE_AT_FRACTION),
     prompt_template_name: profile.prompt_template_name as string | null,
     rlm_prompt: profile.system_prompts?.[MODE_RLM] ?? "",
   });
+
+  // Editing a field clears the last Save message: it described the old values.
+  const updateEditData = (patch: Partial<typeof editData>) => {
+    setMessage(null);
+    setEditData((prev) => ({ ...prev, ...patch }));
+  };
 
   const usedBy = chatProviders.filter((cp) => cp.profile_id === profile.id);
 
@@ -94,8 +119,8 @@ export function ProfileCard({
     try {
       await deleteProfile(profile.id);
       onDeleted?.();
-    } catch {
-      setMessage("Failed to delete profile");
+    } catch (err) {
+      setMessage(`Profile not deleted: ${apiErrorMessage(err)}`);
       setDeleting(false);
     }
   };
@@ -114,8 +139,8 @@ export function ProfileCard({
         prompt_template_name: profile.prompt_template_name,
       });
       onCloned?.();
-    } catch {
-      setMessage("Failed to clone profile");
+    } catch (err) {
+      setMessage(`Failed to clone profile: ${apiErrorMessage(err)}`);
     } finally {
       setCloning(false);
     }
@@ -136,7 +161,7 @@ export function ProfileCard({
       max_time_seconds: String(profile.budget.max_time_seconds),
       max_recursion_depth: String(profile.budget.max_recursion_depth),
       repeat_limit: String(profile.budget.repeat_limit ?? 2),
-      nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? 0.6),
+      nudge_at_fraction: String(profile.budget.nudge_at_fraction ?? RLM_DEFAULT_NUDGE_AT_FRACTION),
       prompt_template_name: profile.prompt_template_name,
       rlm_prompt: profile.system_prompts?.[MODE_RLM] ?? "",
     });
@@ -165,67 +190,67 @@ export function ProfileCard({
   };
 
   const MIN_TIMEOUT_SECONDS = 5;
+  const MIN_EXECUTION_TIME_SECONDS = 10;
 
   const handleSaveEdit = async () => {
-    // Strict parsers that reject partial matches like "5s", "1.5foo", "1e3".
-    const strictInt = (s: string): number => {
-      const trimmed = s.trim();
-      return /^-?\d+$/.test(trimmed) ? parseInt(trimmed, 10) : NaN;
-    };
-    const strictFloat = (s: string): number => {
-      const trimmed = s.trim();
-      return /^-?\d+(\.\d+)?$/.test(trimmed) ? parseFloat(trimmed) : NaN;
-    };
 
-    // Parse all string fields back to numbers and validate before saving.
-    const temperature = strictFloat(editData.temperature);
-    const topP = strictFloat(editData.top_p);
-    const maxTokens = strictInt(editData.max_output_tokens);
-    const timeout = strictInt(editData.timeout_seconds);
-    const maxSteps = strictInt(editData.max_steps);
-    const maxTokensBudget = strictInt(editData.max_tokens);
-    const maxCost = strictFloat(editData.max_cost_usd);
-    const maxTime = strictInt(editData.max_time_seconds);
-    const maxRecursion = strictInt(editData.max_recursion_depth);
-    const repeatLimit = strictInt(editData.repeat_limit);
-    const nudgeFraction = strictFloat(editData.nudge_at_fraction);
+    // Validate every edited field before saving; the first problem is shown.
+    const problem =
+      decimalProblem("Temperature", editData.temperature, 0, 2) ??
+      decimalProblem("Top P", editData.top_p, 0, 1) ??
+      wholeNumberProblem("Max Tokens", editData.max_output_tokens, 1, MAX_OUTPUT_TOKENS_LIMIT) ??
+      wholeNumberProblem(
+        "Timeout (s)",
+        editData.timeout_seconds,
+        MIN_TIMEOUT_SECONDS,
+        RUNTIME_MAX_TIMEOUT_SECONDS,
+      ) ??
+      wholeNumberProblem("Max Steps", editData.max_steps, 1, BUDGET_MAX_STEPS) ??
+      decimalProblem(
+        "Max Cost ($)",
+        editData.max_cost_usd,
+        BUDGET_MIN_COST_USD,
+        BUDGET_MAX_COST_USD,
+      ) ??
+      wholeNumberProblem("Repeat Limit", editData.repeat_limit, 1, BUDGET_MAX_REPEAT_LIMIT) ??
+      decimalProblem("Nudge at Fraction", editData.nudge_at_fraction, 0.1, 1) ??
+      wholeNumberProblem(
+        "Max Execution Time (s)",
+        editData.max_time_seconds,
+        MIN_EXECUTION_TIME_SECONDS,
+        BUDGET_MAX_TIME_SECONDS,
+      ) ??
+      // Editable since an older profile can hold a value the API now refuses;
+      // a hidden field would block every save with no way to fix it.
+      wholeNumberProblem(
+        "Max Tokens (budget)",
+        editData.max_tokens,
+        BUDGET_MIN_TOKENS,
+        BUDGET_MAX_TOKENS,
+      ) ??
+      wholeNumberProblem(
+        "Max Recursion Depth",
+        editData.max_recursion_depth,
+        0,
+        BUDGET_MAX_RECURSION_DEPTH,
+      );
+    if (problem) {
+      setMessage(problem);
+      return;
+    }
 
-    if (isNaN(temperature) || temperature < 0 || temperature > 2) {
-      setMessage("Temperature must be between 0 and 2");
-      return;
-    }
-    if (isNaN(topP) || topP < 0 || topP > 1) {
-      setMessage("Top P must be between 0 and 1");
-      return;
-    }
-    if (isNaN(maxTokens) || maxTokens < 1) {
-      setMessage("Max Tokens must be at least 1");
-      return;
-    }
-    if (isNaN(timeout) || timeout < MIN_TIMEOUT_SECONDS) {
-      setMessage(`Timeout must be at least ${MIN_TIMEOUT_SECONDS} seconds`);
-      return;
-    }
-    if (isNaN(maxSteps) || maxSteps < 1) {
-      setMessage("Max Steps must be at least 1");
-      return;
-    }
-    if (isNaN(maxCost) || maxCost < 0) {
-      setMessage("Max Cost must be 0 or greater");
-      return;
-    }
-    if (isNaN(repeatLimit) || repeatLimit < 1) {
-      setMessage("Repeat Limit must be at least 1");
-      return;
-    }
-    if (isNaN(nudgeFraction) || nudgeFraction < 0.1 || nudgeFraction > 1) {
-      setMessage("Nudge at Fraction must be between 0.1 and 1.0");
-      return;
-    }
-    if (isNaN(maxTime) || maxTime < 10) {
-      setMessage("Max Execution Time must be at least 10 seconds");
-      return;
-    }
+    const temperature = Number(editData.temperature.trim());
+    const topP = Number(editData.top_p.trim());
+    const maxTokens = Number(editData.max_output_tokens.trim());
+    const timeout = Number(editData.timeout_seconds.trim());
+    const maxSteps = Number(editData.max_steps.trim());
+    const maxCost = Number(editData.max_cost_usd.trim());
+    const repeatLimit = Number(editData.repeat_limit.trim());
+    const nudgeFraction = Number(editData.nudge_at_fraction.trim());
+    const maxTime = Number(editData.max_time_seconds.trim());
+
+    const maxTokensBudget = Number(editData.max_tokens.trim());
+    const maxRecursion = Number(editData.max_recursion_depth.trim());
 
     // Keep every stored per-mode prompt; only the RLM entry is editable here.
     // An empty RLM field removes the key so the profile follows its prompt group.
@@ -251,10 +276,10 @@ export function ProfileCard({
         },
         budget: {
           max_steps: maxSteps,
-          max_tokens: isNaN(maxTokensBudget) ? 0 : maxTokensBudget,
+          max_tokens: maxTokensBudget,
           max_cost_usd: maxCost,
           max_time_seconds: maxTime,
-          max_recursion_depth: isNaN(maxRecursion) ? 0 : maxRecursion,
+          max_recursion_depth: maxRecursion,
           repeat_limit: repeatLimit,
           nudge_at_fraction: nudgeFraction,
         },
@@ -263,8 +288,8 @@ export function ProfileCard({
       });
       toast.success("Profile saved");
       onUpdated?.();
-    } catch {
-      setMessage("Failed to update profile");
+    } catch (err) {
+      setMessage(`Failed to update profile: ${apiErrorMessage(err)}`);
     } finally {
       setSaving(false);
     }
@@ -274,9 +299,9 @@ export function ProfileCard({
     <Collapsible open={expanded} onOpenChange={setExpanded}>
     <Card>
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-sm">{profile.name}</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <CardTitle className="min-w-0 text-sm wrap-anywhere">{profile.name}</CardTitle>
             {profile.is_builtin && (
               <Badge variant="secondary" className="text-xs">
                 <Lock className="mr-1 h-3 w-3" aria-hidden="true" />
@@ -287,7 +312,7 @@ export function ProfileCard({
               {displayModeName(profile.strategy)}
             </Badge>
           </div>
-          <div className="flex gap-1">
+          <div className="flex shrink-0 gap-1">
             {!profile.is_builtin && (
               <Button
                 variant="ghost"
@@ -364,7 +389,7 @@ export function ProfileCard({
         </div>
 
         {usedBy.length > 0 ? (
-          <p className="text-xs text-muted-foreground mt-2">
+          <p className="text-xs text-muted-foreground mt-2 wrap-anywhere">
             Used by: {usedBy.map((cp) => cp.name).join(", ")}
           </p>
         ) : (
@@ -397,7 +422,7 @@ export function ProfileCard({
             <span className="text-muted-foreground">Repeat Limit</span>
             <span>{profile.budget.repeat_limit ?? 2}</span>
             <span className="text-muted-foreground">Nudge at Fraction</span>
-            <span>{profile.budget.nudge_at_fraction ?? 0.6}</span>
+            <span>{profile.budget.nudge_at_fraction ?? RLM_DEFAULT_NUDGE_AT_FRACTION}</span>
             <span className="text-muted-foreground">Prompt Group</span>
             <span>{profile.prompt_template_name ?? "Global defaults"}</span>
             <span className="text-muted-foreground">Custom RLM prompt</span>
@@ -413,14 +438,14 @@ export function ProfileCard({
                 id={`edit-name-${profile.id}`}
                 className="h-8 text-xs"
                 value={editData.name}
-                onChange={(e) => setEditData({ ...editData, name: e.target.value })}
+                onChange={(e) => updateEditData({ name: e.target.value })}
               />
             </div>
             <div className="space-y-1">
               <Label htmlFor={`edit-strategy-${profile.id}`} className="text-xs">Strategy</Label>
               <Select
                 value={editData.strategy}
-                onValueChange={(v) => setEditData({ ...editData, strategy: v })}
+                onValueChange={(v) => updateEditData({ strategy: v })}
               >
                 <SelectTrigger id={`edit-strategy-${profile.id}`} className="h-8 text-xs">
                   <SelectValue />
@@ -436,7 +461,7 @@ export function ProfileCard({
                 id={`edit-desc-${profile.id}`}
                 className="h-8 text-xs"
                 value={editData.description}
-                onChange={(e) => setEditData({ ...editData, description: e.target.value })}
+                onChange={(e) => updateEditData({ description: e.target.value })}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -450,7 +475,7 @@ export function ProfileCard({
                   max="2"
                   className="h-8 text-xs"
                   value={editData.temperature}
-                  onChange={(e) => setEditData({ ...editData, temperature: e.target.value })}
+                  onChange={(e) => updateEditData({ temperature: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -463,7 +488,7 @@ export function ProfileCard({
                   max="1"
                   className="h-8 text-xs"
                   value={editData.top_p}
-                  onChange={(e) => setEditData({ ...editData, top_p: e.target.value })}
+                  onChange={(e) => updateEditData({ top_p: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -474,7 +499,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.max_output_tokens}
-                  onChange={(e) => setEditData({ ...editData, max_output_tokens: e.target.value })}
+                  onChange={(e) => updateEditData({ max_output_tokens: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -485,7 +510,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.timeout_seconds}
-                  onChange={(e) => setEditData({ ...editData, timeout_seconds: e.target.value })}
+                  onChange={(e) => updateEditData({ timeout_seconds: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -496,7 +521,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.max_steps}
-                  onChange={(e) => setEditData({ ...editData, max_steps: e.target.value })}
+                  onChange={(e) => updateEditData({ max_steps: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -507,7 +532,29 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.max_time_seconds}
-                  onChange={(e) => setEditData({ ...editData, max_time_seconds: e.target.value })}
+                  onChange={(e) => updateEditData({ max_time_seconds: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <FieldLabel htmlFor={`edit-max-tokens-budget-${profile.id}`} className="text-xs" tooltip="Total tokens one query may use across all steps. The run stops once it is reached.">Max Tokens (budget)</FieldLabel>
+                <Input
+                  id={`edit-max-tokens-budget-${profile.id}`}
+                  type="text"
+                  inputMode="numeric"
+                  className="h-8 text-xs"
+                  value={editData.max_tokens}
+                  onChange={(e) => updateEditData({ max_tokens: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <FieldLabel htmlFor={`edit-max-recursion-${profile.id}`} className="text-xs" tooltip="How many levels of sub-RLM calls a run may nest. 0 allows none.">Max Recursion Depth</FieldLabel>
+                <Input
+                  id={`edit-max-recursion-${profile.id}`}
+                  type="text"
+                  inputMode="numeric"
+                  className="h-8 text-xs"
+                  value={editData.max_recursion_depth}
+                  onChange={(e) => updateEditData({ max_recursion_depth: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -518,7 +565,7 @@ export function ProfileCard({
                   inputMode="decimal"
                   className="h-8 text-xs"
                   value={editData.max_cost_usd}
-                  onChange={(e) => setEditData({ ...editData, max_cost_usd: e.target.value })}
+                  onChange={(e) => updateEditData({ max_cost_usd: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -529,7 +576,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.repeat_limit}
-                  onChange={(e) => setEditData({ ...editData, repeat_limit: e.target.value })}
+                  onChange={(e) => updateEditData({ repeat_limit: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -542,7 +589,7 @@ export function ProfileCard({
                   max="1.0"
                   className="h-8 text-xs"
                   value={editData.nudge_at_fraction}
-                  onChange={(e) => setEditData({ ...editData, nudge_at_fraction: e.target.value })}
+                  onChange={(e) => updateEditData({ nudge_at_fraction: e.target.value })}
                 />
               </div>
             </div>
@@ -555,8 +602,7 @@ export function ProfileCard({
               <Select
                 value={editData.prompt_template_name ?? "__global__"}
                 onValueChange={(value) => {
-                  setEditData({
-                    ...editData,
+                  updateEditData({
                     prompt_template_name: value === "__global__" ? null : value,
                   });
                 }}
@@ -592,7 +638,7 @@ export function ProfileCard({
                 id={`edit-rlm-prompt-${profile.id}`}
                 className="min-h-24 text-xs font-mono"
                 value={editData.rlm_prompt}
-                onChange={(e) => setEditData({ ...editData, rlm_prompt: e.target.value })}
+                onChange={(e) => updateEditData({ rlm_prompt: e.target.value })}
               />
             </div>
             <div className="flex gap-2">
@@ -611,12 +657,14 @@ export function ProfileCard({
           </div>
         )}
 
+        </CollapsibleContent>
+        {/* Outside the collapsible part: a refused delete must be visible
+            on a collapsed card, which is where the Delete button is. */}
         {message && (
           <p className="text-xs text-destructive mt-2" role="status">
             {message}
           </p>
         )}
-        </CollapsibleContent>
       </CardContent>
     </Card>
     {refining && (

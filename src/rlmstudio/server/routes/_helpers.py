@@ -224,6 +224,8 @@ def _record_slot_telemetry(
             outcome_category=outcome.category.value,
             profile_id=meta.profile_id,
             content_sha256=content_sha256,
+            cost_known=result.cost_known,
+            tokens_known=result.tokens_known,
         )
         # Canonicalize action types to match in-memory traces / JSONL exports.
         total = len(result.trace)

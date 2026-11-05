@@ -66,6 +66,18 @@ ProviderStatus = Literal["connected", "offline", "error"]
 # visually, but the full 300 chars is useful in logs and API responses.
 _ERROR_MESSAGE_MAX_LEN = 300
 
+# litellm repeats its message after this label ("Request timed out. Error_str:
+# Request timed out."); the label is internal and the repeat is noise.
+_LITELLM_ERROR_STR_LABEL = " Error_str: "
+
+# What to do when the probe times out.  The run path's advice (raise the
+# runtime timeout) does not apply: the probe has its own fixed timeout, and
+# the usual cause is a local server still loading the model.
+_PROBE_TIMEOUT_FIX = (
+    "A local server may still be loading the model, or the provider may be busy. "
+    "Wait a moment, then test again."
+)
+
 # Hard cap on test duration: timeout_s + this small overhead.  Used only as a
 # diagnostic log threshold; the real bound is enforced by litellm's timeout
 # kwarg.
@@ -181,6 +193,9 @@ def _sanitize_error_message(exc: BaseException) -> str:
     msg = str(exc)
     if " - " in msg:
         msg = msg.split(" - ", 1)[1]
+    head, label, tail = msg.partition(_LITELLM_ERROR_STR_LABEL)
+    if label:
+        msg = head if tail.strip() in head else f"{head} {tail}"
     # Redaction lives in provider_failure so the run path, which also shows
     # upstream text now, shares exactly these patterns (#95).
     redacted = redact_secrets(msg)
@@ -313,6 +328,7 @@ def test_provider(
                 model=provider.model,
                 api_base=provider.endpoint,
             )
+            fix = _PROBE_TIMEOUT_FIX if kind is ProviderFailureKind.TIMEOUT else failure.fix
             return ProviderTestResult(
                 status="offline",
                 tested_at=tested_at,
@@ -320,7 +336,7 @@ def test_provider(
                 error_message=msg,
                 failure_kind=kind,
                 failure_cause=failure.cause,
-                failure_fix=failure.fix,
+                failure_fix=fix,
             )
 
         # Success path

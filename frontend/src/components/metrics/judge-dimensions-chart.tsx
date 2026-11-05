@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Scale } from "lucide-react";
 import type { JudgeScoreData } from "@/lib/api";
 import { useChartTooltipStyle } from "./use-chart-tooltip";
+import { providerColorMap } from "./series-colors";
 
 const DIM_LABELS: Record<string, string> = {
   relevance: "Relevance",
@@ -24,26 +25,22 @@ const DIM_LABELS: Record<string, string> = {
   conciseness: "Conciseness",
 };
 
-const PROVIDER_COLORS = [
-  "#f59e0b", // amber-400
-  "#3b82f6", // blue-500
-  "#10b981", // emerald-500
-  "#8b5cf6", // violet-500
-  "#ef4444", // red-500
-];
-
 interface JudgeDimensionsChartProps {
   judgeScores: JudgeScoreData[];
   /** Map of chat_provider_id → display name */
   providerNames: Record<string, string>;
+  /** Provider display name → colour, shared across the page's charts. */
+  colors?: Record<string, string>;
 }
 
-export function JudgeDimensionsChart({ judgeScores, providerNames }: JudgeDimensionsChartProps) {
+export function JudgeDimensionsChart({ judgeScores, providerNames, colors }: JudgeDimensionsChartProps) {
   const tooltipStyle = useChartTooltipStyle();
   if (judgeScores.length === 0) return null;
 
   // Collect all providers and dimension names from the data
   const providerIds = [...new Set(judgeScores.map((s) => s.chat_provider_id))];
+  const nameOf = (pid: string) => providerNames[pid] ?? pid;
+  const colorOf = { ...providerColorMap(providerIds.map(nameOf)), ...colors };
   const allDims = [
     ...new Set(judgeScores.flatMap((s) => Object.keys(s.dimensions))),
   ].sort();
@@ -65,7 +62,7 @@ export function JudgeDimensionsChart({ judgeScores, providerNames }: JudgeDimens
       dim: DIM_LABELS[dim] ?? dim,
     };
     for (const pid of providerIds) {
-      entry[providerNames[pid] ?? pid] = Number((avgByProviderDim[pid][dim] ?? 0).toFixed(2));
+      entry[nameOf(pid)] = Number((avgByProviderDim[pid][dim] ?? 0).toFixed(2));
     }
     return entry;
   });
@@ -98,11 +95,11 @@ export function JudgeDimensionsChart({ judgeScores, providerNames }: JudgeDimens
                 formatter={(v) => (typeof v === "number" ? v.toFixed(2) : v)}
               />
               <Legend wrapperStyle={{ fontSize: "12px" }} />
-              {providerIds.map((pid, i) => (
+              {providerIds.map((pid) => (
                 <Bar
                   key={pid}
-                  dataKey={providerNames[pid] ?? pid}
-                  fill={PROVIDER_COLORS[i % PROVIDER_COLORS.length]}
+                  dataKey={nameOf(pid)}
+                  fill={colorOf[nameOf(pid)]}
                   radius={[3, 3, 0, 0]}
                 />
               ))}

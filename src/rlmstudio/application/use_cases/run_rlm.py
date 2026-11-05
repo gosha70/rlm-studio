@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 import re
 import threading
@@ -80,6 +81,121 @@ if TYPE_CHECKING:
     from rlmstudio.core.parsing import ParsedResponse
 
 logger = logging.getLogger(__name__)
+
+# Which budget limit stopped a run (see ``RunRLMUseCase._exceeded_limit``);
+# the official engine's adapter names its own stops with the same values.
+LIMIT_TOKENS = "tokens"
+LIMIT_COST = "cost"
+LIMIT_TIME = "time"
+LIMIT_STEPS = "steps"
+
+# Where a run's step limit is set: the Chat Provider's profile, or the LLM
+# Tuner's own control for a Compare run.  Chat Providers have no such field.
+_MAX_STEPS_HINT = (
+    "- Increase **Max Steps** on the Chat Provider's profile (Settings → Profiles), "
+    "or **Max steps** in the LLM Tuner.\n"
+)
+# Where a run's time limit is set, likewise.
+MAX_TIME_HINT = (
+    "- Increase **Max Execution Time (s)** on the Chat Provider's profile "
+    "(Settings → Profiles), or **Max time** in the LLM Tuner.\n"
+)
+
+# The repeat limit ends the loop: a trace row, and the answer when no answer
+# could be synthesised from what was inspected.
+_REPEAT_LIMIT_NOTE = (
+    "Repeat limit reached: the same inspect result came back {repeats} more "
+    "time(s); answering from what was inspected."
+)
+_REPEAT_LIMIT_WARNING = (
+    "⚠️ **Run stopped at the repeat limit** after {steps} steps: the model "
+    "kept inspecting the same content ({repeats} repeats) and no answer could "
+    "be written from what it found.\n\n"
+    "**How to fix:**\n"
+    "- Ask a more focused question.\n"
+    "- Or raise **Repeat Limit** on the Chat Provider's profile "
+    "(Settings → Profiles), or in the LLM Tuner."
+)
+
+# How a stop on the first step is worded; "after 1 steps" read as a typo.
+_FIRST_STEP_PHRASE = "on the first step"
+
+# A final action whose JSON did not parse (see ``_recover_final_answer``).
+_FINAL_TYPE_RE = re.compile(r'"type"\s*:\s*"final"')
+_ANSWER_VALUE_RE = re.compile(r'"answer"\s*:\s*(?=")')
+
+
+def budget_stop_outcome(
+    limit: str | None,
+    state: BudgetState,
+    config: BudgetConfig,
+    partial: str = "",
+    exc: BaseException | None = None,
+    usage_note: str = "",
+) -> tuple[str, str]:
+    """Return ``(answer, error)`` for a run stopped by budget *limit*.
+
+    The answer leads with a warning naming the limit that was hit and
+    where to change it, followed by any partial answer.  The error
+    carries the keyword the outcome classifier keys on ("budget", or
+    "timed out" for the time limit), so the run is classified as
+    stopped rather than as a success.  *limit* is one of the ``LIMIT_*``
+    names, or ``None`` for the no-progress circuit breaker (*exc* says why).
+    Shared with the official engine's adapter so both engines word a stop
+    the same way.  *usage_note*, when given, follows the warning to say
+    why the run's usage figures are missing.
+    """
+    steps = state.steps
+    when = _FIRST_STEP_PHRASE if steps == 1 else f"after {steps} steps"
+    if limit == LIMIT_TOKENS:
+        max_tokens = config.max_tokens or 0
+        warning = (
+            f"⚠️ **Token budget exceeded** {when} "
+            f"({state.total_tokens:,} of {max_tokens:,} tokens).\n\n"
+            "**How to fix** — in Settings → Budget:\n"
+            "- Increase **Max Tokens**.\n"
+            "- Or ask a more focused question."
+        )
+        error = f"Budget exceeded: the {max_tokens:,}-token limit was reached {when}"
+    elif limit == LIMIT_COST:
+        max_cost = config.max_cost or 0.0
+        warning = (
+            f"⚠️ **Cost budget exceeded** {when} "
+            f"(${state.cost:.4f} of ${max_cost:.4f}).\n\n"
+            "**How to fix** — in Settings → Budget:\n"
+            "- Increase **Max Cost (USD)**.\n"
+            "- Or ask a more focused question."
+        )
+        error = f"Budget exceeded: the ${max_cost:.4f} cost limit was reached {when}"
+    elif limit == LIMIT_TIME:
+        seconds = round(config.max_time_seconds or 0)
+        warning = (
+            f"⚠️ **Execution timed out** {when} ({seconds}s limit).\n\n"
+            "**How to fix:**\n" + MAX_TIME_HINT + "- Or ask a more focused question."
+        )
+        error = f"Execution timed out: the {seconds}s time limit was reached {when}"
+    elif limit == LIMIT_STEPS:
+        max_steps = config.max_steps or 0
+        warning = (
+            f"⚠️ **Step budget exhausted** ({steps} of {max_steps} steps used) "
+            "without producing a complete answer.\n\n"
+            "**How to fix:**\n" + _MAX_STEPS_HINT + "- Or ask a more focused question."
+        )
+        error = f"Budget exceeded: the {max_steps}-step limit was reached"
+    else:
+        warning = (
+            f"⚠️ **Run stopped** {when}: the model kept replying "
+            "without code or a final answer.\n\n"
+            "**How to fix:**\n"
+            "- Ask a more focused question, or try a model that follows the "
+            "RLM action format more reliably."
+        )
+        error = f"Budget exceeded: stall limit reached ({exc})"
+    if usage_note:
+        warning = f"{warning}\n\n{usage_note}"
+    if partial:
+        return f"{warning}\n\n---\n\n**Partial answer**\n\n{partial}", error
+    return warning, error
 
 
 @dataclass(frozen=True)
@@ -201,6 +317,7 @@ class RunRLMUseCase:
         overflow_at_step: int | None = None  # set when context window is exceeded mid-loop
         recent_exec_hashes: list[int] = []  # last N inspect result hashes for repeat detection
         repeat_count = 0  # consecutive duplicate inspect results
+        repeat_stopped = False  # set when repeat_limit ends the loop
         repeat_limit = config.repeat_limit
         nudge_sent = False  # soft convergence nudge (sent once)
         hard_nudge_sent = False  # stronger convergence nudge near the end
@@ -564,11 +681,25 @@ class RunRLMUseCase:
                         if is_repeat:
                             repeat_count += 1
                             if repeat_count >= repeat_limit:
-                                repeat_nudge = get_rlm_message("repeat_detected")
+                                repeat_stopped = True
                             else:
                                 repeat_nudge = get_rlm_message("duplicate_result")
                         else:
                             repeat_count = 0
+
+                    # At the repeat limit, stop asking for more inspections and
+                    # answer from what was inspected (synthesis after the loop).
+                    if repeat_stopped:
+                        trace_seq += 1
+                        trace.append(
+                            {
+                                TRACE_KEY_STEP: budget_state.steps,
+                                TRACE_KEY_SEQ: trace_seq,
+                                TRACE_KEY_ROLE: "system",
+                                TRACE_KEY_CONTENT: _REPEAT_LIMIT_NOTE.format(repeats=repeat_count),
+                            }
+                        )
+                        break
 
                     messages.append({"role": "assistant", "content": text})
                     # Truncate large execution outputs before adding to message
@@ -850,8 +981,11 @@ class RunRLMUseCase:
                 answer = synth_response.content.strip() or (
                     "The content was inspected but contained no extractable themes."
                 )
-                # If the synthesis call itself returned a JSON action blob
-                # (model stuck in action mode), fall through to the limit warning.
+                # Stopped at the repeat limit, the model is still in action mode
+                # and may answer with a final action; take its answer.  Any other
+                # JSON action blob falls through to the limit warning.
+                if repeat_stopped:
+                    answer = self._recover_final_answer(answer) or answer
                 if not self._looks_like_action(answer):
                     elapsed = time.time() - start
                     return RunResultDTO(
@@ -871,6 +1005,25 @@ class RunRLMUseCase:
             if hasattr(self._llm, "use_root_model"):
                 self._llm.use_root_model()
             elapsed = time.time() - start
+            if repeat_stopped:
+                # Stopped by a limit, like a budget stop: not a success.
+                return RunResultDTO(
+                    answer=_REPEAT_LIMIT_WARNING.format(
+                        steps=budget_state.steps, repeats=repeat_count
+                    ),
+                    mode_used=MODE_RLM,
+                    success=False,
+                    error=(
+                        f"Budget exceeded: the repeat limit ({repeat_limit}) was "
+                        f"reached after {budget_state.steps} steps"
+                    ),
+                    steps=budget_state.steps,
+                    input_tokens=cumulative_input,
+                    output_tokens=cumulative_output,
+                    total_cost=cumulative_cost,
+                    elapsed_time=elapsed,
+                    trace=trace,
+                )
             return RunResultDTO(
                 answer=self._format_limit_warning(
                     overflow_step=overflow_at_step,
@@ -888,8 +1041,8 @@ class RunRLMUseCase:
             )
 
         except BudgetExceededError as exc:
-            # Config/limit hit — return a warning, not an error, so the user
-            # knows exactly which setting to change. success=True lets Auto-Judge run.
+            # Config/limit hit — the answer names the limit and the setting to
+            # change; the run is a failure, classified by the limit it hit.
             if hasattr(self._llm, "use_root_model"):
                 self._llm.use_root_model()
             elapsed = time.time() - start
@@ -947,17 +1100,34 @@ class RunRLMUseCase:
                             elapsed_time=time.time() - start,
                             trace=trace,
                         )
-            warning = self._format_limit_warning(
-                overflow_step=overflow_at_step,
-                steps_used=budget_state.steps,
-                config=budget_config,
-                exc=exc,
-            )
-            answer = (partial + "\n\n---\n\n" + warning) if partial else warning
+            if overflow_at_step is not None:
+                warning = self._format_limit_warning(
+                    overflow_step=overflow_at_step,
+                    steps_used=budget_state.steps,
+                    config=budget_config,
+                )
+                answer = (partial + "\n\n---\n\n" + warning) if partial else warning
+                return RunResultDTO(
+                    answer=answer,
+                    mode_used=MODE_RLM,
+                    success=True,
+                    steps=budget_state.steps,
+                    input_tokens=cumulative_input,
+                    output_tokens=cumulative_output,
+                    total_cost=cumulative_cost,
+                    elapsed_time=elapsed,
+                    trace=trace,
+                )
+            # A raw JSON action is not a partial answer worth showing.
+            if partial and self._looks_like_action(partial):
+                partial = ""
+            budget_state.elapsed_seconds = elapsed
+            answer, error = self._budget_stop_outcome(budget_state, budget_config, partial, exc)
             return RunResultDTO(
                 answer=answer,
                 mode_used=MODE_RLM,
-                success=True,
+                success=False,
+                error=error,
                 steps=budget_state.steps,
                 input_tokens=cumulative_input,
                 output_tokens=cumulative_output,
@@ -1123,6 +1293,7 @@ class RunRLMUseCase:
         overflow_at_step: int | None = None  # set when context window is exceeded mid-loop
         recent_exec_hashes: list[int] = []  # last N inspect result hashes for repeat detection
         repeat_count = 0  # consecutive duplicate inspect results
+        repeat_stopped = False  # set when repeat_limit ends the loop
         repeat_limit = config.repeat_limit
         nudge_sent = False  # soft convergence nudge (sent once)
         hard_nudge_sent = False  # stronger convergence nudge near the end
@@ -1524,11 +1695,25 @@ class RunRLMUseCase:
                         if is_repeat:
                             repeat_count += 1
                             if repeat_count >= repeat_limit:
-                                repeat_nudge = get_rlm_message("repeat_detected")
+                                repeat_stopped = True
                             else:
                                 repeat_nudge = get_rlm_message("duplicate_result")
                         else:
                             repeat_count = 0
+
+                    # At the repeat limit, stop asking for more inspections and
+                    # answer from what was inspected (synthesis after the loop).
+                    if repeat_stopped:
+                        trace_seq += 1
+                        trace.append(
+                            {
+                                TRACE_KEY_STEP: budget_state.steps,
+                                TRACE_KEY_SEQ: trace_seq,
+                                TRACE_KEY_ROLE: "system",
+                                TRACE_KEY_CONTENT: _REPEAT_LIMIT_NOTE.format(repeats=repeat_count),
+                            }
+                        )
+                        break
 
                     messages.append({"role": "assistant", "content": text})
                     # Truncate large execution outputs before adding to message
@@ -1809,8 +1994,11 @@ class RunRLMUseCase:
                 answer = synth_response.content.strip() or (
                     "The content was inspected but contained no extractable themes."
                 )
-                # If the synthesis call itself returned a JSON action blob
-                # (model stuck in action mode), fall through to the limit warning.
+                # Stopped at the repeat limit, the model is still in action mode
+                # and may answer with a final action; take its answer.  Any other
+                # JSON action blob falls through to the limit warning.
+                if repeat_stopped:
+                    answer = self._recover_final_answer(answer) or answer
                 if not self._looks_like_action(answer):
                     elapsed = time.time() - start
                     return RunResultDTO(
@@ -1830,6 +2018,25 @@ class RunRLMUseCase:
             if hasattr(self._llm, "use_root_model"):
                 self._llm.use_root_model()
             elapsed = time.time() - start
+            if repeat_stopped:
+                # Stopped by a limit, like a budget stop: not a success.
+                return RunResultDTO(
+                    answer=_REPEAT_LIMIT_WARNING.format(
+                        steps=budget_state.steps, repeats=repeat_count
+                    ),
+                    mode_used=MODE_RLM,
+                    success=False,
+                    error=(
+                        f"Budget exceeded: the repeat limit ({repeat_limit}) was "
+                        f"reached after {budget_state.steps} steps"
+                    ),
+                    steps=budget_state.steps,
+                    input_tokens=cumulative_input,
+                    output_tokens=cumulative_output,
+                    total_cost=cumulative_cost,
+                    elapsed_time=elapsed,
+                    trace=trace,
+                )
             return RunResultDTO(
                 answer=self._format_limit_warning(
                     overflow_step=overflow_at_step,
@@ -1847,8 +2054,8 @@ class RunRLMUseCase:
             )
 
         except BudgetExceededError as exc:
-            # Config/limit hit — return a warning, not an error, so the user
-            # knows exactly which setting to change. success=True lets Auto-Judge run.
+            # Config/limit hit — the answer names the limit and the setting to
+            # change; the run is a failure, classified by the limit it hit.
             if hasattr(self._llm, "use_root_model"):
                 self._llm.use_root_model()
             elapsed = time.time() - start
@@ -1913,17 +2120,34 @@ class RunRLMUseCase:
                             elapsed_time=time.time() - start,
                             trace=trace,
                         )
-            warning = self._format_limit_warning(
-                overflow_step=overflow_at_step,
-                steps_used=budget_state.steps,
-                config=budget_config,
-                exc=exc,
-            )
-            answer = (partial + "\n\n---\n\n" + warning) if partial else warning
+            if overflow_at_step is not None:
+                warning = self._format_limit_warning(
+                    overflow_step=overflow_at_step,
+                    steps_used=budget_state.steps,
+                    config=budget_config,
+                )
+                answer = (partial + "\n\n---\n\n" + warning) if partial else warning
+                return RunResultDTO(
+                    answer=answer,
+                    mode_used=MODE_RLM,
+                    success=True,
+                    steps=budget_state.steps,
+                    input_tokens=cumulative_input,
+                    output_tokens=cumulative_output,
+                    total_cost=cumulative_cost,
+                    elapsed_time=elapsed,
+                    trace=trace,
+                )
+            # A raw JSON action is not a partial answer worth showing.
+            if partial and self._looks_like_action(partial):
+                partial = ""
+            budget_state.elapsed_seconds = elapsed
+            answer, error = self._budget_stop_outcome(budget_state, budget_config, partial, exc)
             return RunResultDTO(
                 answer=answer,
                 mode_used=MODE_RLM,
-                success=True,
+                success=False,
+                error=error,
                 steps=budget_state.steps,
                 input_tokens=cumulative_input,
                 output_tokens=cumulative_output,
@@ -2445,6 +2669,9 @@ class RunRLMUseCase:
                         )
             except Exception:  # nosec B110 — intentional: v2 JSON parse failure falls through to v1 markdown parser below
                 pass
+            recovered = self._recover_final_answer(text)
+            if recovered is not None:
+                return ParsedResponse(final_answer=recovered, raw_text=text)
 
         # v1.0 markdown / plain-text fallback.
         # Re-use is_inspect so the synthesis fallback works for models that
@@ -2468,6 +2695,31 @@ class RunRLMUseCase:
         ):
             result.is_inspect = True
         return result
+
+    @staticmethod
+    def _recover_final_answer(text: str) -> str | None:
+        """Read the answer out of a final action whose JSON did not parse.
+
+        Small local models often emit a final action with a missing closing
+        brace or an invalid optional field; the raw JSON was then shown and
+        ranked as the answer.  Returns ``None`` unless the text is a final
+        action (optionally fenced) with a non-empty string ``answer``.
+        """
+        body = text.strip()
+        if body.startswith("```"):
+            body = body.split("\n", 1)[-1].lstrip()
+        if not body.startswith("{") or not _FINAL_TYPE_RE.search(body):
+            return None
+        match = _ANSWER_VALUE_RE.search(body)
+        if match is None:
+            return None
+        try:
+            answer, _ = json.JSONDecoder().raw_decode(body, match.end())
+        except ValueError:
+            return None
+        if isinstance(answer, str) and answer.strip():
+            return answer.strip()
+        return None
 
     @staticmethod
     def _inspect_to_code(action_obj: Any) -> str | None:
@@ -2566,16 +2818,14 @@ class RunRLMUseCase:
         overflow_step: int | None = None,
         steps_used: int = 0,
         config: BudgetConfig | None = None,
-        exc: Exception | None = None,
     ) -> str:
-        """Return a user-friendly warning for known configuration-driven limits.
+        """Return a user-friendly warning for a context overflow or used-up steps.
 
         These are *not* bugs — they indicate that the provider's settings need
         adjustment.  The warning includes specific mitigation steps so the user
-        knows exactly what to change.
+        knows exactly what to change.  A run stopped by a budget limit is
+        described by :meth:`_budget_stop_outcome` instead.
         """
-        exc_msg = str(exc).lower() if exc else ""
-
         if overflow_step is not None:
             return (
                 f"⚠️ **Context window exceeded** at step {overflow_step}.\n\n"
@@ -2587,34 +2837,43 @@ class RunRLMUseCase:
                 "leaves very little room for the growing conversation context.\n"
                 "- Or reduce **Max Steps** to limit how deep the exploration goes."
             )
-        if "timeout" in exc_msg or ("time" in exc_msg and "budget" in exc_msg):
-            timeout = config.max_time_seconds if config else None
-            timeout_str = f" ({int(timeout)}s limit)" if timeout else ""
-            return (
-                f"⚠️ **Execution timed out** after {steps_used} steps{timeout_str}.\n\n"
-                "**How to fix** — in Settings → Chat Providers → [this provider]:\n"
-                "- Increase **Timeout** to allow more time for analysis."
-            )
-        if "token" in exc_msg and any(
-            kw in exc_msg for kw in ("budget", "exceed", "maximum", "limit")
-        ):
-            max_tok = config.max_tokens if config else None
-            tok_str = f" (limit: {max_tok:,})" if max_tok else ""
-            return (
-                f"⚠️ **Token budget exceeded** after {steps_used} steps{tok_str}.\n\n"
-                "**How to fix** — in Settings → Budget:\n"
-                "- Increase **Max Tokens** per execution."
-            )
         # Generic steps-exhausted case
         max_steps = config.max_steps if config else None
         steps_str = f" of {max_steps}" if max_steps else ""
         return (
             f"⚠️ **Step budget exhausted** ({steps_used}{steps_str} steps used) "
             "without producing a complete answer.\n\n"
-            "**How to fix** — in Settings → Chat Providers → [this provider]:\n"
-            "- Increase **Max Steps** to allow deeper document analysis.\n"
-            "- Or ask a more focused question."
+            "**How to fix:**\n" + _MAX_STEPS_HINT + "- Or ask a more focused question."
         )
+
+    @staticmethod
+    def _exceeded_limit(state: BudgetState, config: BudgetConfig) -> str | None:
+        """Name the budget limit *state* has reached, or ``None`` if none has.
+
+        Mirrors :meth:`BudgetState.is_within`, so a stopped run names the
+        limit that actually stopped it.  ``None`` means the run was stopped
+        for another reason (the no-progress circuit breaker).
+        """
+        if config.max_tokens is not None and state.total_tokens >= config.max_tokens:
+            return LIMIT_TOKENS
+        if config.max_cost is not None and state.cost >= config.max_cost:
+            return LIMIT_COST
+        if config.max_time_seconds is not None and state.elapsed_seconds >= config.max_time_seconds:
+            return LIMIT_TIME
+        if config.max_steps is not None and state.steps > config.max_steps:
+            return LIMIT_STEPS
+        return None
+
+    @classmethod
+    def _budget_stop_outcome(
+        cls,
+        state: BudgetState,
+        config: BudgetConfig,
+        partial: str,
+        exc: BudgetExceededError,
+    ) -> tuple[str, str]:
+        """Return ``(answer, error)`` for a run stopped by a budget limit."""
+        return budget_stop_outcome(cls._exceeded_limit(state, config), state, config, partial, exc)
 
     @staticmethod
     def _format_timeout_warning(timeout_seconds: float | None, steps_used: int) -> str:

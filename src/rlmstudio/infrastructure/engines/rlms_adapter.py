@@ -50,6 +50,7 @@ from rlmstudio.application.sandbox_vars import (
     RESULT_KEY_COST_KNOWN,
     RESULT_KEY_ENGINE_NOTES,
     RESULT_KEY_ENGINE_VERSION,
+    RESULT_KEY_TOKENS_KNOWN,
     TRACE_KEY_CODE,
     TRACE_KEY_CONTENT,
     TRACE_KEY_ELAPSED_SECONDS,
@@ -61,6 +62,22 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_STEP,
 )
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailureError,
+    ProviderFailureKind,
+    classify_provider_failure,
+    describe_provider_failure,
+    failure_answer,
+    redact_secrets,
+    strip_html,
+)
+from rlmstudio.application.use_cases.run_rlm import (
+    LIMIT_COST,
+    LIMIT_TIME,
+    LIMIT_TOKENS,
+    budget_stop_outcome,
+)
+from rlmstudio.domain.entities import BudgetConfig, BudgetState
 from rlmstudio.envs.in_process_state import acquire_exclusive, release_exclusive
 
 logger = logging.getLogger(__name__)
@@ -120,6 +137,13 @@ _ENGINE_TIMEOUT_MARGIN_CAP_SECONDS = 5.0
 # swaps this process's streams and directory.  One at a time inside a run, too.
 _LOCAL_MAX_CONCURRENT_SUBCALLS = 1
 
+# The engine's partial answer is its last step's raw response; one with a code
+# block in it is REPL code, not an answer, and stays in the trace only.
+_CODE_FENCE = "```"
+# Title of a run's answer card for an unclassified failure, as Studio's own runs.
+_ERROR_TITLE = "⚠️ **Execution error**."
+_BUSY_TITLE = "⚠️ **The official engine is busy**."
+
 # Deepest sub-call nesting converted into trace entries.  The trajectory comes
 # from another library, so the walk is bounded rather than trusting its shape.
 MAX_TRACE_RECURSION_DEPTH = 8
@@ -154,12 +178,40 @@ NOTE_INTERRUPTED_TOKENS_UNKNOWN = (
     "The run was stopped by a cap that reported no token count, so this run's tokens "
     "are shown as 0; the cost, where known, is the figure the cap was checked against."
 )
+NOTE_TIMEOUT_USAGE_UNKNOWN = (
+    "Usage isn't available for this run: the official engine reports no token or "
+    "cost figures when it stops on its own time limit, so its tokens and cost are "
+    "unknown, not zero."
+)
 BUSY_REASON = (
     "Another in-process RLM cell — an official run or a Studio sandbox — is still "
     "holding the process's shared streams and working directory, which only one such "
     "environment can use at a time. Select the Docker sandbox in Settings to run "
     "official slots side by side."
 )
+BUSY_AFTER_TIMEOUT_REASON = (
+    "A previous official RLM run timed out but is still finishing in the background: "
+    "the engine cannot be stopped mid-step, so it keeps the in-process REPL until its "
+    "current step ends. Try again shortly, or select the Docker sandbox in Settings to "
+    "run official runs side by side."
+)
+
+
+# The engine checks these caps after an iteration has run but before its
+# logger records it, so the iteration that tripped the cap is missing from the
+# captured trajectory and has to be counted on top of it.  (The time limit is
+# checked before an iteration starts, so the captured count is already right.)
+_LIMITS_CHECKED_BEFORE_LOGGING = frozenset({LIMIT_COST, LIMIT_TOKENS})
+
+
+class _ExclusiveHolder:
+    """When the official run holding the in-process REPL runs out of time.
+
+    ``None`` while no official run holds it.  Past the deadline, that run's
+    caller has given up on it and only its abandoned thread is left.
+    """
+
+    deadline: float | None = None
 
 
 def _installed_version() -> str | None:
@@ -215,9 +267,11 @@ def engine_timeout(max_time_seconds: float | None) -> float | None:
 
     Both clocks measure the same budget, but the use case's guard starts first,
     so an equal deadline means the guard always wins — and the guard can only
-    abandon the run, reporting no tokens, no cost and no trace.  Stopping the
-    engine a little earlier instead lets it raise its own timeout, which carries
-    the usage and the trajectory to report.  The guard remains the backstop for
+    abandon the run, reporting no trace at all.  Stopping the engine a little
+    earlier instead lets it raise its own timeout, after which the trajectory
+    its logger captured can still be reported.  The usage cannot: the engine's
+    timeout carries no token or cost figures, so the run is reported with its
+    cost unknown (:data:`NOTE_TIMEOUT_USAGE_UNKNOWN`).  The guard remains the backstop for
     the case the engine cannot handle: a REPL execution stuck inside one
     iteration, which it never gets to check between.
     """
@@ -428,12 +482,23 @@ class RlmsEngineAdapter:
         if not acquire_exclusive(timeout=self._lock_wait(config)):
             logger.warning("Official RLM engine busy: in-process cell state still held")
             # ``queued_at`` so the failed slot reports the time it spent waiting.
-            return self._failed(BUSY_REASON, queued_at, environment, config)
+            return self._failed(self._busy_reason(), queued_at, environment, config)
+        budget = config.max_time_seconds
+        _ExclusiveHolder.deadline = None if budget is None else queued_at + budget
         try:
             queued_config = self._config_after_queueing(config, queued_at)
             return self._run_engine(content, query, queued_config, environment, environment_kwargs)
         finally:
+            _ExclusiveHolder.deadline = None
             release_exclusive()
+
+    @staticmethod
+    def _busy_reason() -> str:
+        """Why the REPL is still taken: an abandoned timed-out run, or any other holder."""
+        deadline = _ExclusiveHolder.deadline
+        if deadline is not None and time.time() >= deadline:
+            return BUSY_AFTER_TIMEOUT_REASON
+        return BUSY_REASON
 
     @staticmethod
     def _lock_wait(config: RunConfigDTO) -> float:
@@ -493,14 +558,17 @@ class RlmsEngineAdapter:
         try:
             # ``prompt`` is the context the REPL exposes; ``root_prompt`` is the question.
             completion = engine.completion(prompt=content, root_prompt=query)
-        except (rlm.BudgetExceededError, rlm.TokenLimitExceededError) as exc:
-            return self._interrupted(
-                f"Budget exceeded: {exc}", exc, trajectory, start, environment, config
-            )
+        except rlm.BudgetExceededError as exc:
+            return self._interrupted(LIMIT_COST, exc, trajectory, start, environment, config)
+        except rlm.TokenLimitExceededError as exc:
+            return self._interrupted(LIMIT_TOKENS, exc, trajectory, start, environment, config)
         except rlm.TimeoutExceededError as exc:
-            return self._interrupted(
-                f"Official RLM engine timed out: {exc}", exc, trajectory, start, environment, config
-            )
+            return self._interrupted(LIMIT_TIME, exc, trajectory, start, environment, config)
+        except Exception as exc:
+            classified = self._classified(exc)
+            if classified is None:
+                raise
+            raise classified from exc
         finally:
             engine.close()
         return self._to_result(completion, start, environment, config)
@@ -552,6 +620,23 @@ class RlmsEngineAdapter:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _classified(self, exc: BaseException) -> ProviderFailureError | None:
+        """A provider failure the engine hit, worded like Studio's own runs.
+
+        The engine calls the provider through its own client, so a dead
+        server surfaced as the bare "Connection error." with no endpoint
+        and no fix.  ``None`` when the failure is not a recognised provider
+        failure, so it keeps its own detail.
+        """
+        kind = classify_provider_failure(exc)
+        if kind is ProviderFailureKind.UNKNOWN:
+            return None
+        failure = describe_provider_failure(kind, model=self._model, api_base=self._base_url)
+        detail = redact_secrets(strip_html(str(exc)))
+        return ProviderFailureError(
+            f"{failure.cause} {failure.fix} (Detail: {detail})", failure, detail
+        )
 
     def _engine_backend(self) -> tuple[str, dict[str, Any]]:
         """Map Studio's provider onto an ``rlms`` backend + client kwargs, or raise ``ValueError``."""
@@ -626,6 +711,7 @@ class RlmsEngineAdapter:
         *,
         cost_known: bool,
         interrupted_tokens: int | None = None,
+        usage_unknown: bool = False,
     ) -> list[str]:
         """Notes for one result.
 
@@ -633,13 +719,18 @@ class RlmsEngineAdapter:
         count when it had one, 0 when the breach reported none, and ``None``
         for a run that was not interrupted.  The two cases get different notes
         because claiming a combined total was recorded would be false when no
-        count was ever reported.
+        count was ever reported.  ``usage_unknown`` marks a stop that reported
+        neither tokens nor cost (an engine timeout): one note says so, in place
+        of the notes that blame a missing price or a missing token count.
         """
         notes = [NOTE_NO_STREAMING, NOTE_NO_STEP_TOKENS]
         if environment == _ENV_LOCAL:
             notes.append(NOTE_LOCAL_ENV)
         if config.max_recursion_depth <= 0:
             notes.append(NOTE_NO_SUBCALL_FLOOR)
+        if usage_unknown:
+            notes.append(NOTE_TIMEOUT_USAGE_UNKNOWN)
+            return notes
         if not cost_known:
             notes.append(NOTE_COST_UNKNOWN)
         if interrupted_tokens is not None:
@@ -668,11 +759,14 @@ class RlmsEngineAdapter:
         }
         error = getattr(completion, "error", None)
         if error:
+            classified = self._classified(RuntimeError(str(error)))
             return RunResultDTO(
-                answer=f"⚠️ **Execution error**.\n\n{error}",
+                answer=(failure_answer(classified) if classified else None)
+                or f"{_ERROR_TITLE}\n\n{error}",
                 mode_used=MODE_RLM_OFFICIAL,
                 success=False,
-                error=str(error),
+                error=str(classified or error),
+                failure_kind=classified.kind.value if classified else None,
                 steps=steps,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -697,9 +791,9 @@ class RlmsEngineAdapter:
     def _failed(
         self, error: str, start: float, environment: str, config: RunConfigDTO
     ) -> RunResultDTO:
-        """Failed result for a run that never reached the engine (nothing was spent)."""
+        """Failed result for a run that never got the engine (nothing was spent)."""
         return RunResultDTO(
-            answer=f"⚠️ **Execution error**.\n\n{error}",
+            answer=f"{_BUSY_TITLE}\n\n{error}",
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
             error=error,
@@ -713,7 +807,7 @@ class RlmsEngineAdapter:
 
     def _interrupted(
         self,
-        error: str,
+        limit: str,
         exc: BaseException,
         trajectory: Any,
         start: float,
@@ -737,7 +831,7 @@ class RlmsEngineAdapter:
         reports money but no tokens, so the token count stays 0 under
         :data:`NOTE_INTERRUPTED_TOKENS_UNKNOWN`; a timeout reports neither, so
         the cost is unknown rather than $0 — a run does not become free by
-        being cut short.
+        being cut short — and the answer says so (:data:`NOTE_TIMEOUT_USAGE_UNKNOWN`).
         """
         captured = trajectory.get_trajectory() if hasattr(trajectory, "get_trajectory") else None
         partial = str(getattr(exc, "partial_answer", None) or "")
@@ -748,6 +842,7 @@ class RlmsEngineAdapter:
         )
         tokens_used = int(getattr(exc, "tokens_used", 0) or 0)
         spent: float | None = getattr(exc, "spent", None)
+        usage_unknown = limit == LIMIT_TIME and spent is None and not tokens_used
         if spent is not None:
             total_cost, cost_known = float(spent), True
         elif tokens_used:
@@ -758,15 +853,33 @@ class RlmsEngineAdapter:
             # not "none used", so the cost-table shortcut in _price for a run
             # that genuinely used nothing must not apply.
             total_cost, cost_known = 0.0, False
-        answer = f"⚠️ **Execution error**.\n\n{error}"
-        if partial:
-            answer = f"{answer}\n\n**Partial answer**\n\n{partial}"
+        steps = len((captured or {}).get("iterations") or [])
+        if limit in _LIMITS_CHECKED_BEFORE_LOGGING:
+            steps += 1
+        # Worded like Studio's own budget stops: the limit, where to change it.
+        answer, error = budget_stop_outcome(
+            limit,
+            BudgetState(
+                steps=steps,
+                input_tokens=tokens_used,
+                cost=total_cost,
+                elapsed_seconds=time.time() - start,
+            ),
+            BudgetConfig(
+                max_steps=config.max_steps,
+                max_tokens=getattr(exc, "token_limit", None) or config.max_tokens,
+                max_cost=getattr(exc, "budget", None) or config.max_cost,
+                max_time_seconds=config.max_time_seconds,
+            ),
+            "" if _CODE_FENCE in partial else partial,
+            usage_note=NOTE_TIMEOUT_USAGE_UNKNOWN if usage_unknown else "",
+        )
         return RunResultDTO(
             answer=answer,
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
             error=error,
-            steps=len((captured or {}).get("iterations") or []),
+            steps=steps,
             input_tokens=tokens_used,
             total_cost=total_cost,
             elapsed_time=time.time() - start,
@@ -774,8 +887,15 @@ class RlmsEngineAdapter:
             metadata={
                 RESULT_KEY_ENGINE_VERSION: self.version,
                 RESULT_KEY_COST_KNOWN: cost_known,
+                # A breach that reported no token count (a timeout, a cost
+                # breach) records 0 tokens; this says the 0 is not a count.
+                RESULT_KEY_TOKENS_KNOWN: bool(tokens_used),
                 RESULT_KEY_ENGINE_NOTES: self._notes(
-                    environment, config, cost_known=cost_known, interrupted_tokens=tokens_used
+                    environment,
+                    config,
+                    cost_known=cost_known,
+                    interrupted_tokens=tokens_used,
+                    usage_unknown=usage_unknown,
                 ),
             },
         )

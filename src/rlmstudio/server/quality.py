@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from rlmstudio.application.sandbox_vars import EPHEMERAL_CP_PREFIX
 from rlmstudio.application.services.outcome_classifier import classify_execution_outcome
 from rlmstudio.server.models import ProviderQualityScore
 
@@ -112,6 +113,31 @@ def _collect_cp_ids_from_session(state: AppState, session_id: str) -> set[str]:
     return cp_ids
 
 
+def _is_tuner_provider(state: AppState, session_id: str, cp_id: str) -> bool:
+    """True for an LLM Tuner's temporary Chat Provider.
+
+    While it exists it is marked ephemeral; once gone (they are never saved),
+    the name it ran under is still on its messages and executions.
+    """
+    cp = state.get_chat_provider(cp_id)
+    if cp is not None:
+        return cp.ephemeral or cp.name.startswith(EPHEMERAL_CP_PREFIX)
+    names: list[str] = []
+    session = state.sessions.get(session_id)
+    if session:
+        names.extend(
+            msg.get("chat_provider_name") or ""
+            for msg in session.messages
+            if msg.get("chat_provider_id") == cp_id
+        )
+    names.extend(
+        rec.chat_provider_name or ""
+        for rec in state.executions.values()
+        if rec.session_id == session_id and rec.chat_provider_id == cp_id
+    )
+    return any(name.startswith(EPHEMERAL_CP_PREFIX) for name in names)
+
+
 class QualityEngine:
     WEIGHTS = {
         "manual_thumb": 0.20,
@@ -140,6 +166,11 @@ class QualityEngine:
             cp_ids.add(t["chat_provider_id"])
         for s in judge_scores:
             cp_ids.add(s["chat_provider_id"])
+
+        # LLM Tuner runs are not Chat Providers a user can pick, so they get
+        # no card and are never recommended (the Dashboard's other metrics
+        # leave them out too).
+        cp_ids = {cp_id for cp_id in cp_ids if not _is_tuner_provider(state, session_id, cp_id)}
 
         # Pre-compute per-provider cost/speed for normalization
         all_costs: dict[str, float] = {}

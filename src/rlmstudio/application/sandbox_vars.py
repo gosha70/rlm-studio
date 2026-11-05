@@ -39,6 +39,10 @@ EXTRA_KEY_HISTORY_VARIABLE = "history_variable"
 """Key in ``RunConfigDTO.extra`` that carries the ``history`` list from
 ``_prepare_history_context`` in ``chat.py`` to ``RunRLMUseCase``."""
 
+EXTRA_KEY_RAG_CHUNK_OVERLAP = "chunk_overlap"
+"""Key in ``RunConfigDTO.extra`` that carries the RAG Chunk Overlap (characters
+shared by neighbouring chunks) from the routes to ``RunRAGUseCase``."""
+
 EXTRA_KEY_HISTORY_MESSAGES = "history_messages"
 """Key in ``RunConfigDTO.extra`` that carries prior-turn chat messages
 (native user/assistant pairs) for Direct, Compare, and RAG modes."""
@@ -77,6 +81,28 @@ request model and use case imports one alias instead of repeating the set.
 
 ChatMode: TypeAlias = Literal["auto", "rlm", "direct", "rag", "compare", "rlm_official"]
 """Modes accepted by ``POST /api/chat``.  ``auto`` never resolves to ``rlm_official``."""
+
+MODE_RLM_OFFICIAL_LABEL: Final = "Official RLM (rlms)"
+"""How ``rlm_official`` is spelled in text users read (never the raw id)."""
+
+MODE_DISPLAY_NAMES: Final[dict[str, str]] = {
+    MODE_DIRECT: "Direct",
+    MODE_RLM: "RLM",
+    MODE_RAG: "RAG",
+    MODE_RLM_OFFICIAL: MODE_RLM_OFFICIAL_LABEL,
+}
+"""How a mode is spelled in text users read; matches the frontend's
+``MODE_DISPLAY_NAMES`` (``frontend/src/lib/constants.ts``)."""
+
+
+def slot_mode_label(mode: str) -> str:
+    """The mode as written in a server-built slot label ("<name> · <mode>").
+
+    Only the official engine's id is replaced; the other ids already read
+    as words and existing labels keep them.
+    """
+    return MODE_RLM_OFFICIAL_LABEL if mode == MODE_RLM_OFFICIAL else mode
+
 
 # Modes that use RLM internally (RLM run config applies)
 MODES_RLM_INTERNAL = frozenset({MODE_RLM, MODE_AUTO, MODE_COMPARE, MODE_RLM_OFFICIAL})
@@ -185,6 +211,8 @@ RESULT_KEY_ENGINE_VERSION = "engine_version"
 """``RunResultDTO.metadata`` key: version of the third-party engine that ran."""
 RESULT_KEY_COST_KNOWN = "cost_known"
 """``RunResultDTO.metadata`` key: ``False`` when no price was reported or derivable, so ``total_cost`` is 0 by ignorance, not by measurement."""
+RESULT_KEY_TOKENS_KNOWN = "tokens_known"
+"""``RunResultDTO.metadata`` key: ``False`` when the engine reported no token count, so the token fields are 0 by ignorance, not by measurement."""
 RESULT_KEY_ENGINE_NOTES = "engine_notes"
 """``RunResultDTO.metadata`` key: user-facing caveats about the engine run (list of strings)."""
 

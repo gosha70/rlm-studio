@@ -5,7 +5,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from rlmstudio.application.sandbox_vars import TRACE_KEY_COST, TRACE_KEY_COST_KNOWN
+from rlmstudio.application.sandbox_vars import (
+    MODES_RLM_INTERNAL,
+    RESULT_KEY_COST_KNOWN,
+    RESULT_KEY_TOKENS_KNOWN,
+    TRACE_KEY_COST,
+    TRACE_KEY_COST_KNOWN,
+)
 from rlmstudio.infrastructure.llm.pricing import completion_cost
 from rlmstudio.server.dependencies import AppState, ExecutionRecord, get_state
 from rlmstudio.server.models import (
@@ -32,6 +38,9 @@ class ExecutionSummary(BaseModel):
     total_cost: float = 0.0
     chat_provider_id: str | None = None
     chat_provider_name: str | None = None
+    # False when the run reported no cost / no token count: the 0 is unknown.
+    cost_known: bool = True
+    tokens_known: bool = True
 
 
 @router.get("/api/executions")
@@ -71,6 +80,8 @@ async def list_executions(
                     total_cost=rd.get("total_cost", 0.0),
                     chat_provider_id=e.chat_provider_id,
                     chat_provider_name=e.chat_provider_name,
+                    cost_known=rd.get(RESULT_KEY_COST_KNOWN, True),
+                    tokens_known=rd.get(RESULT_KEY_TOKENS_KNOWN, True),
                 ),
             )
         )
@@ -101,6 +112,8 @@ async def list_executions(
                     total_cost=r.total_cost,
                     chat_provider_id=r.chat_provider_id,
                     chat_provider_name=r.chat_provider_name,
+                    cost_known=r.cost_known,
+                    tokens_known=r.tokens_known,
                 ),
             )
         )
@@ -189,6 +202,27 @@ def _forget_message_metrics(state: AppState, execution_ids: set[str] | None) -> 
         state.save_sessions()
 
 
+def _run_steps_limit(
+    state: AppState,
+    mode: str,
+    chat_provider_id: str | None,
+    recorded: int | None,
+) -> int:
+    """The step limit a run ran under, for the Traces budget line.
+
+    Runs record their own limit; for one that did not (a persisted run, or
+    one from before the limit was recorded) the Chat Provider's current
+    limit applies to RLM modes, as it does when a run starts.  Otherwise
+    the global budget's.
+    """
+    if recorded is not None:
+        return recorded
+    cp = state.get_chat_provider(chat_provider_id) if chat_provider_id else None
+    if cp is not None and mode in MODES_RLM_INTERNAL:
+        return state.resolve_chat_provider(cp).rlm_max_steps
+    return state.config.budget.max_steps
+
+
 def _trace_from_execution_record(execution: ExecutionRecord, state: AppState) -> TraceResponse:
     """Build TraceResponse from an in-memory ExecutionRecord.
 
@@ -261,10 +295,19 @@ def _trace_from_execution_record(execution: ExecutionRecord, state: AppState) ->
             input_tokens=result_data.get("input_tokens", 0),
             output_tokens=result_data.get("output_tokens", 0),
             total_cost=result_data.get("total_cost", 0.0),
+            cost_known=result_data.get(RESULT_KEY_COST_KNOWN, True),
+            tokens_known=result_data.get(RESULT_KEY_TOKENS_KNOWN, True),
         ),
         budget=TraceBudget(
-            steps_used=len(execution.steps),
-            steps_limit=state.config.budget.max_steps,
+            # The run's own step count (what its answer and footer report),
+            # not the number of trace rows; rows predating it fall back.
+            steps_used=result_data.get("steps_count", len(execution.steps)),
+            steps_limit=_run_steps_limit(
+                state,
+                execution.mode,
+                execution.chat_provider_id,
+                result_data.get("steps_limit"),
+            ),
             tokens_used=result_data.get("total_tokens", 0),
             tokens_limit=state.config.budget.max_tokens,
             cost_used=result_data.get("total_cost", 0.0),
@@ -338,10 +381,12 @@ def _trace_from_telemetry(
             input_tokens=detail.input_tokens,
             output_tokens=detail.output_tokens,
             total_cost=detail.total_cost,
+            cost_known=detail.cost_known,
+            tokens_known=detail.tokens_known,
         ),
         budget=TraceBudget(
             steps_used=detail.steps_count,
-            steps_limit=state.config.budget.max_steps,
+            steps_limit=_run_steps_limit(state, detail.mode, detail.chat_provider_id, None),
             tokens_used=detail.total_tokens,
             tokens_limit=state.config.budget.max_tokens,
             cost_used=detail.total_cost,

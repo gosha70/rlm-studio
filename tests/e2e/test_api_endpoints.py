@@ -130,6 +130,15 @@ class TestFileUploadEndpoints:
         assert resp.status_code == 201
         assert resp.json()["name"] == "readme.md"
 
+    def test_upload_empty_file_returns_400(self, client: TestClient) -> None:
+        """Browser pre-pass M7: a 0-byte file was accepted as an attachment."""
+        resp = client.post(
+            "/api/files/upload",
+            files={"file": ("empty.txt", b"", "text/plain")},
+        )
+        assert resp.status_code == 400
+        assert "empty" in resp.json()["error"]["message"]
+
     def test_upload_unsupported_type_returns_400(self, client: TestClient) -> None:
         resp = client.post(
             "/api/files/upload",

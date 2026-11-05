@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { User, Bot, Sparkles, Loader2, ChevronDown, ChevronRight, Terminal, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/shared/app-shell";
+import { COST_UNKNOWN_HINT, TOKENS_UNKNOWN_HINT, formatCostOrUnknown, formatTokensOrUnknown } from "@/lib/format";
+import { CHAT_PROVIDERS_SWR_KEY, SESSIONS_SWR_KEY } from "@/lib/constants";
 import { ChatProviderSelector } from "@/components/chat/chat-provider-selector";
 import { ChatInput } from "@/components/chat/chat-input";
 import { FileAttachment } from "@/components/chat/file-attachment";
@@ -47,6 +49,17 @@ import {
   storageKeyFilesForSession,
 } from "@/lib/branding";
 
+const MAX_FILES = 10;
+const BYTES_PER_MB = 1024 * 1024;
+const MAX_MESSAGE_MB = 50;
+/** Extracted text per message; mirrors backend `_MAX_TOTAL_CONTENT_BYTES`. */
+const MAX_BYTES = MAX_MESSAGE_MB * BYTES_PER_MB;
+const MAX_UPLOAD_FILE_MB = 200;
+/** One upload's raw size; mirrors `_MAX_FILE_SIZE` in `server/routes/files.py`. */
+const MAX_UPLOAD_FILE_BYTES = MAX_UPLOAD_FILE_MB * BYTES_PER_MB;
+/** Types the server decodes as-is, so their text is no smaller than the file. */
+const PLAIN_TEXT_EXTENSIONS = [".txt", ".md", ".py", ".json", ".csv"];
+
 interface ChatTurn {
   id: string;
   userMessage: {
@@ -82,14 +95,9 @@ export default function ChatPage() {
   // which would reset the selection to the first available provider.
   const [hydrated, setHydrated] = useState(false);
 
-  // Hydrate from localStorage after mount to avoid SSR/client mismatch
-  // Track whether the provider-filter effect has seen the hydrated selection.
-  // Without this, React may batch setSelectedChatProviderIds and setHydrated
-  // together, causing the filter effect to see hydrated=true but still the
-  // initial empty [] for selectedChatProviderIds — then it overwrites the
-  // restored selection with the first available provider.
-  const selectionHydratedRef = useRef(false);
-
+  // Hydrate from localStorage after mount to avoid SSR/client mismatch.
+  // The restored selection and `hydrated` are set in the same effect, so they
+  // reach the provider-cleanup effect below in the same render.
   useEffect(() => {
     try {
       migrateLegacyStorageKeys();
@@ -104,7 +112,6 @@ export default function ChatPage() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setSelectedChatProviderIds(parsed);
-          selectionHydratedRef.current = true;
         }
       }
     } catch {}
@@ -138,18 +145,21 @@ export default function ChatPage() {
   // Callbacks captured under a stale generation bail out immediately.
   const sessionGenRef = useRef(0);
 
-  // Sort selected IDs by chip order for consistent grid column ordering
-  const orderedSelectedIds = chatProviderOrder.length > 0
-    ? [...selectedChatProviderIds].sort((a, b) => {
-        const ai = chatProviderOrder.indexOf(a);
-        const bi = chatProviderOrder.indexOf(b);
-        return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
-      })
-    : selectedChatProviderIds;
+  // Sort a turn's provider IDs by chip order for consistent grid column ordering.
+  // Each turn shows the providers it was sent to, not the current selection.
+  const inChipOrder = (ids: string[]) =>
+    chatProviderOrder.length > 0
+      ? [...ids].sort((a, b) => {
+          const ai = chatProviderOrder.indexOf(a);
+          const bi = chatProviderOrder.indexOf(b);
+          return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
+        })
+      : ids;
 
-  const { data: chatProviders = [] } = useSWR<ChatProviderConfig[]>("chat-providers", getChatProviders);
+  const { data: chatProviders = [] } = useSWR<ChatProviderConfig[]>(CHAT_PROVIDERS_SWR_KEY, getChatProviders);
   const { data: llmProviders = [] } = useSWR<LLMProviderConfig[]>("llm-providers", getLLMProviders);
   const { data: config } = useSWR<AppConfig>("config", getConfig);
+  const { mutate } = useSWRConfig();
 
   // Persist active session to localStorage
   useEffect(() => {
@@ -238,17 +248,12 @@ export default function ChatPage() {
   // IDs whose backing LLM provider is now offline/unconfigured (mirrors the
   // availability filter in ChatProviderSelector).
   // Guard: skip until localStorage has been read so we don't clobber the
-  // persisted selection with an empty initial state.
+  // persisted selection with an empty initial state. Runs again whenever the
+  // selection changes (localStorage, a reopened session), so a provider that
+  // went offline can never stay selected and run.
   useEffect(() => {
     if (!hydrated) return;
     if (chatProviders.length === 0) return;
-    // On the first run after hydration, if a selection was restored from
-    // localStorage, skip the filter — React may not have flushed the
-    // hydrated selection into selectedChatProviderIds yet.
-    if (selectionHydratedRef.current) {
-      selectionHydratedRef.current = false;
-      return;
-    }
     let availableIds: Set<string>;
     if (llmProviders.length > 0) {
       const providerMap = new Map(llmProviders.map((p) => [p.id, p]));
@@ -267,10 +272,14 @@ export default function ChatPage() {
     const filtered = selectedChatProviderIds.filter((id) => availableIds.has(id));
     if (filtered.length !== selectedChatProviderIds.length || filtered.length === 0) {
       const first = [...availableIds][0];
-      setSelectedChatProviderIds(filtered.length > 0 ? filtered : first ? [first] : []);
+      const next = filtered.length > 0 ? filtered : first ? [first] : [];
+      // Only set a different selection: this effect depends on it.
+      const unchanged =
+        next.length === selectedChatProviderIds.length &&
+        next.every((id, i) => id === selectedChatProviderIds[i]);
+      if (!unchanged) setSelectedChatProviderIds(next);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatProviders, llmProviders, hydrated]);
+  }, [chatProviders, llmProviders, hydrated, selectedChatProviderIds]);
 
   // Load session messages and reconstruct turns
   useEffect(() => {
@@ -285,24 +294,26 @@ export default function ChatPage() {
         if (session.conversations && Object.keys(session.conversations).length > 0) {
           // Group by conversation (chat provider)
           const turnMap = new Map<string, ChatTurn>();
+          // The Chat Providers each turn's question was sent to.
+          const sentTo = new Map<string, Set<string>>();
 
           // Iterate through each chat provider's conversation
           for (const [cpId, messages] of Object.entries(session.conversations)) {
+            // The turn of this provider's latest question: its answer belongs there.
+            let currentTurnId: string | undefined;
             for (const msg of messages) {
               let turnId: string | undefined;
 
               if (msg.role === "user") {
-                // Find or create a turn with this user message
+                // Join the turn that asked the same question of other providers
+                // (not one this provider already answered), or start a new one.
                 const existing = Array.from(turnMap.values()).find(
-                  (t) => t.userMessage.content === msg.content
+                  (t) => t.userMessage.content === msg.content && !sentTo.get(t.id)?.has(cpId),
                 );
                 turnId = existing?.id || crypto.randomUUID();
+                currentTurnId = turnId;
               } else {
-                // Assistant message — find the corresponding turn
-                const existing = Array.from(turnMap.values()).find(
-                  (t) => !t.responses[cpId]
-                );
-                turnId = existing?.id;
+                turnId = currentTurnId;
               }
 
               if (!turnId) turnId = crypto.randomUUID();
@@ -318,10 +329,13 @@ export default function ChatPage() {
               }
 
               if (msg.role === "user") {
+                const earlier = turn.userMessage.timestamp;
                 turn.userMessage = {
                   content: msg.content,
-                  timestamp: msg.timestamp,
+                  timestamp: earlier && earlier < msg.timestamp ? earlier : msg.timestamp,
                 };
+                if (!sentTo.has(turnId)) sentTo.set(turnId, new Set());
+                sentTo.get(turnId)!.add(cpId);
               } else {
                 turn.responses[cpId] = {
                   chatProviderId: cpId,
@@ -335,11 +349,18 @@ export default function ChatPage() {
             }
           }
 
-          const reconstructed = Array.from(turnMap.values());
+          // Conversations are per provider, so put the turns back in the order
+          // the questions were asked.
+          const reconstructed = Array.from(turnMap.values()).sort((a, b) =>
+            a.userMessage.timestamp.localeCompare(b.userMessage.timestamp),
+          );
           setTurns(reconstructed);
 
-          // Restore chat provider selection from the providers present in conversations
-          const sessionProviderIds = Object.keys(session.conversations);
+          // Restore the selection the latest question was sent with
+          const lastTurn = reconstructed[reconstructed.length - 1];
+          const sessionProviderIds = lastTurn
+            ? [...(sentTo.get(lastTurn.id) ?? Object.keys(lastTurn.responses))]
+            : [];
           if (sessionProviderIds.length > 0) {
             setSelectedChatProviderIds(sessionProviderIds);
           }
@@ -454,6 +475,8 @@ export default function ChatPage() {
                               output_tokens: trace.result.output_tokens ?? 0,
                               total_tokens: trace.budget.tokens_used,
                               cost_usd: trace.result.total_cost ?? 0,
+                              cost_known: trace.result?.cost_known,
+                              tokens_known: trace.result?.tokens_known,
                               elapsed_seconds:
                                 trace.completed_at && trace.started_at
                                   ? (new Date(trace.completed_at).getTime() -
@@ -617,6 +640,8 @@ export default function ChatPage() {
                             output_tokens: trace.result.output_tokens ?? 0,
                             total_tokens: trace.budget.tokens_used,
                             cost_usd: trace.result.total_cost ?? trace.budget.cost_used,
+                            cost_known: trace.result?.cost_known,
+                            tokens_known: trace.result?.tokens_known,
                             elapsed_seconds:
                               trace.completed_at && trace.started_at
                                 ? (new Date(trace.completed_at).getTime() -
@@ -660,6 +685,8 @@ export default function ChatPage() {
                             output_tokens: trace.result?.output_tokens ?? 0,
                             total_tokens: trace.result?.input_tokens ?? 0,
                             cost_usd: trace.result?.total_cost ?? 0,
+                            cost_known: trace.result?.cost_known,
+                            tokens_known: trace.result?.tokens_known,
                             elapsed_seconds:
                               trace.completed_at && trace.started_at
                                 ? (new Date(trace.completed_at).getTime() -
@@ -829,6 +856,8 @@ export default function ChatPage() {
             effectiveSessionId = resp.session_id;
             skipSessionLoadRef.current = true;
             setSessionId(resp.session_id);
+            // The server just created the session: list it in the sidebar now.
+            void mutate(SESSIONS_SWR_KEY);
           }
 
           // Register mapping so WS events can find the turn
@@ -895,21 +924,18 @@ export default function ChatPage() {
         );
       }
     },
-    [sessionId, uploadedFiles, selectedChatProviderIds, chatProviders, pollForResult],
+    [sessionId, uploadedFiles, selectedChatProviderIds, chatProviders, pollForResult, mutate],
   );
 
   const handleFileUpload = useCallback(async (files: File[]) => {
-    const MAX_FILES = 10;
-    const MAX_BYTES = 50 * 1024 * 1024; // mirrors backend _MAX_TOTAL_CONTENT_BYTES
-
     const remaining = MAX_FILES - uploadedFiles.length;
     if (remaining <= 0) {
-      toast.error("Maximum 10 files per session reached");
+      toast.error(`Maximum ${MAX_FILES} files per session reached`);
       return;
     }
     const batch = files.slice(0, remaining);
     if (batch.length < files.length) {
-      toast.warning(`Only the first ${remaining} file(s) will be uploaded (10-file limit)`);
+      toast.warning(`Only the first ${remaining} file(s) will be uploaded (${MAX_FILES}-file limit)`);
     }
     setUploadProgress(0);
     let anyFailed = false;
@@ -917,15 +943,38 @@ export default function ChatPage() {
     // size_bytes on FileUploadResponse reflects server-side extracted text size.
     let cumulativeBytes = uploadedFiles.reduce((sum, f) => sum + f.text_size_bytes, 0);
     for (let i = 0; i < batch.length; i++) {
+      const file = batch[i];
+      // Refuse what the server would refuse (or what would blow the per-message
+      // limit) before sending the bytes, not after a long upload.
+      if (file.size === 0) {
+        toast.error(`"${file.name}" is empty (0 bytes), so there is nothing to upload`);
+        anyFailed = true;
+        continue;
+      }
+      if (file.size > MAX_UPLOAD_FILE_BYTES) {
+        toast.error(`"${file.name}" is larger than the ${MAX_UPLOAD_FILE_MB} MB upload limit`);
+        anyFailed = true;
+        continue;
+      }
+      // A plain-text file's extracted text is at least as large as the file,
+      // so the per-message limit can be checked up front.
+      const isPlainText = PLAIN_TEXT_EXTENSIONS.some((ext) => file.name.toLowerCase().endsWith(ext));
+      if (isPlainText && cumulativeBytes + file.size > MAX_BYTES) {
+        toast.error(
+          `"${file.name}" skipped — adding it would exceed the ${MAX_MESSAGE_MB} MB per-message limit`,
+        );
+        anyFailed = true;
+        continue;
+      }
       try {
-        const resp = await uploadFile(batch[i], (pct) => {
+        const resp = await uploadFile(file, (pct) => {
           // Show overall progress: (completed files + current file fraction) / total
           const overall = ((i + (pct >= 100 ? 1 : pct / 100)) / batch.length) * 100;
           setUploadProgress(overall >= 100 ? "processing" : Math.round(overall));
         });
         if (cumulativeBytes + resp.text_size_bytes > MAX_BYTES) {
           toast.error(
-            `"${resp.name}" skipped — adding it would exceed the 50 MB per-message limit`,
+            `"${resp.name}" skipped — adding it would exceed the ${MAX_MESSAGE_MB} MB per-message limit`,
           );
           anyFailed = true;
           continue;
@@ -934,8 +983,10 @@ export default function ChatPage() {
         // Commit each file immediately so partial failures don't discard successes
         setUploadedFiles((prev) => [...prev, resp]);
       } catch (err) {
-        console.error(`Failed to upload ${batch[i].name}:`, err);
-        toast.error(`Upload failed: ${batch[i].name}`);
+        console.error(`Failed to upload ${file.name}:`, err);
+        toast.error(
+          `Couldn't upload "${file.name}": ${err instanceof Error ? err.message : "the upload failed"}`,
+        );
         anyFailed = true;
       }
     }
@@ -1073,7 +1124,9 @@ export default function ChatPage() {
           <>
             <div className="min-h-0 flex-1 overflow-auto" aria-label="Message history">
               <div className="w-full space-y-8 px-4 py-6" role="log" aria-live="polite">
-                {turns.map((turn) => (
+                {turns.map((turn) => {
+                  const turnProviderIds = inChipOrder(Object.keys(turn.responses));
+                  return (
                   <div key={turn.id} className="space-y-4">
                     {/* User message - full width */}
                     <div className="flex gap-3">
@@ -1091,10 +1144,10 @@ export default function ChatPage() {
                     <div
                       className="grid gap-4 mr-4"
                       style={{
-                        gridTemplateColumns: `repeat(${orderedSelectedIds.length}, minmax(320px, 1fr))`,
+                        gridTemplateColumns: `repeat(${turnProviderIds.length}, minmax(320px, 1fr))`,
                       }}
                     >
-                      {orderedSelectedIds.map((cpId) => {
+                      {turnProviderIds.map((cpId) => {
                         const resp = turn.responses[cpId];
                         return (
                           <div
@@ -1127,8 +1180,8 @@ export default function ChatPage() {
                                 {resp.metrics && (
                                   <div className="mt-3 flex flex-col gap-2 border-t pt-2 text-xs text-muted-foreground">
                                     <div className="flex items-center gap-4">
-                                      <span>{resp.metrics.total_tokens} tokens</span>
-                                      <span>${resp.metrics.cost_usd.toFixed(4)}</span>
+                                      <span title={resp.metrics.tokens_known === false ? TOKENS_UNKNOWN_HINT : undefined}>{formatTokensOrUnknown(resp.metrics.total_tokens, resp.metrics.tokens_known)} tokens</span>
+                                      <span title={resp.metrics.cost_known === false ? COST_UNKNOWN_HINT : undefined}>{resp.metrics.cost_known === false ? "cost unknown" : formatCostOrUnknown(resp.metrics.cost_usd)}</span>
                                       <span>{resp.metrics.elapsed_seconds.toFixed(1)}s</span>
                                       <ResponseRating
                                         executionId={resp.executionId}
@@ -1144,7 +1197,9 @@ export default function ChatPage() {
                                           aria-label="Toggle steps"
                                         >
                                           <Terminal className="h-3 w-3" />
-                                          <span>{resp.steps.length} steps</span>
+                                          <span>
+                                            {resp.steps.length} {resp.steps.length === 1 ? "step" : "steps"}
+                                          </span>
                                           {stepsVisible[resp.executionId] ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                                         </button>
                                       )}
@@ -1202,12 +1257,21 @@ export default function ChatPage() {
                       const isUsable = (r: typeof completed[0][1]) =>
                         r.content && !r.content.startsWith("⚠️") && !r.content.startsWith("Error:");
                       const usable = completed.filter(([, r]) => isUsable(r));
-                      const cheapest = usable.length > 0
-                        ? usable.reduce((a, b) => a[1].metrics!.cost_usd <= b[1].metrics!.cost_usd ? a : b)
-                        : null;
-                      const fastest = usable.length > 0
-                        ? usable.reduce((a, b) => a[1].metrics!.elapsed_seconds <= b[1].metrics!.elapsed_seconds ? a : b)
-                        : null;
+                      // Name a winner only when there is a real comparison:
+                      // two or more usable answers that differ on the metric
+                      // (one success among failures, or an all-$0 tie, is not
+                      // "cheapest").
+                      const winnerBy = (metric: (m: MessageMetrics) => number) => {
+                        if (usable.length < 2) return null;
+                        const values = usable.map(([, r]) => metric(r.metrics!));
+                        if (values.every((v) => v === values[0])) return null;
+                        return usable.reduce((a, b) => (metric(a[1].metrics!) <= metric(b[1].metrics!) ? a : b));
+                      };
+                      // An unknown cost is not $0: it cannot be "cheapest".
+                      const cheapest = usable.some(([, r]) => r.metrics!.cost_known === false)
+                        ? null
+                        : winnerBy((m) => m.cost_usd);
+                      const fastest = winnerBy((m) => m.elapsed_seconds);
                       return (
                         <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
                           <div className="flex gap-6">
@@ -1217,8 +1281,8 @@ export default function ChatPage() {
                                   {r.chatProviderName}{!isUsable(r) ? " (failed)" : ""}
                                 </span>
                                 <div>
-                                  {r.metrics!.total_tokens.toLocaleString()} tokens
-                                  {" · "}${r.metrics!.cost_usd.toFixed(4)}
+                                  {formatTokensOrUnknown(r.metrics!.total_tokens, r.metrics!.tokens_known)} tokens
+                                  {" · "}{r.metrics!.cost_known === false ? "cost unknown" : formatCostOrUnknown(r.metrics!.cost_usd)}
                                   {" · "}{r.metrics!.elapsed_seconds.toFixed(1)}s
                                 </div>
                               </div>
@@ -1243,7 +1307,7 @@ export default function ChatPage() {
                                   name: r.chatProviderName,
                                   score: judgeScores[r.executionId].overall_score,
                                 }));
-                              if (scored.length === 0) return null;
+                              if (scored.length < 2) return null;
                               const best = scored.reduce((a, b) =>
                                 a.score >= b.score ? a : b
                               );
@@ -1298,8 +1362,9 @@ export default function ChatPage() {
                       );
                     })()}
                   </div>
-                ))}
-                {isAnyStreaming && <TypingIndicator />}
+                  );
+                })}
+                {/* Each pending response card shows its own "Generating…". */}
                 <div ref={messagesEndRef} />
               </div>
             </div>

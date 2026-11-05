@@ -377,3 +377,34 @@ def test_discovery_logs_and_returns_the_same_redacted_error(
     assert secret not in (data["error"] or "")
     assert "<redacted>" in caplog.text
     assert "<redacted>" in (data["error"] or "")
+
+
+@pytest.mark.real_model_discovery
+@pytest.mark.parametrize(
+    ("backend", "payload"),
+    [
+        (
+            "lmstudio",
+            {
+                "data": [
+                    {"id": "qwen2.5-7b-instruct"},
+                    {"id": "text-embedding-nomic-embed-text-v1.5"},
+                ]
+            },
+        ),
+        ("ollama", {"models": [{"name": "nomic-embed-text:latest"}, {"name": "llama3.2:latest"}]}),
+        ("vllm", {"data": [{"id": "BAAI/bge-m3-embedding"}, {"id": "qwen38-27b"}]}),
+    ],
+)
+def test_local_discovery_does_not_offer_embedding_models_as_chat_models(
+    monkeypatch: pytest.MonkeyPatch, backend: str, payload: dict[str, object]
+) -> None:
+    from rlmstudio.server.routes.providers import _fetch_models_from_api
+
+    monkeypatch.setattr("rlmstudio.server.routes.providers.httpx.AsyncClient", _RecordingClient)
+    _RecordingClient.payload = payload
+
+    names = [m.name for m in asyncio.run(_fetch_models_from_api(backend))]
+
+    assert len(names) == 1
+    assert "embed" not in names[0]

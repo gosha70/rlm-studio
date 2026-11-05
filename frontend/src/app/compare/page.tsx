@@ -25,7 +25,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
-import { Loader2, Trophy, Hash, DollarSign, Clock, Upload, X, ChevronDown, ChevronUp, Ban, Sparkles } from "lucide-react";
+import { Loader2, Trophy, Hash, DollarSign, Clock, Footprints, Upload, X, ChevronDown, ChevronUp, Ban, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -79,7 +79,8 @@ import {
   type RAGConfig,
   type CompareMatrixRequestV2,
 } from "@/lib/api";
-import { ALL_EXECUTION_MODES, displayModeName, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
+import { ALL_EXECUTION_MODES, displayModeName, EMBEDDING_MODEL_DEFAULT, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
+import { COST_UNKNOWN_HINT, COST_UNKNOWN_TEXT, TOKENS_UNKNOWN_HINT, TOKENS_UNKNOWN_TEXT, formatTokensOrUnknown, formatUsd, formatUsdTick } from "@/lib/format";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { useEngineAvailability } from "@/components/shared/use-engines";
 
@@ -153,11 +154,23 @@ function _isSlotFailed(slot: CompareMatrixSlotResponse): boolean {
   return a.startsWith("\u26a0\ufe0f") || a.startsWith("Error:");
 }
 
+/**
+ * The slot's label with its mode spelled for people. The server builds
+ * labels as "<provider> · <mode id>", which shows `rlm_official` raw.
+ */
+function _slotLabel(slot: CompareMatrixSlotResponse): string {
+  const rawSuffix = ` · ${slot.mode}`;
+  if (!slot.label.endsWith(rawSuffix)) return slot.label;
+  return `${slot.label.slice(0, -rawSuffix.length)} · ${displayModeName(slot.mode)}`;
+}
+
 /** Human-friendly error message — strip raw JSON/stack traces. */
 function _friendlyError(slot: CompareMatrixSlotResponse): string {
-  const raw = slot.error || slot.answer || "Execution failed";
-  // Extract just the user-facing message from litellm errors
-  const match = raw.match(/Cannot connect to the LLM server[^.]*\./);
+  // Markdown emphasis from the server's message is noise in plain text.
+  const raw = (slot.error || slot.answer || "Execution failed").replace(/\*\*/g, "");
+  // Extract just the user-facing message from litellm errors. The quoted
+  // URL is skipped whole: its dots are not the end of the sentence.
+  const match = raw.match(/Cannot connect to the LLM server(?: at '[^']*')?[^.]*\./);
   if (match) return match[0];
   const timeoutMatch = raw.match(/RAG timed out[^.]*\./);
   if (timeoutMatch) return timeoutMatch[0];
@@ -233,7 +246,7 @@ const DEFAULT_CONFIG: InlineConfig = {
   chunk_size: 1000,
   chunk_overlap: 150,
   top_k: 5,
-  embedding_model: "text-embedding-3-small",
+  embedding_model: EMBEDDING_MODEL_DEFAULT,
 };
 
 // ---------------------------------------------------------------------------
@@ -258,6 +271,7 @@ export default function ComparePage() {
   const [uploadedFile, setUploadedFile] = useState<FileUploadResponse | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedLLMProviderIds, setSelectedLLMProviderIds] = useState<string[]>([]);
   const [selectedModes, setSelectedModes] = useState<Set<MatrixSlotMode>>(
     new Set([MODE_DIRECT]),
@@ -548,10 +562,12 @@ export default function ComparePage() {
                     rows={4}
                     disabled={isRunning}
                   />
-                  <label
-                    className={`inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent ${
-                      uploadingFile ? "opacity-50" : ""
-                    }`}
+                  {/* A real button, so Tab reaches it; it opens the hidden picker. */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingFile || isRunning}
+                    className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {uploadingFile ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -559,17 +575,19 @@ export default function ComparePage() {
                       <Upload className="h-4 w-4" />
                     )}
                     <span>{uploadingFile ? "Uploading…" : "Upload file"}</span>
-                    <input
-                      type="file"
-                      hidden
-                      disabled={uploadingFile || isRunning}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleFileUpload(file);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    data-testid="compare-file-input"
+                    disabled={uploadingFile || isRunning}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleFileUpload(file);
+                      e.target.value = "";
+                    }}
+                  />
                   {uploadError && (
                     <div className="text-sm text-destructive">{uploadError}</div>
                   )}
@@ -597,7 +615,7 @@ export default function ComparePage() {
                         type="button"
                         onClick={() => usable && toggleLLMProvider(lp.id)}
                         disabled={isRunning || !usable}
-                        className={`flex flex-col items-start rounded-md border px-3 py-1.5 text-left transition-colors ${
+                        className={`flex max-w-xs flex-col items-start rounded-md border px-3 py-1.5 text-left transition-colors ${
                           !usable
                             ? "cursor-not-allowed border-input bg-muted/30 opacity-50"
                             : active
@@ -605,11 +623,16 @@ export default function ComparePage() {
                               : "border-input bg-background hover:bg-accent"
                         } ${isRunning ? "cursor-not-allowed opacity-50" : ""}`}
                         aria-pressed={usable ? active : undefined}
-                        title={usable ? undefined : `${lp.name} is ${lp.status} — test connection in Settings`}
+                        // Long names are cut off in the chip; the tooltip has them whole.
+                        title={
+                          usable
+                            ? `${lp.name} — ${lp.model}`
+                            : `${lp.name} is ${lp.status} — test connection in Settings`
+                        }
                       >
-                        <span className="text-sm font-medium">{lp.name}</span>
+                        <span className="block max-w-full truncate text-sm font-medium">{lp.name}</span>
                         <span
-                          className={`text-xs ${
+                          className={`block max-w-full truncate text-xs ${
                             !usable
                               ? "text-muted-foreground/50"
                               : active
@@ -1065,7 +1088,8 @@ export function _rankSlots(
         // An unpriced run's $0 is not free: it ranks after priced runs.
         return costKnown ? value(s.total_cost) : missing;
       case "tokens":
-        return value(s.total_tokens);
+        // An unreported token count's 0 is not "fewest".
+        return s.tokens_known === false ? missing : value(s.total_tokens);
       case "latency":
         return value(s.elapsed_seconds);
       case "judge_score": {
@@ -1147,7 +1171,7 @@ function ResultsPanel({
             <div className="flex items-center gap-2">
               <Trophy className="h-4 w-4 text-amber-500" />
               <span className="font-medium">Best:</span>
-              <span>{bestSlot.label}</span>
+              <span>{_slotLabel(bestSlot)}</span>
             </div>
           ) : (
             <div className="text-destructive">No successful slots</div>
@@ -1214,7 +1238,7 @@ function ResultsPanel({
           <JudgeDimensionsChart
             judgeScores={Object.values(judgeScores)}
             providerNames={Object.fromEntries(
-              result.slots.map((s) => [s.chat_provider_id, s.label])
+              result.slots.map((s) => [s.chat_provider_id, _slotLabel(s)])
             )}
           />
         )}
@@ -1256,6 +1280,15 @@ const BAR_COLORS = [
   "hsl(0, 0%, 55%)",     // gray (failed)
 ];
 
+/** The judge's overall score scale (1–5); the axis shows 0 for the origin. */
+const JUDGE_SCORE_MAX = 5;
+const JUDGE_SCORE_TICKS = [0, 1, 2, 3, 4, 5];
+/** Tooltip text for a slot with nothing to plot. */
+const CHART_FAILED_TEXT = "Failed — no result";
+const CHART_NOT_JUDGED_TEXT = "Not judged";
+const CHART_COST_UNKNOWN_TEXT = `Cost ${COST_UNKNOWN_TEXT}`;
+const CHART_TOKENS_UNKNOWN_TEXT = `Tokens ${TOKENS_UNKNOWN_TEXT}`;
+
 interface ComparisonChartProps {
   slots: CompareMatrixSlotResponse[];
   metric: MatrixRankingMetric;
@@ -1267,7 +1300,8 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
   const chartData = useMemo(() => {
     return ranking.map((slotIdx) => {
       const s = slots[slotIdx];
-      let value: number;
+      // null = nothing to plot (failed or not judged): no bar, no "0".
+      let value: number | null;
       switch (metric) {
         case "cost":
           value = s.total_cost;
@@ -1285,7 +1319,7 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
           break;
         case "judge_score": {
           const js = judgeScores[s.execution_id];
-          value = js ? js.overall_score : 0;
+          value = js ? js.overall_score : null;
           break;
         }
         // Phase 5 prefill/decode metrics. Previously fell through to
@@ -1308,10 +1342,17 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
           value = s.total_cost;
       }
       const failed = _isSlotFailed(s);
+      // An unpriced run's $0 is not a cost: no bar, and the tooltip says so.
+      const costUnknown =
+        s.cost_known === false && (metric === "cost" || metric === "answer_per_cost");
+      // Same for an unreported token count.
+      const tokensUnknown = s.tokens_known === false && metric === "tokens";
       return {
-        name: s.label,
+        name: _slotLabel(s),
         failed,
-        value: failed ? 0 : value,
+        costUnknown,
+        tokensUnknown,
+        value: failed || costUnknown || tokensUnknown ? null : value,
         success: !failed,
         slotIdx,
       };
@@ -1346,7 +1387,15 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
       </p>
       <ResponsiveContainer width="100%" height={Math.max(120, chartData.length * 40)}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 20, top: 0, bottom: 0 }}>
-          <XAxis type="number" tick={{ fontSize: 11 }} />
+          <XAxis
+            type="number"
+            tick={{ fontSize: 11 }}
+            // The judge scores on a fixed 1–5 scale; an auto domain ran to 8.
+            {...(metric === "judge_score"
+              ? { domain: [0, JUDGE_SCORE_MAX], ticks: JUDGE_SCORE_TICKS }
+              : {})}
+            {...(metric === "cost" ? { tickFormatter: (v: number) => formatUsdTick(v) } : {})}
+          />
           <YAxis
             type="category"
             dataKey="name"
@@ -1370,15 +1419,22 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
             }}
           />
           <RechartsTooltip
-            formatter={(value) => {
-              const v = Number(value ?? 0);
+            // Keep null rows so the tooltip can say why a slot has no bar.
+            filterNull={false}
+            formatter={(value, _name, item) => {
+              const entry = item?.payload as (typeof chartData)[number] | undefined;
+              if (entry?.failed) return [CHART_FAILED_TEXT, metricLabel];
+              if (entry?.costUnknown) return [CHART_COST_UNKNOWN_TEXT, metricLabel];
+              if (entry?.tokensUnknown) return [CHART_TOKENS_UNKNOWN_TEXT, metricLabel];
+              if (value == null) return [CHART_NOT_JUDGED_TEXT, metricLabel];
+              const v = Number(value);
               return [
                 metric === "cost"
-                  ? `$${v.toFixed(4)}`
+                  ? formatUsd(v)
                   : metric === "latency"
                     ? `${v.toFixed(1)}s`
                     : metric === "judge_score"
-                      ? `${v.toFixed(1)}/5`
+                      ? `${v.toFixed(1)}/${JUDGE_SCORE_MAX}`
                       : v.toLocaleString(),
                 metricLabel,
               ];
@@ -1424,14 +1480,14 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
       className={`space-y-2 rounded-md border-2 bg-card p-3 ${statusColor}`}
       data-testid={`matrix-slot-${slot.mode}-${slot.provider}`}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           {failed ? (
-            <Ban className="h-4 w-4 text-destructive" />
+            <Ban className="h-4 w-4 shrink-0 text-destructive" />
           ) : rank === 1 ? (
-            <Trophy className="h-4 w-4 text-amber-500" />
+            <Trophy className="h-4 w-4 shrink-0 text-amber-500" />
           ) : null}
-          <span className="text-sm font-semibold">{slot.label}</span>
+          <span className="min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">{_slotLabel(slot)}</span>
           <EngineBadge mode={slot.mode} />
         </div>
         {rank !== null && (
@@ -1441,22 +1497,31 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
         )}
       </div>
 
-      {!failed && (
-        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1" title="Total tokens">
-            <Hash className="h-3 w-3" />
-            {slot.total_tokens.toLocaleString()}
-          </span>
-          <span className="flex items-center gap-1" title="Cost (USD)">
-            <DollarSign className="h-3 w-3" />
-            {slot.total_cost.toFixed(4)}
-          </span>
-          <span className="flex items-center gap-1" title="Elapsed seconds">
-            <Clock className="h-3 w-3" />
-            {slot.elapsed_seconds.toFixed(1)}s
-          </span>
-        </div>
-      )}
+      {/* A failed run still spent tokens and time; show them like Chat does. */}
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+        <span
+          className="flex items-center gap-1"
+          title={slot.tokens_known === false ? TOKENS_UNKNOWN_HINT : "Total tokens"}
+        >
+          <Hash className="h-3 w-3" />
+          {formatTokensOrUnknown(slot.total_tokens, slot.tokens_known)}
+        </span>
+        <span
+          className="flex items-center gap-1"
+          title={slot.cost_known === false ? COST_UNKNOWN_HINT : "Cost (USD)"}
+        >
+          <DollarSign className="h-3 w-3" />
+          {slot.cost_known === false ? COST_UNKNOWN_TEXT : slot.total_cost.toFixed(4)}
+        </span>
+        <span className="flex items-center gap-1" title="Elapsed seconds">
+          <Clock className="h-3 w-3" />
+          {slot.elapsed_seconds.toFixed(1)}s
+        </span>
+        <span className="flex items-center gap-1" title="Steps">
+          <Footprints className="h-3 w-3" />
+          {slot.steps} {slot.steps === 1 ? "step" : "steps"}
+        </span>
+      </div>
 
       {/* Judge score inline display */}
       {!failed && judgeScore && judgeScore.overall_score > 0 && (
@@ -1467,9 +1532,20 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
       )}
 
       {failed ? (
-        <div className="max-h-32 overflow-auto break-words rounded bg-destructive/10 p-2 text-sm text-destructive">
-          {_friendlyError(slot)}
-        </div>
+        slot.answer.trim() ? (
+          // The server's answer for a failed run is the user-facing message:
+          // what went wrong, how to fix it, and any partial answer.
+          <div
+            className="prose prose-sm dark:prose-invert max-h-60 max-w-none overflow-auto break-words rounded border-l-4 border-destructive bg-destructive/10 p-2"
+            data-testid="slot-failure-detail"
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{slot.answer}</ReactMarkdown>
+          </div>
+        ) : (
+          <div className="max-h-32 overflow-auto break-words rounded bg-destructive/10 p-2 text-sm text-destructive">
+            {_friendlyError(slot)}
+          </div>
+        )
       ) : (
         <>
           <div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto rounded bg-muted/40 p-2">

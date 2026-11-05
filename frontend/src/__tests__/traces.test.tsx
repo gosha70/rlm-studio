@@ -5,8 +5,8 @@
  * and the Traces page.
  */
 
-import { render, screen, fireEvent } from "@testing-library/react";
-import { vi, describe, test, expect } from "vitest";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
 import { CodeBlock } from "@/components/trace/code-block";
 import { Timeline } from "@/components/trace/timeline";
 import { TraceTree } from "@/components/trace/trace-tree";
@@ -18,10 +18,12 @@ import type { TraceStep, ExecutionSummary } from "@/lib/api";
 // ---------------------------------------------------------------------------
 
 const mockRouterPush = vi.fn();
+const mockRouterReplace = vi.fn();
+let mockExecParam: string | null = null;
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: mockRouterPush }),
-  useSearchParams: () => ({ get: () => null }),
+  useRouter: () => ({ push: mockRouterPush, replace: mockRouterReplace }),
+  useSearchParams: () => ({ get: (key: string) => (key === "exec" ? mockExecParam : null) }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -272,6 +274,17 @@ describe("TracesPage", () => {
     expect(screen.getByText("Explain recursion")).toBeInTheDocument();
   });
 
+  test("an execution with unknown cost and tokens says unknown, not $0 or 0 (SC3-02)", () => {
+    mockUseSWR.mockReturnValue({
+      data: [makeExecution({ total_cost: 0, total_tokens: 0, cost_known: false, tokens_known: false })],
+      isLoading: false,
+    } as ReturnType<typeof useSWR>);
+
+    render(<TracesPage />);
+    expect(screen.getAllByText("unknown")).toHaveLength(2);
+    expect(screen.queryByText("$0.0000")).not.toBeInTheDocument();
+  });
+
   test("shows trace detail when an execution is selected", () => {
     // With no trace loaded yet, the detail panel is absent; clicking loads it
     // (async). We verify the execution row is rendered and clickable.
@@ -312,6 +325,21 @@ describe("TracesPage", () => {
       expect.any(Function),
       expect.objectContaining({ refreshInterval: 5000 }),
     );
+  });
+
+  test("the session filter fetches sessions with the default limit, not the SWR key", async () => {
+    mockUseSWR.mockReturnValue({ data: [], isLoading: false } as ReturnType<typeof useSWR>);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]"));
+    try {
+      render(<TracesPage />);
+      const call = mockUseSWR.mock.calls.find(([key]) => key === "sessions");
+      expect(call).toBeDefined();
+      // SWR calls the fetcher with the key as its argument.
+      await (call![1] as (key: string) => Promise<unknown>)("sessions");
+      expect(fetchSpy).toHaveBeenCalledWith("/api/sessions?limit=20&offset=0", expect.anything());
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   test("shows empty state when no executions exist", () => {
@@ -420,5 +448,180 @@ describe("TracesPage", () => {
     fireEvent.keyDown(button, { key: " " });
 
     expect(screen.queryByText(/Loading trace/i)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Browser pre-pass M11: Delete N confirms, the open trace is in the URL, and
+// each run shows when it started.
+// ---------------------------------------------------------------------------
+
+describe("TracesPage (M11)", () => {
+  const TRACE = {
+    execution_id: "exec-1",
+    session_id: "sess-1",
+    query: "What is 2 + 2?",
+    mode: "rlm",
+    status: "complete",
+    result: { answer: "4", success: true },
+    budget: {
+      steps_used: 1,
+      steps_limit: 16,
+      tokens_used: 300,
+      tokens_limit: 0,
+      cost_used: 0,
+      cost_limit: 0,
+      max_depth_reached: 0,
+      depth_limit: 0,
+    },
+    steps: [],
+  };
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let confirmSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockExecParam = null;
+    mockRouterReplace.mockClear();
+    mockUseSWR.mockReturnValue({ data: [makeExecution()], isLoading: false, mutate: vi.fn() } as unknown as ReturnType<
+      typeof useSWR
+    >);
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(TRACE)));
+    confirmSpy = vi.spyOn(window, "confirm");
+  });
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    confirmSpy.mockRestore();
+    mockExecParam = null;
+  });
+
+  const deleteRequests = () =>
+    fetchSpy.mock.calls.filter((call: unknown[]) => (call[1] as RequestInit | undefined)?.method === "DELETE");
+
+  test("Delete N asks first and deletes nothing when cancelled", () => {
+    confirmSpy.mockReturnValue(false);
+    render(<TracesPage />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Select trace: What is 2 \+ 2/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Delete 1/ }));
+    expect(confirmSpy).toHaveBeenCalledWith("Delete 1 selected trace? This cannot be undone.");
+    expect(deleteRequests()).toHaveLength(0);
+  });
+
+  test("Delete N deletes once confirmed", async () => {
+    confirmSpy.mockReturnValue(true);
+    render(<TracesPage />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Select trace: What is 2 \+ 2/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Delete 1/ }));
+    await waitFor(() => expect(deleteRequests()).toHaveLength(1));
+  });
+
+  test("opening a trace puts its id in the URL", async () => {
+    render(<TracesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /Expand trace for: What is 2 \+ 2/ }));
+    await waitFor(() => expect(mockRouterReplace).toHaveBeenCalledWith("/traces?exec=exec-1", { scroll: false }));
+  });
+
+  test("a trace named in the URL opens on load without the URL being cleared", async () => {
+    mockExecParam = "exec-1";
+    render(<TracesPage />);
+    expect(await screen.findByRole("button", { name: /Collapse trace for: What is 2 \+ 2/ })).toBeInTheDocument();
+    expect(mockRouterReplace).not.toHaveBeenCalled();
+  });
+
+  test("each run shows when it started", () => {
+    render(<TracesPage />);
+    expect(screen.getByRole("columnheader", { name: "Started" })).toBeInTheDocument();
+    const started = new Date("2024-01-01T00:00:00Z");
+    expect(screen.getByText(started.toLocaleDateString())).toBeInTheDocument();
+    expect(screen.getByText(started.toLocaleTimeString())).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Browser pass 2 CHAT2-03 / CMP2-07: a failed trace says why it failed.
+// ---------------------------------------------------------------------------
+
+describe("TracesPage failed run (CHAT2-03, CMP2-07)", () => {
+  const failedTrace = (result: Record<string, unknown>) => ({
+    execution_id: "exec-1",
+    session_id: "sess-1",
+    query: "What is 2 + 2?",
+    mode: "rlm",
+    status: "error",
+    result: { answer: "", success: false, ...result },
+    budget: {
+      steps_used: 0,
+      steps_limit: 16,
+      tokens_used: 0,
+      tokens_limit: 0,
+      cost_used: 0,
+      cost_limit: 0,
+      max_depth_reached: 0,
+      depth_limit: 0,
+    },
+    steps: [],
+  });
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  function openTrace(trace: object) {
+    mockExecParam = "exec-1";
+    mockUseSWR.mockReturnValue({
+      data: [makeExecution({ status: "error" })],
+      isLoading: false,
+      mutate: vi.fn(),
+    } as unknown as ReturnType<typeof useSWR>);
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(trace)));
+    render(<TracesPage />);
+  }
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    mockExecParam = null;
+  });
+
+  test("shows the run's error and the answer that explains the stop", async () => {
+    openTrace(
+      failedTrace({
+        error: "Context window exceeded: 53,839 tokens > 32,768",
+        answer: "The run stopped: the document does not fit. Use RLM or a larger context window.",
+      }),
+    );
+    const reason = await screen.findByRole("region", { name: "Why this run failed" });
+    expect(reason).toHaveTextContent("Context window exceeded: 53,839 tokens > 32,768");
+    expect(reason).toHaveTextContent("Use RLM or a larger context window.");
+  });
+
+  test("an answer that only repeats the error is shown once", async () => {
+    openTrace(failedTrace({ error: "Timed out after 120 s", answer: "Timed out after 120 s" }));
+    const reason = await screen.findByRole("region", { name: "Why this run failed" });
+    expect(reason.textContent?.match(/Timed out after 120 s/g)).toHaveLength(1);
+  });
+
+  test("P3-CS-1: the answer's markdown is rendered, not shown raw", async () => {
+    openTrace(
+      failedTrace({
+        error: "litellm.ContextWindowExceededError: 53,839 tokens > 32,768",
+        answer:
+          "⚠️ **Context window exceeded**.\n\nThe document is too large.\n\n**How to fix:**\n- Use RAG mode.\n\n_Connection error._",
+      }),
+    );
+    const reason = await screen.findByRole("region", { name: "Why this run failed" });
+    expect(reason).not.toHaveTextContent("**");
+    expect(reason).not.toHaveTextContent("_Connection error._");
+    expect(within(reason).getByText("How to fix:").tagName).toBe("STRONG");
+    expect(within(reason).getByText("Connection error.").tagName).toBe("EM");
+    expect(within(reason).getByRole("listitem")).toHaveTextContent("Use RAG mode.");
+  });
+
+  test("P3-CS-1: an answer that only wraps the error in a title is not shown", async () => {
+    const error = "Cannot connect to the LLM server at 'http://127.0.0.1:9/v1'.";
+    openTrace(failedTrace({ error, answer: `⚠️ **Execution error**.\n\n${error}` }));
+    const reason = await screen.findByRole("region", { name: "Why this run failed" });
+    expect(within(reason).queryByText("Answer")).not.toBeInTheDocument();
+    expect(reason.textContent?.match(/Cannot connect to the LLM server/g)).toHaveLength(1);
+  });
+
+  test("a successful run shows no failure panel", async () => {
+    openTrace({ ...failedTrace({ answer: "4", success: true }), status: "complete" });
+    await screen.findByText("Query");
+    expect(screen.queryByRole("region", { name: "Why this run failed" })).not.toBeInTheDocument();
   });
 });

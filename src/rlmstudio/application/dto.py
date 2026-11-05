@@ -11,6 +11,8 @@ from typing import Any, TypedDict
 
 from rlmstudio.application.sandbox_vars import (
     MODE_AUTO,
+    RESULT_KEY_COST_KNOWN,
+    RESULT_KEY_TOKENS_KNOWN,
     RLM_DEFAULT_COMPACTION_KEEP_LAST,
     RLM_DEFAULT_COMPACTION_RESERVE_TOKENS,
     RLM_DEFAULT_MAX_REGISTRY_BYTES,
@@ -226,3 +228,17 @@ class RunResultDTO:
     def total_tokens(self) -> int:
         """Total tokens consumed (input + output)."""
         return self.input_tokens + self.output_tokens
+
+    @property
+    def cost_known(self) -> bool:
+        """False when ``total_cost`` is 0 because no price was reported, not measured."""
+        return self.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False
+
+    @property
+    def tokens_known(self) -> bool:
+        """False when the token fields are 0 because no count was reported, not measured."""
+        return self.metadata.get(RESULT_KEY_TOKENS_KNOWN, True) is not False
+
+    def usage_flags(self) -> dict[str, bool]:
+        """``{cost_known, tokens_known}`` for the records and responses that carry this run."""
+        return {RESULT_KEY_COST_KNOWN: self.cost_known, RESULT_KEY_TOKENS_KNOWN: self.tokens_known}

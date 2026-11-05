@@ -200,17 +200,32 @@ class TestWallClockBudget:
         assert result.answer.startswith("⚠️")
         assert _category(result) is OutcomeCategory.TIMEOUT
 
+    def test_timeout_card_points_at_the_time_limit_setting(self) -> None:
+        """CMP2-04: the hint named "Settings → Profile → Runtime Settings:
+        Timeout / Max steps", which is not the setting that applies."""
+        engine = FakeRLMEngine(delay=_SLOW)
+        config = RunConfigDTO(max_time_seconds=_TIGHT_BUDGET)
+        result = RunRLMOfficialUseCase(engine).execute("doc", "q", config)
+
+        assert "**Max Execution Time (s)**" in result.answer
+        assert "**Max time** in the LLM Tuner" in result.answer
+        assert "Runtime Settings" not in result.answer
+        assert "**Timeout (s)**" not in result.answer
+
     def test_an_abandoned_run_reports_its_cost_as_unknown(self) -> None:
         """The guard cannot see what the abandoned engine had already spent.
 
-        Recording a known $0 would understate exactly the runs that ran longest;
-        the engine's own timeout is the path that reports real figures.
+        Recording a known $0 would understate exactly the runs that ran longest.
+        Neither timeout path reports real figures (the engine's own carries
+        none either), so the tokens are unknown too and the answer says so.
         """
         engine = FakeRLMEngine(delay=_SLOW)
         config = RunConfigDTO(max_time_seconds=_TIGHT_BUDGET)
         result = RunRLMOfficialUseCase(engine).execute("doc", "q", config)
 
         assert result.metadata[RESULT_KEY_COST_KNOWN] is False
+        assert result.tokens_known is False
+        assert "Usage isn't available" in result.answer
 
     def test_an_engine_exception_also_reports_cost_as_unknown(self) -> None:
         engine = FakeRLMEngine(error=RuntimeError("backend exploded mid-run"))
@@ -296,6 +311,8 @@ class TestAsync:
                 "cost_usd": FAKE_TOTAL_COST,
                 "steps": FAKE_STEPS,
                 "elapsed_seconds": result.elapsed_time,
+                "cost_known": True,
+                "tokens_known": True,
             }
         ]
 
@@ -343,3 +360,18 @@ class TestAsync:
 
         assert not result.success
         assert result.error == "async boom"
+
+
+class TestEmptyAnswer:
+    """D3: an engine that finishes without an answer is not a success."""
+
+    def test_empty_answer_is_a_failure_with_a_card(self) -> None:
+        engine = FakeRLMEngine(answer="   ")
+        result = RunRLMOfficialUseCase(engine).execute("doc", "q")
+
+        assert result.success is False
+        assert result.answer.startswith("⚠️ **No answer**")
+        assert result.error
+        assert result.input_tokens == FAKE_INPUT_TOKENS
+        assert result.mode_used == MODE_RLM_OFFICIAL
+        assert _category(result) is OutcomeCategory.GENERAL_ERROR

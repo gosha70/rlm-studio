@@ -24,6 +24,7 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_STEP,
 )
+from rlmstudio.application.services.outcome_classifier import CONTEXT_OVERFLOW_KEYWORDS
 from rlmstudio.application.services.provider_failure import (
     failure_answer,
     failure_kind_value,
@@ -54,13 +55,7 @@ def _format_error_answer(exc: Exception) -> str:
             "**How to fix** — in Settings → Profile → Runtime Settings:\n"
             "- Increase **Timeout (s)** (try 300 or higher for large documents)."
         )
-    if (
-        "context window" in error_lower
-        or "context_length" in error_lower
-        or "contextwindowexceeded" in error_lower
-        or "prompt is too long" in error_lower
-        or "maximum context length" in error_lower
-    ):
+    if any(kw in error_lower for kw in CONTEXT_OVERFLOW_KEYWORDS):
         return (
             "⚠️ **Context window exceeded**.\n\n"
             "The document is too large for this model's context limit.\n\n"

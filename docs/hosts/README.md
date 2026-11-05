@@ -80,7 +80,7 @@ See `.env.example` for the full list of overrides (`RLM_STUDIO_OPENAI_DEFAULT_MO
 
 ### Scheduled connection testing
 
-RLM Studio can re-test every configured provider on a timer. Configure the interval under **Settings → Providers** (`connection_test_interval_minutes`, 0–1440; 0 disables the daemon). Each cycle:
+RLM Studio can re-test every configured provider on a timer. Configure the interval under **Settings → General** (`connection_test_interval_minutes`, 0–1440; 0 disables the daemon). Each cycle:
 
 - Tests up to 5 providers in parallel.
 - Uses a 10-second per-test timeout.

@@ -21,6 +21,7 @@ Two things this file deliberately does *not* do:
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from collections.abc import Generator, Iterator
@@ -605,3 +606,101 @@ class TestWebSocketOfficialEngine:
         assert frame["data"]["code"] == "EXECUTION_ERROR"
         assert frame["data"]["message"] == "async boom"
         assert frame["data"]["mode"] == MODE_RLM_OFFICIAL
+
+
+_OVERLAP_DELAY_SECONDS = 0.2
+
+
+class _OverlapCountingEngine(FakeRLMEngine):
+    """Records how many runs were inside the engine at the same time."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._guard = threading.Lock()
+        self._inside = 0
+        self.most_at_once = 0
+
+    def _enter(self) -> None:
+        with self._guard:
+            self._inside += 1
+            self.most_at_once = max(self.most_at_once, self._inside)
+
+    def _leave(self) -> None:
+        with self._guard:
+            self._inside -= 1
+
+    def run(self, content: str, query: str, config: Any) -> Any:
+        self._enter()
+        try:
+            return super().run(content, query, config)
+        finally:
+            self._leave()
+
+    async def run_async(self, content: str, query: str, config: Any) -> Any:
+        self._enter()
+        try:
+            return await super().run_async(content, query, config)
+        finally:
+            self._leave()
+
+
+class TestChatQueuesOfficialProviders:
+    """CMP2-01: Chat sends one request per selected Chat Provider, so two
+    official-engine providers on one message must queue — the in-process
+    engine admits one run and the second gave up "busy" — unless the sandbox
+    is Docker, where each run has its own container."""
+
+    def _post_two(self, client: TestClient) -> list[Any]:
+        ids = [
+            client.post(
+                "/api/chat",
+                json={"query": "q", "content": "doc", "mode": MODE_RLM_OFFICIAL},
+            ).json()["execution_id"]
+            for _ in range(2)
+        ]
+        return [_await_execution(i) for i in ids]
+
+    def test_rest_official_runs_one_after_another(self, client: TestClient) -> None:
+        state = get_state()
+        state.config.sandbox.type = "restricted"
+        engine = _OverlapCountingEngine(delay=_OVERLAP_DELAY_SECONDS)
+        _install_global_fakes(state, engine=engine)
+
+        records = self._post_two(client)
+
+        assert all(r.status == _EXECUTION_STATUS_COMPLETE for r in records)
+        assert engine.most_at_once == 1
+
+    def test_rest_official_runs_in_parallel_with_docker(self, client: TestClient) -> None:
+        state = get_state()
+        state.config.sandbox.type = "docker"
+        engine = _OverlapCountingEngine(delay=_OVERLAP_DELAY_SECONDS)
+        _install_global_fakes(state, engine=engine)
+
+        self._post_two(client)
+
+        assert engine.most_at_once == 2
+
+    def test_websocket_official_runs_one_after_another(self, client: TestClient) -> None:
+        state = get_state()
+        state.config.sandbox.type = "restricted"
+        session_id = _seed_session()
+        engine = _OverlapCountingEngine(delay=_OVERLAP_DELAY_SECONDS)
+        _install_global_fakes(state, engine=engine)
+
+        with client.websocket_connect(f"/ws/chat/{session_id}") as ws:
+            assert ws.receive_json()["type"] == "connected"
+            for query_id in ("a", "b"):
+                ws.send_json(
+                    {
+                        "type": "query",
+                        "id": query_id,
+                        "query": "q",
+                        "content": "doc",
+                        "mode": MODE_RLM_OFFICIAL,
+                    }
+                )
+            _receive_until(ws, "complete", collect=("step", "metrics"))
+            _receive_until(ws, "complete", collect=("step", "metrics"))
+
+        assert engine.most_at_once == 1

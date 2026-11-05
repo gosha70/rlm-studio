@@ -5,7 +5,8 @@ storage) so the client can render a status row on every Learn page.
 
 Check semantics match the pitch's red-dot badge policy:
 ``error`` states are hard blockers (no LLM provider configured,
-storage unreachable); ``warn`` is a soft issue (judge missing);
+storage unreachable); ``warn`` is a soft issue (judge missing, every
+LLM provider failed its last connection test);
 ``ok`` passes. Only ``error`` drives the sidebar badge — see
 ``pitch-learn-tab.md`` §Diagnostics red-dot badge.
 """
@@ -19,6 +20,11 @@ from rlmstudio.server.models import DiagnosticCheck, DiagnosticsResponse
 from rlmstudio.server.routes.llm_providers import _compute_status
 
 router = APIRouter()
+
+# _compute_status values: a provider that passed (or has not had) a
+# connection test can be used; one whose last test failed cannot.
+_USABLE_STATUSES: frozenset[str] = frozenset({"connected", "configured"})
+_FAILED_STATUSES: frozenset[str] = frozenset({"offline", "error"})
 
 
 @router.get("/api/diagnostics")
@@ -64,16 +70,27 @@ def _check_provider(state: AppState) -> DiagnosticCheck:
     #
     # Legacy provider_configs are checked as a backward-compat fallback
     # for installs that predate named LLM Providers.
-    llm_configured = [
-        lp for lp in state.config.llm_providers if _compute_status(lp) != "not_configured"
-    ]
+    #
+    # A provider whose last connection test failed (offline / error) is
+    # configured but not usable; an untested one still counts as usable.
+    statuses = [_compute_status(lp) for lp in state.config.llm_providers]
+    llm_usable = [s for s in statuses if s in _USABLE_STATUSES]
+    llm_failed = [s for s in statuses if s in _FAILED_STATUSES]
     legacy_enabled = [pc for pc in state.config.provider_configs if pc.enabled]
 
-    if llm_configured or legacy_enabled:
-        total = len(llm_configured) + len(legacy_enabled)
+    if llm_usable or legacy_enabled:
+        total = len(llm_usable) + len(legacy_enabled)
         return DiagnosticCheck(
             status="ok",
             message=f"{total} LLM provider(s) configured",
+        )
+    if llm_failed:
+        return DiagnosticCheck(
+            status="warn",
+            message=(
+                f"No LLM provider reachable: {len(llm_failed)} failed the last connection test"
+            ),
+            fixUrl="/settings",
         )
     return DiagnosticCheck(
         status="error",

@@ -112,26 +112,6 @@ export function ExecutionConfig({ config, onChange }: ExecutionConfigProps) {
               </div>
             ))}
           </div>
-
-          <div className="pt-2">
-            <Label>Default Mode</Label>
-            <Select
-              value={local.default_mode}
-              onValueChange={(v) => setLocal({ ...local, default_mode: v })}
-            >
-              <SelectTrigger className="w-full mt-1" aria-label="Default mode">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={MODE_AUTO}>Auto (system decides)</SelectItem>
-                {ALL_EXECUTION_MODES.map((mode) => (
-                  <SelectItem key={mode} value={mode}>
-                    {displayModeName(mode)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
         </CardContent>
       </Card>
 

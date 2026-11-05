@@ -372,6 +372,17 @@ def _is_chat_capable_model(model_id: str) -> bool:
     return not base.startswith(_NON_CHAT_MODEL_PREFIXES)
 
 
+# Local servers list embedding models beside chat models with no type field
+# (LM Studio's "text-embedding-nomic-embed-text-v1.5", Ollama's
+# "nomic-embed-text"); every common embedding family carries this in its id.
+_EMBEDDING_MODEL_MARKER = "embed"
+
+
+def _is_embedding_model(model_id: str) -> bool:
+    """Whether a local server's model id names an embedding model, not a chat model."""
+    return _EMBEDDING_MODEL_MARKER in model_id.lower()
+
+
 def _models_endpoint_url(provider_name: str, endpoint_override: str | None) -> str:
     """Return the models URL, honoring a configured compatible gateway.
 
@@ -482,6 +493,7 @@ async def _fetch_models_from_api(
             return [
                 ModelInfo(name=m["name"], input_cost_per_1k=0.0, output_cost_per_1k=0.0)
                 for m in models
+                if not _is_embedding_model(m["name"])
             ]
 
         elif provider_name == "lmstudio":
@@ -490,7 +502,9 @@ async def _fetch_models_from_api(
             resp.raise_for_status()
             data = resp.json().get("data", [])
             return [
-                ModelInfo(name=m["id"], input_cost_per_1k=0.0, output_cost_per_1k=0.0) for m in data
+                ModelInfo(name=m["id"], input_cost_per_1k=0.0, output_cost_per_1k=0.0)
+                for m in data
+                if not _is_embedding_model(m["id"])
             ]
 
         elif provider_name == "vllm":
@@ -499,7 +513,9 @@ async def _fetch_models_from_api(
             resp.raise_for_status()
             data = resp.json().get("data", [])
             return [
-                ModelInfo(name=m["id"], input_cost_per_1k=0.0, output_cost_per_1k=0.0) for m in data
+                ModelInfo(name=m["id"], input_cost_per_1k=0.0, output_cost_per_1k=0.0)
+                for m in data
+                if not _is_embedding_model(m["id"])
             ]
 
     return []

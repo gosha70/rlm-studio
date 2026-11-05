@@ -39,6 +39,7 @@ import {
   testLLMProvider,
   testLLMProviderConfig,
   getLLMProviderModelsForConfig,
+  apiErrorMessage,
   type AppConfig,
   type RunProfile,
   type ChatProviderConfig,
@@ -70,9 +71,25 @@ import {
   MODE_DIRECT,
   MODE_RLM,
   MODE_RAG,
+  EMBEDDING_MODEL_DEFAULT,
+  CONTEXT_WINDOW_MAX_TOKENS,
+  CONNECTION_TEST_INTERVAL_MAX_MINUTES,
+  isWholeNumber,
+  defaultEmbeddingModelFor,
+  isDefaultEmbeddingModel,
   displayModeName,
+  CHAT_PROVIDERS_SWR_KEY,
 } from "@/lib/constants";
 import { StrategySelectItems } from "@/components/settings/strategy-select-items";
+import {
+  CONTEXT_WINDOW_CLEAR,
+  CONTEXT_WINDOW_MIN_TOKENS,
+  RAG_CHUNK_SIZE_MAX,
+  RAG_CHUNK_SIZE_MIN,
+  RAG_TOP_K_MAX,
+  RAG_TOP_K_MIN,
+  wholeNumberProblem,
+} from "@/components/settings/input-limits";
 
 // Backend keys the Settings form accepts. The deep-link banner only
 // renders when `?provider=` matches one of these, so a random or
@@ -96,6 +113,70 @@ const DEEP_LINK_BASE_URL_ALLOWED_BACKENDS: ReadonlySet<string> = new Set([
   BACKEND_LMSTUDIO,
   BACKEND_VLLM,
 ]);
+
+/** Why a form's submit button is disabled, e.g. "Fill in Name, Model to create." */
+function missingFieldsHint(missing: (string | false)[], action: string): string | null {
+  const names = missing.filter((m): m is string => !!m);
+  return names.length > 0 ? `Fill in ${names.join(", ")} to ${action}.` : null;
+}
+
+/**
+ * RAG settings as typed.  The numbers stay text until Save so a blank,
+ * fractional or out-of-range value is refused, not coerced to a default.
+ */
+interface RagFormFields {
+  chunk_size: string;
+  chunk_overlap: string;
+  top_k: string;
+  embedding_model: string;
+}
+
+const RAG_FORM_DEFAULTS = { chunk_size: "512", chunk_overlap: "64", top_k: "5" };
+
+function ragFormFields(cfg: RAGConfig): RagFormFields {
+  return {
+    chunk_size: String(cfg.chunk_size),
+    chunk_overlap: String(cfg.chunk_overlap),
+    top_k: String(cfg.top_k),
+    embedding_model: cfg.embedding_model,
+  };
+}
+
+/** Why the RAG settings cannot be saved, or null when they can. */
+function ragFormProblem(rag: RagFormFields): string | null {
+  const chunkProblem = wholeNumberProblem(
+    "Chunk Size",
+    rag.chunk_size,
+    RAG_CHUNK_SIZE_MIN,
+    RAG_CHUNK_SIZE_MAX,
+  );
+  if (chunkProblem) return chunkProblem;
+  // Overlap must leave each chunk some new text: 0 up to one less than the chunk.
+  const overlapProblem = wholeNumberProblem(
+    "Chunk Overlap",
+    rag.chunk_overlap,
+    0,
+    Number(rag.chunk_size.trim()) - 1,
+  );
+  if (overlapProblem) return overlapProblem;
+  const topKProblem = wholeNumberProblem("Top K", rag.top_k, RAG_TOP_K_MIN, RAG_TOP_K_MAX);
+  if (topKProblem) return topKProblem;
+  if (!rag.embedding_model.trim()) return "Enter an Embedding Model.";
+  return null;
+}
+
+function ragConfigFromForm(rag: RagFormFields): RAGConfig {
+  return {
+    chunk_size: Number(rag.chunk_size.trim()),
+    chunk_overlap: Number(rag.chunk_overlap.trim()),
+    top_k: Number(rag.top_k.trim()),
+    embedding_model: rag.embedding_model.trim(),
+  };
+}
+
+// A dropdown of user-named items: never wider than the viewport, so a long
+// unbroken name wraps inside it instead of spilling off screen.
+const NAME_LIST_CONTENT_CLASS = "max-w-[calc(100vw-2rem)]";
 
 /** A connection-test outcome, including the backend's classified failure. */
 interface TestResult {
@@ -177,6 +258,7 @@ function SettingsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
+  const [intervalError, setIntervalError] = useState<string | null>(null);
   const [newProfileName, setNewProfileName] = useState("");
   const [newProfileStrategy, setNewProfileStrategy] = useState<string>(MODE_DIRECT);
   const [newProfileDescription, setNewProfileDescription] = useState("");
@@ -191,17 +273,12 @@ function SettingsPageInner() {
     name: string;
     llm_provider_id: string;
     profile_id: string;
-    rag_config: RAGConfig;
+    rag_config: RagFormFields;
   }>({
     name: "",
     llm_provider_id: "",
     profile_id: "",
-    rag_config: {
-      chunk_size: 512,
-      chunk_overlap: 64,
-      top_k: 5,
-      embedding_model: "text-embedding-3-small",
-    },
+    rag_config: { ...RAG_FORM_DEFAULTS, embedding_model: EMBEDDING_MODEL_DEFAULT },
   });
   const [savingProvider, setSavingProvider] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -352,7 +429,7 @@ function SettingsPageInner() {
   const { data: config, mutate: mutateConfig } = useSWR<AppConfig>("config", getConfig);
   const { data: profiles = [], mutate: mutateProfiles } = useSWR<RunProfile[]>("profiles", getProfiles);
   const { data: chatProviders = [], mutate: mutateChatProviders } = useSWR<ChatProviderConfig[]>(
-    "chat-providers",
+    CHAT_PROVIDERS_SWR_KEY,
     getChatProviders
   );
   const { data: llmProviders = [], mutate: mutateLLMProviders } = useSWR<LLMProviderConfig[]>(
@@ -369,8 +446,10 @@ function SettingsPageInner() {
     try {
       const updated = await updateConfig({ budget });
       mutateConfig(updated, false);
+      toast.success("Budget limits saved");
     } catch (err) {
       console.error("Failed to save budget:", err);
+      toast.error(`Budget limits not saved: ${apiErrorMessage(err)}`);
     } finally {
       setSaving(false);
     }
@@ -392,8 +471,10 @@ function SettingsPageInner() {
         connection_test_interval_minutes: minutes,
       });
       mutateConfig(updated, false);
+      toast.success("Connection-test interval saved");
     } catch (err) {
       console.error("Failed to save connection-test interval:", err);
+      toast.error(`Interval not saved: ${apiErrorMessage(err)}`);
     } finally {
       setSaving(false);
     }
@@ -422,7 +503,7 @@ function SettingsPageInner() {
       mutateProfiles();
     } catch (err) {
       console.error("Failed to create profile:", err);
-      toast.error("Failed to create profile");
+      toast.error(`Profile not created: ${apiErrorMessage(err)}`);
     } finally {
       setCreatingProfile(false);
     }
@@ -434,13 +515,29 @@ function SettingsPageInner() {
       name: provider.name,
       llm_provider_id: provider.llm_provider_id,
       profile_id: provider.profile_id || "",
-      rag_config: provider.rag_config || {
-        chunk_size: 512,
-        chunk_overlap: 64,
-        top_k: 5,
-        embedding_model: "text-embedding-3-small",
-      },
+      rag_config: provider.rag_config
+        ? ragFormFields(provider.rag_config)
+        : {
+            ...RAG_FORM_DEFAULTS,
+            embedding_model: defaultEmbeddingModelFor(
+              llmProviders.find((lp) => lp.id === provider.llm_provider_id)?.backend,
+            ),
+          },
     });
+  };
+
+  // Picking the LLM Provider moves an untouched embedding model to that
+  // server's default, so a RAG Chat Provider on Ollama or LM Studio embeds
+  // locally unless the user typed another model.
+  const handleChatProviderLLMChange = (llmProviderId: string) => {
+    const backend = llmProviders.find((lp) => lp.id === llmProviderId)?.backend;
+    setFormData((prev) => ({
+      ...prev,
+      llm_provider_id: llmProviderId,
+      rag_config: isDefaultEmbeddingModel(prev.rag_config.embedding_model)
+        ? { ...prev.rag_config, embedding_model: defaultEmbeddingModelFor(backend) }
+        : prev.rag_config,
+    }));
   };
 
   const handleSaveChatProvider = async () => {
@@ -448,6 +545,7 @@ function SettingsPageInner() {
       console.error("Missing required fields");
       return;
     }
+    if (ragProblem) return;
 
     setSavingProvider(true);
     try {
@@ -459,7 +557,7 @@ function SettingsPageInner() {
       };
 
       if (selectedProfile?.strategy === MODE_RAG) {
-        payload.rag_config = formData.rag_config;
+        payload.rag_config = ragConfigFromForm(formData.rag_config);
       }
 
       const result = editingId
@@ -476,7 +574,7 @@ function SettingsPageInner() {
       mutateChatProviders();
     } catch (err) {
       console.error("Failed to save chat provider:", err);
-      toast.error("Failed to save Chat Provider");
+      toast.error(`Chat Provider not saved: ${apiErrorMessage(err)}`);
     } finally {
       setSavingProvider(false);
     }
@@ -496,7 +594,7 @@ function SettingsPageInner() {
       }
     } catch (err) {
       console.error("Failed to delete chat provider:", err);
-      toast.error("Failed to delete Chat Provider");
+      toast.error(`Chat Provider not deleted: ${apiErrorMessage(err)}`);
     } finally {
       setDeletingId(null);
     }
@@ -537,18 +635,16 @@ function SettingsPageInner() {
 
   // Resolve the selected profile for the form
   const selectedProfile = profiles.find((p) => p.id === formData.profile_id);
+  // RAG settings are only sent, and so only checked, for a RAG profile.
+  const ragProblem =
+    selectedProfile?.strategy === MODE_RAG ? ragFormProblem(formData.rag_config) : null;
 
   const resetForm = () => {
     setFormData({
       name: "",
       llm_provider_id: "",
       profile_id: "",
-      rag_config: {
-        chunk_size: 512,
-        chunk_overlap: 64,
-        top_k: 5,
-        embedding_model: "text-embedding-3-small",
-      },
+      rag_config: { ...RAG_FORM_DEFAULTS, embedding_model: EMBEDDING_MODEL_DEFAULT },
     });
   };
 
@@ -628,22 +724,21 @@ function SettingsPageInner() {
   // Build the request payload from the current form state. Used by
   // both save and test paths so the two always see the same values.
   const buildLLMProviderRequest = (): LLMProviderCreateRequest => {
-    const parsedCtxWindow = llmProviderForm.context_window.trim()
-      ? parseInt(llmProviderForm.context_window.trim(), 10)
-      : null;
+    const ctx = llmProviderForm.context_window.trim();
     return {
       name: llmProviderForm.name.trim(),
       backend: llmProviderForm.backend,
       model: llmProviderForm.model.trim(),
       api_key: llmProviderForm.api_key.trim() || null,
       endpoint: llmProviderForm.endpoint.trim() || null,
-      context_window:
-        parsedCtxWindow && parsedCtxWindow > 0 ? parsedCtxWindow : null,
+      // Only a valid value is sent; Save is blocked while the field is invalid.
+      context_window: ctx && !contextWindowError ? Number(ctx) : null,
     };
   };
 
   const handleSaveLLMProvider = async () => {
     if (!llmProviderForm.name.trim() || !llmProviderForm.model.trim()) return;
+    if (contextWindowError) return;
     setSavingLLMProvider(true);
     try {
       const req = buildLLMProviderRequest();
@@ -656,7 +751,17 @@ function SettingsPageInner() {
       const formTestResult = testResults[FORM_TEST_RESULT_KEY];
       let savedId: string | null = null;
       if (editingLLMProviderId) {
-        await updateLLMProvider(editingLLMProviderId, req);
+        // A blank context window on Edit removes the stored value: the
+        // update route reads `null` as "no change".  When the model or
+        // endpoint changed, `null` is kept so the server re-discovers it.
+        const saved = llmProviders.find((lp) => lp.id === editingLLMProviderId);
+        const destinationChanged =
+          !saved || req.model !== saved.model || (req.endpoint ?? null) !== (saved.endpoint ?? null);
+        const update =
+          req.context_window === null && !destinationChanged
+            ? { ...req, context_window: CONTEXT_WINDOW_CLEAR }
+            : req;
+        await updateLLMProvider(editingLLMProviderId, update);
         savedId = editingLLMProviderId;
       } else {
         const created = await createLLMProvider(req);
@@ -680,7 +785,7 @@ function SettingsPageInner() {
       toast.success(editingLLMProviderId ? "LLM Provider updated" : "LLM Provider created");
     } catch (err) {
       console.error("Failed to save LLM provider:", err);
-      toast.error("Failed to save LLM Provider");
+      toast.error(`Failed to save LLM Provider: ${apiErrorMessage(err)}`);
     } finally {
       setSavingLLMProvider(false);
     }
@@ -733,15 +838,17 @@ function SettingsPageInner() {
     }
   };
 
-  const handleDeleteLLMProvider = async (id: string) => {
-    if (!confirm("Delete this LLM Provider? Any Chat Providers referencing it will stop working.")) return;
-    setDeletingLLMProviderId(id);
+  const handleDeleteLLMProvider = async (lp: LLMProviderConfig) => {
+    // The server refuses to delete a provider a Chat Provider still uses,
+    // so the dialog must not claim those Chat Providers "will stop working".
+    if (!confirm(`Delete LLM Provider "${lp.name}"? This cannot be undone.`)) return;
+    setDeletingLLMProviderId(lp.id);
     try {
-      await deleteLLMProvider(id);
+      await deleteLLMProvider(lp.id);
       mutateLLMProviders();
     } catch (err) {
       console.error("Failed to delete LLM provider:", err);
-      toast.error("Failed to delete LLM Provider");
+      toast.error(`LLM Provider not deleted: ${apiErrorMessage(err)}`);
     } finally {
       setDeletingLLMProviderId(null);
     }
@@ -789,6 +896,36 @@ function SettingsPageInner() {
   const modelSourceLabel = isLocalFormBackend
     ? llmProviderForm.endpoint.trim() || "the endpoint"
     : (BACKEND_DISPLAY_NAMES[llmProviderForm.backend] ?? llmProviderForm.backend);
+  const llmFormHint = missingFieldsHint(
+    [!llmProviderForm.name.trim() && "Name", !llmProviderForm.model.trim() && "Model"],
+    editingLLMProviderId ? "save" : "create",
+  );
+  const chatProviderFormHint = missingFieldsHint(
+    [
+      !formData.name.trim() && "Name",
+      !formData.llm_provider_id && "LLM Provider",
+      !formData.profile_id && "Profile",
+    ],
+    "create",
+  );
+
+  // The edit form never shows the stored key, so say that one exists.
+  const editingKeyStored =
+    !!editingLLMProviderId &&
+    !!llmProviders.find((lp) => lp.id === editingLLMProviderId)?.api_key_stored;
+
+  // Context window: blank means auto-discover; anything else must be a
+  // whole number of tokens.  parseInt used to read "1e3" as 1 and drop "-5".
+  const ctxText = llmProviderForm.context_window.trim();
+  const contextWindowError =
+    ctxText === ""
+      ? null
+      : !isWholeNumber(ctxText) ||
+          Number(ctxText) < CONTEXT_WINDOW_MIN_TOKENS ||
+          Number(ctxText) > CONTEXT_WINDOW_MAX_TOKENS
+        ? `Enter a whole number of tokens from ${CONTEXT_WINDOW_MIN_TOKENS.toLocaleString()} to ${CONTEXT_WINDOW_MAX_TOKENS.toLocaleString()}, or leave it blank to auto-discover.`
+        : null;
+
   // A saved model the endpoint does not serve — the old value would
   // otherwise survive Save behind an empty Select trigger.
   const staleModel =
@@ -811,7 +948,9 @@ function SettingsPageInner() {
         )}
 
         <Tabs defaultValue="llm-providers">
-          <TabsList>
+          {/* Wraps onto a second row when the seven tabs don't fit (768 px),
+              instead of pushing General and Appearance off screen. */}
+          <TabsList className="h-auto max-w-full flex-wrap justify-start">
             <TabsTrigger value="llm-providers">LLM Providers</TabsTrigger>
             <TabsTrigger value="chat-providers">Chat Providers</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
@@ -890,7 +1029,9 @@ function SettingsPageInner() {
                     {llmProviderModels.length > 0 ? (
                       <div className="flex gap-2">
                         <Select
-                          value={llmProviderForm.model || undefined}
+                          // "" shows the placeholder; undefined would make the
+                          // Select uncontrolled and React warns when it flips.
+                          value={llmProviderForm.model}
                           onValueChange={(v) => setLLMProviderForm({ ...llmProviderForm, model: v })}
                         >
                           <SelectTrigger id="llmp-model" className="flex-1">
@@ -987,26 +1128,46 @@ function SettingsPageInner() {
                       <Input
                         id="llmp-apikey"
                         type="password"
-                        placeholder="sk-..."
+                        placeholder={editingKeyStored ? "Key stored (hidden)" : "sk-..."}
                         value={llmProviderForm.api_key}
                         onChange={(e) => setLLMProviderForm({ ...llmProviderForm, api_key: e.target.value })}
+                        aria-describedby={editingKeyStored ? "llmp-apikey-stored" : undefined}
                       />
+                      {editingKeyStored && (
+                        <p id="llmp-apikey-stored" className="text-xs text-muted-foreground">
+                          A key is stored for this provider. Leave the field blank to keep it, or
+                          enter a new key to replace it.
+                        </p>
+                      )}
                     </div>
                   )}
                   <div className="space-y-2">
                     <FieldLabel htmlFor="llmp-context-window" tooltip="Total context window in tokens (input + output). Auto-discovered from the model endpoint when left blank. Set manually to override, e.g. 8192 for Qwen 7B. Profile max_tokens will be capped to 75% of this value.">Context Window (tokens)</FieldLabel>
                     <Input
                       id="llmp-context-window"
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="Auto-discover (e.g. 8192)"
                       value={llmProviderForm.context_window}
                       onChange={(e) => setLLMProviderForm({ ...llmProviderForm, context_window: e.target.value })}
+                      aria-invalid={contextWindowError ? true : undefined}
+                      aria-describedby={contextWindowError ? "llmp-context-window-error" : undefined}
                     />
+                    {contextWindowError && (
+                      <p id="llmp-context-window-error" className="text-xs text-destructive">
+                        {contextWindowError}
+                      </p>
+                    )}
                   </div>
                   <div className="flex gap-2">
                     <Button
                       onClick={handleSaveLLMProvider}
-                      disabled={savingLLMProvider || !llmProviderForm.name.trim() || !llmProviderForm.model.trim()}
+                      disabled={
+                        savingLLMProvider ||
+                        !llmProviderForm.name.trim() ||
+                        !llmProviderForm.model.trim() ||
+                        !!contextWindowError
+                      }
                     >
                       {editingLLMProviderId ? "Save" : "Create"}
                     </Button>
@@ -1036,6 +1197,9 @@ function SettingsPageInner() {
                       Cancel
                     </Button>
                   </div>
+                  {llmFormHint && (
+                    <p className="text-xs text-muted-foreground">{llmFormHint}</p>
+                  )}
                   {testResults[FORM_TEST_RESULT_KEY] && (
                     <div className={`mt-2 rounded-md p-2 text-sm ${testResults[FORM_TEST_RESULT_KEY].connected ? "bg-emerald-500/10 text-emerald-400" : "bg-destructive/10 text-destructive"}`}>
                       <TestOutcome result={testResults[FORM_TEST_RESULT_KEY]} />
@@ -1051,10 +1215,10 @@ function SettingsPageInner() {
               return (
                 <Card key={lp.id}>
                   <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <CardTitle className="text-base">{lp.name}</CardTitle>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <CardTitle className="min-w-0 text-base wrap-anywhere">{lp.name}</CardTitle>
                           <span
                             className={cn("inline-block h-2 w-2 rounded-full", statusColor)}
                             title={lp.status}
@@ -1063,7 +1227,7 @@ function SettingsPageInner() {
                             {lp.status.replace("_", " ")}
                           </Badge>
                         </div>
-                        <p className="text-sm text-muted-foreground">
+                        <p className="text-sm text-muted-foreground wrap-anywhere">
                           {BACKEND_DISPLAY_NAMES[lp.backend] || lp.backend} &middot; {lp.model}
                           {lp.endpoint && <> &middot; {lp.endpoint}</>}
                           {lp.context_window && <> &middot; {lp.context_window.toLocaleString()} tokens</>}
@@ -1080,7 +1244,8 @@ function SettingsPageInner() {
                               lp.status === "connected" && (
                                 <span className="ml-2 text-amber-500">
                                   &middot; {lp.consecutive_failures} recent failure
-                                  {lp.consecutive_failures === 1 ? "" : "s"} — monitoring
+                                  {lp.consecutive_failures === 1 ? "" : "s"}
+                                  {(config?.connection_test_interval_minutes ?? 0) > 0 ? " — monitoring" : ""}
                                 </span>
                               )}
                           </p>
@@ -1108,11 +1273,11 @@ function SettingsPageInner() {
                         )}
                         {lp.model_check_status === "unknown" && (
                           <p className="text-xs text-muted-foreground">
-                            Model check could not reach the provider.
+                            Model not checked: the provider&apos;s model list could not be read.
                           </p>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex shrink-0 items-center gap-2">
                         <Button
                           variant="outline"
                           size="sm"
@@ -1134,7 +1299,7 @@ function SettingsPageInner() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDeleteLLMProvider(lp.id)}
+                          onClick={() => handleDeleteLLMProvider(lp)}
                           disabled={deletingLLMProviderId === lp.id}
                         >
                           <Trash2 className="h-4 w-4" aria-hidden="true" />
@@ -1188,10 +1353,10 @@ function SettingsPageInner() {
                   <SelectTrigger>
                     <SelectValue placeholder="None (judging disabled)" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className={NAME_LIST_CONTENT_CLASS}>
                     <SelectItem value="__none__">None (judging disabled)</SelectItem>
                     {chatProviders.map((cp) => (
-                      <SelectItem key={cp.id} value={cp.id}>
+                      <SelectItem key={cp.id} value={cp.id} className="wrap-anywhere">
                         {cp.name} ({cp.llm_provider_name || cp.llm_provider_id})
                       </SelectItem>
                     ))}
@@ -1235,14 +1400,14 @@ function SettingsPageInner() {
                     <FieldLabel htmlFor="cp-llm-provider" tooltip="The LLM provider instance to use for inference. Must be configured and connected in the LLM Providers tab.">LLM Provider</FieldLabel>
                     <Select
                       value={formData.llm_provider_id}
-                      onValueChange={(value) => setFormData({ ...formData, llm_provider_id: value })}
+                      onValueChange={handleChatProviderLLMChange}
                     >
                       <SelectTrigger id="cp-llm-provider">
                         <SelectValue placeholder="Select an LLM Provider" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className={NAME_LIST_CONTENT_CLASS}>
                         {llmProviders.map((lp) => (
-                          <SelectItem key={lp.id} value={lp.id}>
+                          <SelectItem key={lp.id} value={lp.id} className="wrap-anywhere">
                             <span>{lp.name}</span>
                             <span className="ml-2 text-xs text-muted-foreground">
                               {BACKEND_DISPLAY_NAMES[lp.backend] || lp.backend} &middot; {lp.model}
@@ -1299,14 +1464,15 @@ function SettingsPageInner() {
                         <Input
                           id="cp-chunk-size"
                           type="number"
-                          min="1"
+                          min={RAG_CHUNK_SIZE_MIN}
+                          max={RAG_CHUNK_SIZE_MAX}
                           value={formData.rag_config.chunk_size}
                           onChange={(e) =>
                             setFormData({
                               ...formData,
                               rag_config: {
                                 ...formData.rag_config,
-                                chunk_size: parseInt(e.target.value) || 512,
+                                chunk_size: e.target.value,
                               },
                             })
                           }
@@ -1324,7 +1490,7 @@ function SettingsPageInner() {
                               ...formData,
                               rag_config: {
                                 ...formData.rag_config,
-                                chunk_overlap: parseInt(e.target.value) || 64,
+                                chunk_overlap: e.target.value,
                               },
                             })
                           }
@@ -1335,14 +1501,15 @@ function SettingsPageInner() {
                         <Input
                           id="cp-top-k"
                           type="number"
-                          min="1"
+                          min={RAG_TOP_K_MIN}
+                          max={RAG_TOP_K_MAX}
                           value={formData.rag_config.top_k}
                           onChange={(e) =>
                             setFormData({
                               ...formData,
                               rag_config: {
                                 ...formData.rag_config,
-                                top_k: parseInt(e.target.value) || 5,
+                                top_k: e.target.value,
                               },
                             })
                           }
@@ -1365,6 +1532,11 @@ function SettingsPageInner() {
                           }
                         />
                       </div>
+                      {ragProblem && (
+                        <p className="text-xs text-destructive" role="status">
+                          {ragProblem}
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -1375,7 +1547,8 @@ function SettingsPageInner() {
                         savingProvider ||
                         !formData.name.trim() ||
                         !formData.llm_provider_id ||
-                        !formData.profile_id
+                        !formData.profile_id ||
+                        !!ragProblem
                       }
                     >
                       Create
@@ -1392,6 +1565,9 @@ function SettingsPageInner() {
                       Cancel
                     </Button>
                   </div>
+                  {chatProviderFormHint && (
+                    <p className="text-xs text-muted-foreground">{chatProviderFormHint}</p>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -1403,15 +1579,15 @@ function SettingsPageInner() {
               return (
               <Card key={provider.id}>
                 <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-1">
-                      <CardTitle className="text-base">{provider.name}</CardTitle>
-                      <p className="text-sm text-muted-foreground">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <CardTitle className="text-base wrap-anywhere">{provider.name}</CardTitle>
+                      <p className="text-sm text-muted-foreground wrap-anywhere">
                         {provider.llm_provider_name || provider.llm_provider_id}
                         {providerProfile && ` · ${providerProfile.name}`}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-2">
                       <span className="inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground">
                         {displayModeName(provider.execution_mode)}
                       </span>
@@ -1463,14 +1639,14 @@ function SettingsPageInner() {
                       <FieldLabel htmlFor={`edit-cp-llm-provider-${provider.id}`} tooltip="The LLM provider instance to use for inference.">LLM Provider</FieldLabel>
                       <Select
                         value={formData.llm_provider_id}
-                        onValueChange={(value) => setFormData({ ...formData, llm_provider_id: value })}
+                        onValueChange={handleChatProviderLLMChange}
                       >
                         <SelectTrigger id={`edit-cp-llm-provider-${provider.id}`}>
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className={NAME_LIST_CONTENT_CLASS}>
                           {llmProviders.map((lp) => (
-                            <SelectItem key={lp.id} value={lp.id}>
+                            <SelectItem key={lp.id} value={lp.id} className="wrap-anywhere">
                               {lp.name} &middot; {BACKEND_DISPLAY_NAMES[lp.backend] || lp.backend} &middot; {lp.model}
                             </SelectItem>
                           ))}
@@ -1509,23 +1685,23 @@ function SettingsPageInner() {
                         <div className="grid grid-cols-2 gap-3">
                           <div className="space-y-1">
                             <FieldLabel htmlFor={`edit-cp-chunk-${provider.id}`} className="text-xs" tooltip="Number of tokens per text chunk for retrieval.">Chunk Size</FieldLabel>
-                            <Input id={`edit-cp-chunk-${provider.id}`} type="number" min="1" className="h-8 text-xs"
+                            <Input id={`edit-cp-chunk-${provider.id}`} type="number" min={RAG_CHUNK_SIZE_MIN} max={RAG_CHUNK_SIZE_MAX} className="h-8 text-xs"
                               value={formData.rag_config.chunk_size}
-                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, chunk_size: parseInt(e.target.value) || 512 }})}
+                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, chunk_size: e.target.value }})}
                             />
                           </div>
                           <div className="space-y-1">
                             <FieldLabel htmlFor={`edit-cp-overlap-${provider.id}`} className="text-xs" tooltip="Token overlap between adjacent chunks. Aim for 10-15% of chunk size.">Overlap</FieldLabel>
                             <Input id={`edit-cp-overlap-${provider.id}`} type="number" min="0" className="h-8 text-xs"
                               value={formData.rag_config.chunk_overlap}
-                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, chunk_overlap: parseInt(e.target.value) || 64 }})}
+                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, chunk_overlap: e.target.value }})}
                             />
                           </div>
                           <div className="space-y-1">
                             <FieldLabel htmlFor={`edit-cp-topk-${provider.id}`} className="text-xs" tooltip="Number of most relevant chunks to retrieve per query.">Top K</FieldLabel>
-                            <Input id={`edit-cp-topk-${provider.id}`} type="number" min="1" className="h-8 text-xs"
+                            <Input id={`edit-cp-topk-${provider.id}`} type="number" min={RAG_TOP_K_MIN} max={RAG_TOP_K_MAX} className="h-8 text-xs"
                               value={formData.rag_config.top_k}
-                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, top_k: parseInt(e.target.value) || 5 }})}
+                              onChange={(e) => setFormData({ ...formData, rag_config: { ...formData.rag_config, top_k: e.target.value }})}
                             />
                           </div>
                           <div className="space-y-1">
@@ -1536,11 +1712,16 @@ function SettingsPageInner() {
                             />
                           </div>
                         </div>
+                        {ragProblem && (
+                          <p className="text-xs text-destructive" role="status">
+                            {ragProblem}
+                          </p>
+                        )}
                       </div>
                     )}
                     <div className="flex gap-2">
                       <Button size="sm" onClick={handleSaveChatProvider}
-                        disabled={savingProvider || !formData.name.trim() || !formData.llm_provider_id || !formData.profile_id}
+                        disabled={savingProvider || !formData.name.trim() || !formData.llm_provider_id || !formData.profile_id || !!ragProblem}
                       >
                         {savingProvider ? "Saving..." : "Save"}
                       </Button>
@@ -1701,16 +1882,29 @@ function SettingsPageInner() {
                     step={1}
                     className="w-32"
                     defaultValue={config?.connection_test_interval_minutes ?? 0}
+                    onChange={() => setIntervalError(null)}
                     onBlur={(e) => {
-                      const raw = Number(e.target.value);
-                      const clamped = Number.isFinite(raw)
-                        ? Math.max(0, Math.min(1440, Math.floor(raw)))
-                        : 0;
-                      if (clamped !== (config?.connection_test_interval_minutes ?? 0)) {
-                        handleSaveConnectionTestInterval(clamped);
+                      // An out-of-range value used to be clamped and saved
+                      // while the field kept showing what was typed.
+                      const text = e.target.value.trim();
+                      const minutes = Number(text);
+                      if (
+                        !isWholeNumber(text) ||
+                        minutes > CONNECTION_TEST_INTERVAL_MAX_MINUTES
+                      ) {
+                        setIntervalError(
+                          `Enter a whole number of minutes from 0 to ${CONNECTION_TEST_INTERVAL_MAX_MINUTES}. Not saved.`,
+                        );
+                        return;
+                      }
+                      setIntervalError(null);
+                      if (minutes !== (config?.connection_test_interval_minutes ?? 0)) {
+                        handleSaveConnectionTestInterval(minutes);
                       }
                     }}
                     disabled={saving}
+                    aria-invalid={intervalError ? true : undefined}
+                    aria-describedby={intervalError ? "connection-test-interval-error" : undefined}
                   />
                   <span className="text-sm text-muted-foreground">
                     {(config?.connection_test_interval_minutes ?? 0) === 0
@@ -1718,9 +1912,15 @@ function SettingsPageInner() {
                       : `every ${config?.connection_test_interval_minutes}m`}
                   </span>
                 </div>
+                {intervalError && (
+                  <p id="connection-test-interval-error" className="text-xs text-destructive" role="alert">
+                    {intervalError}
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">
-                  Range: 0-1440 minutes (24 hours). The first cycle runs after the full
-                  interval elapses, not at server startup.
+                  Range: 0-1440 minutes (24 hours); 0 turns recurring checks off. Every
+                  provider is checked once shortly after the server starts; with an
+                  interval set, the next check runs when the full interval has elapsed.
                 </p>
               </CardContent>
             </Card>

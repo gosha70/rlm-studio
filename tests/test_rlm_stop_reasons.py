@@ -1,0 +1,116 @@
+"""A stopped RLM run names the limit it hit and is not a success (M1, M5).
+
+Before: every ``BudgetExceededError`` was reported as "Step budget exhausted"
+with a hint at a Chat Provider field that does not exist, and returned
+``success=True``.
+"""
+
+from __future__ import annotations
+
+import time
+
+from rlmstudio.application.dto import LLMResponseDTO, RunConfigDTO
+from rlmstudio.application.services.outcome_classifier import (
+    OutcomeCategory,
+    classify_execution_outcome,
+)
+from rlmstudio.application.use_cases.run_rlm import RunRLMUseCase
+from tests.test_use_cases import FakeLLM, FakeSandbox
+
+_CODE_STEP = '```python\nprint("step")\n```'
+
+
+def _category(result) -> OutcomeCategory:
+    return classify_execution_outcome(
+        success=result.success, error=result.error, answer=result.answer
+    ).category
+
+
+class _SlowLLM(FakeLLM):
+    """Each call takes a little wall-clock time, so a tiny time cap is hit."""
+
+    def complete(self, messages: list[dict[str, str]]) -> LLMResponseDTO:
+        time.sleep(0.05)
+        return super().complete(messages)
+
+
+class TestBudgetStopReason:
+    def test_token_cap_names_tokens_and_the_budget_setting(self) -> None:
+        # 15 tokens per call; the cap is reached after the second call.
+        llm = FakeLLM([_CODE_STEP])
+        config = RunConfigDTO(mode="rlm", max_steps=32, max_tokens=20)
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q", config=config)
+
+        assert result.success is False
+        assert result.answer.startswith("⚠️ **Token budget exceeded** after 2 steps")
+        assert "30 of 20 tokens" in result.answer
+        assert "Settings → Budget" in result.answer
+        assert "Step budget" not in result.answer
+        assert _category(result) is OutcomeCategory.BUDGET_EXHAUSTED
+
+    def test_token_cap_on_the_first_step_is_worded_as_such(self) -> None:
+        """SC3-04: a stop on step 1 read "after 1 steps"."""
+        llm = FakeLLM([_CODE_STEP])
+        config = RunConfigDTO(mode="rlm", max_steps=32, max_tokens=10)
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q", config=config)
+
+        assert result.answer.startswith("⚠️ **Token budget exceeded** on the first step")
+        assert "15 of 10 tokens" in result.answer
+        assert result.error == "Budget exceeded: the 10-token limit was reached on the first step"
+        assert _category(result) is OutcomeCategory.BUDGET_EXHAUSTED
+
+    def test_time_cap_is_a_timeout(self) -> None:
+        llm = _SlowLLM([_CODE_STEP])
+        config = RunConfigDTO(mode="rlm", max_steps=32, max_time_seconds=0.01)
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q", config=config)
+
+        assert result.success is False
+        assert result.answer.startswith("⚠️ **Execution timed out**")
+        assert "Max Execution Time (s)" in result.answer
+        assert _category(result) is OutcomeCategory.TIMEOUT
+
+    def test_step_hint_points_at_the_profile_not_chat_providers(self) -> None:
+        llm = FakeLLM([_CODE_STEP])
+        config = RunConfigDTO(mode="rlm", max_steps=2)
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q", config=config)
+
+        assert "Step budget exhausted" in result.answer
+        assert "Settings → Profiles" in result.answer
+        assert "Chat Providers" not in result.answer
+
+    def test_raw_json_action_is_not_shown_as_partial_answer(self) -> None:
+        # M5: an unparseable action repeated until the stall limit stops the run.
+        llm = FakeLLM(['{"type": "inspect", "tool": "grep", "args": '])
+        config = RunConfigDTO(mode="rlm", max_steps=20)
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q", config=config)
+
+        assert result.success is False
+        assert '"type"' not in result.answer
+        assert _category(result) is OutcomeCategory.BUDGET_EXHAUSTED
+
+
+class TestUnparsedFinalAction:
+    """M5: a final action the strict parser rejects still yields its answer."""
+
+    def test_final_action_missing_its_closing_brace_yields_the_answer(self) -> None:
+        truncated = (
+            '{\n  "type": "final",\n  "answer": "Owned by \\u0022Harbour\\u0022.",\n'
+            '  "confidence": 0.9\n'
+        )
+        llm = FakeLLM([truncated])
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q")
+
+        assert result.success is True
+        assert result.answer == 'Owned by "Harbour".'
+
+    def test_fenced_final_with_invalid_confidence_yields_the_answer(self) -> None:
+        fenced = '```json\n{"type": "final", "answer": "42", "confidence": "high"}\n```'
+        llm = FakeLLM([fenced])
+        result = RunRLMUseCase(llm, FakeSandbox()).execute("content", "q")
+
+        assert result.success is True
+        assert result.answer == "42"
+
+    def test_prose_mentioning_a_final_type_is_not_recovered(self) -> None:
+        text = 'The "type": "final" field, "answer": "x"'
+        assert RunRLMUseCase._recover_final_answer(text) is None

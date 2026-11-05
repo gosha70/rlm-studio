@@ -488,3 +488,17 @@ class TestV1Backward:
         data = resp.json()
         assert len(data["slots"]) == 1
         assert data["slots"][0]["chat_provider_id"] == cp.id
+
+
+def test_ephemeral_official_provider_is_named_with_the_mode_label() -> None:
+    """M22: the Compare-only Chat Provider shown in Traces names the official
+    engine by its label, while its execution mode stays the raw id."""
+    from rlmstudio.server.routes.compare_matrix import _get_or_create_ephemeral_cp
+
+    state = get_state()
+    lp = _make_llm_provider("LM Studio Qwen")
+    cp = _get_or_create_ephemeral_cp(state, lp, "rlm_official", None, None, None)
+
+    assert cp.name.endswith("LM Studio Qwen · Official RLM (rlms)")
+    assert "rlm_official" not in cp.name
+    assert cp.execution_mode == "rlm_official"

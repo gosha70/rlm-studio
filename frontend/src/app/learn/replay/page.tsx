@@ -62,7 +62,18 @@ function ReplayPageInner() {
           </p>
         </header>
 
-        {error ? (
+        {!executionId ? (
+          <div role="alert" className="rounded-md border px-4 py-3 text-sm">
+            <p className="font-medium">No execution chosen to replay.</p>
+            <p className="mt-1 text-muted-foreground">
+              Open{" "}
+              <Link href="/traces" className="underline underline-offset-2 hover:text-foreground">
+                Traces
+              </Link>{" "}
+              and choose <span className="font-medium">Replay in Learn</span> on a run.
+            </p>
+          </div>
+        ) : error ? (
           <div
             role="alert"
             className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive"

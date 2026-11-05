@@ -20,16 +20,19 @@ from __future__ import annotations
 import uuid
 from collections.abc import Generator
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
 
+from rlmstudio.server import dependencies
 from rlmstudio.server.app import app
-from rlmstudio.server.dependencies import get_state, reset_state
+from rlmstudio.server.dependencies import AppState, get_state, reset_state
 from rlmstudio.server.models import (
     ChatRequest,
     ChatResponse,
+    LLMProviderConfig,
     ProviderConfig,
     RuntimeSettings,
     SessionDetail,
@@ -525,6 +528,66 @@ class TestAutoMigration:
         names = [cp.name for cp in state.config.chat_providers]
         for key in ("openai", "anthropic"):
             assert f"DIRECT-{key.upper()}" in names
+
+    def test_restart_does_not_invent_providers_from_defaults(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """D2: a saved config with only a local LLM Provider stays that way on restart."""
+        monkeypatch.setattr(dependencies, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(dependencies, "_CONFIG_FILE", tmp_path / "config.json")
+        first = AppState(load_from_disk=False)
+        first.config.llm_providers.append(
+            LLMProviderConfig(id="lp-lmstudio", name="LM Studio", backend="lmstudio", model="qwen")
+        )
+        first.save_config()
+
+        restarted = AppState(load_from_disk=False)
+        restarted._load_config()
+        restarted._migrate_chat_providers()
+
+        assert [lp.name for lp in restarted.config.llm_providers] == ["LM Studio"]
+        assert restarted.config.chat_providers == []
+        assert restarted.config.provider_configs == []
+
+    def test_providers_deleted_after_migration_stay_deleted_on_restart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Review P1: after the user deleted the migrated Chat Provider and LLM
+        Provider, the next restart looked like a pre-migration config and the
+        leftover legacy entry was converted back into DIRECT-OPENAI and
+        OpenAI (gpt-4o)."""
+        monkeypatch.setattr(dependencies, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(dependencies, "_CONFIG_FILE", tmp_path / "config.json")
+        first = AppState(load_from_disk=False)
+        first.config.provider_configs.append(
+            ProviderConfig(provider="openai", model="gpt-4o", enabled=True)
+        )
+        first._migrate_chat_providers()
+        assert [cp.name for cp in first.config.chat_providers] == ["DIRECT-OPENAI"]
+        first.config.chat_providers = []
+        first.config.llm_providers = []
+        first.save_config()
+
+        restarted = AppState(load_from_disk=False)
+        restarted._load_config()
+        restarted._migrate_chat_providers()
+
+        assert restarted.config.chat_providers == []
+        assert restarted.config.llm_providers == []
+
+    def test_migration_skips_configs_that_already_have_llm_providers(self) -> None:
+        """Deleted Chat Providers are not recreated from a stale legacy entry."""
+        state = get_state()
+        state.config.llm_providers.append(
+            LLMProviderConfig(id="lp-lmstudio", name="LM Studio", backend="lmstudio", model="qwen")
+        )
+        state.config.provider_configs.append(
+            ProviderConfig(provider="openai", model="gpt-4o", enabled=True)
+        )
+        state._migrate_chat_providers()
+
+        assert state.config.chat_providers == []
+        assert [lp.name for lp in state.config.llm_providers] == ["LM Studio"]
 
 
 # ---------------------------------------------------------------------------

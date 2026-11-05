@@ -23,17 +23,21 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
+from typing import TypeVar
 
 __all__ = [
     "ProviderFailureKind",
     "ProviderFailure",
     "ProviderFailureError",
+    "as_provider_failure",
     "classify_provider_failure",
     "describe_provider_failure",
+    "display_model_id",
     "failure_answer",
     "failure_kind_of",
     "failure_kind_value",
     "redact_secrets",
+    "strip_html",
     "SECRET_PLACEHOLDER",
 ]
 
@@ -46,6 +50,9 @@ SECRET_PLACEHOLDER = "<redacted>"  # nosec B105
 # the run path and the probe now surface auth failures to users, so the
 # patterns live here with the classifier rather than in one caller.
 _API_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # A key the provider already masked, e.g. OpenAI's rejected-key echo
+    # "sk-proj-****…ERzz": its prefix and last four still identify the key.
+    re.compile(r"[A-Za-z0-9_-]*\*{4,}[A-Za-z0-9_-]*"),
     # OpenAI-style sk-..., sk-proj-..., etc.
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
     # Anthropic-style
@@ -57,6 +64,21 @@ _API_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Google-style
     re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
 )
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def strip_html(text: str) -> str:
+    """Reduce an HTML error page in *text* to its words.
+
+    A local server that crashes (LM Studio's HTTP 500) answers with an HTML
+    page, which the answer card otherwise showed as raw markup.  Text with
+    no HTML document in it is returned unchanged.
+    """
+    if "<html" not in text.lower():
+        return text
+    return " ".join(_HTML_TAG_RE.sub(" ", text).split())
 
 
 def redact_secrets(text: str) -> str:
@@ -79,9 +101,11 @@ class ProviderFailureKind(str, Enum):
 
     AUTH = "auth"
     MODEL_UNAVAILABLE = "model_unavailable"
+    MODEL_NOT_LOADED = "model_not_loaded"
     CONNECTION = "connection"
     TIMEOUT = "timeout"
     RATE_LIMIT = "rate_limit"
+    SERVER_ERROR = "server_error"
     UNKNOWN = "unknown"
 
 
@@ -98,6 +122,37 @@ _CLASS_NAME_KINDS: dict[str, ProviderFailureKind] = {
     "Timeout": ProviderFailureKind.TIMEOUT,
     "RateLimitError": ProviderFailureKind.RATE_LIMIT,
 }
+
+# LM Studio's replies for a model that is not (or no longer) loaded.  Checked
+# before the class names: LM Studio sends them as a 400 or mid-stream as a
+# connection error, and neither "bad request" nor "could not reach the
+# provider" points at the fix.
+_MODEL_NOT_LOADED_KEYWORDS: tuple[str, ...] = (
+    "model was unloaded",
+    "has been unloaded",
+    "has not started loading",
+    # LM Studio's JIT load of a chat or embedding model failed or was
+    # cancelled ("Failed to load model \"…\". Error: Operation canceled.").
+    "failed to load model",
+    # LM Studio with nothing loaded at all ("No models loaded. Please load a
+    # model in the developer page or use the 'lms load' command.").
+    "no models loaded",
+)
+
+# The routing prefixes Studio and LiteLLM put in front of a model id
+# (``openai/`` for LM Studio, ``hosted_vllm/`` for vLLM, and so on).  A
+# message about a model names the id the user picked, so one leading prefix
+# is dropped; an id with a slash of its own (``Qwen/Qwen2.5-7B``) is kept.
+# Covers the prefix tables in server/dependencies.py, server/rag_embedding.py
+# and api.py, which this layer cannot import.
+_LITELLM_ROUTING_PREFIXES: tuple[str, ...] = (
+    "openai/",
+    "lm_studio/",
+    "hosted_vllm/",
+    "ollama/",
+    "ollama_chat/",
+    "anthropic/",
+)
 
 # Fallbacks for providers or httpx layers that surface a generic exception
 # class with a descriptive message. Ordered: the first kind whose keywords
@@ -121,6 +176,8 @@ _KEYWORD_KINDS: tuple[tuple[ProviderFailureKind, tuple[str, ...]], ...] = (
             "authentication_error",
             "unauthorized",
             "invalid authentication",
+            # The OpenAI client's own error when no key was sent at all.
+            "missing credentials",
         ),
     ),
     (
@@ -151,6 +208,13 @@ _KEYWORD_KINDS: tuple[tuple[ProviderFailureKind, tuple[str, ...]], ...] = (
             "network is unreachable",
         ),
     ),
+    # After every cause above: litellm wraps many failures (a missing key
+    # among them) in InternalServerError, so only a 500 nothing more
+    # specific explains lands here.
+    (
+        ProviderFailureKind.SERVER_ERROR,
+        ("internal server error", "internalservererror"),
+    ),
 )
 
 
@@ -177,17 +241,32 @@ def classify_provider_failure(exc: BaseException) -> ProviderFailureKind:
     ``UNKNOWN`` rather than guessing, so an unrecognised failure keeps its
     raw detail instead of being mislabelled.
     """
+    message = str(exc).lower()
+    if any(kw in message for kw in _MODEL_NOT_LOADED_KEYWORDS):
+        return ProviderFailureKind.MODEL_NOT_LOADED
+
     for cls in type(exc).__mro__:
         kind = _CLASS_NAME_KINDS.get(cls.__name__)
         if kind is not None:
             return kind
 
-    message = str(exc).lower()
     for kind, keywords in _KEYWORD_KINDS:
         if any(kw in message for kw in keywords):
             return kind
 
     return ProviderFailureKind.UNKNOWN
+
+
+def display_model_id(model: str) -> str:
+    """Return *model* without one leading LiteLLM routing prefix.
+
+    ``openai/qwen2.5-7b-instruct`` is how an LM Studio model is routed, but
+    ``qwen2.5-7b-instruct`` is what the user picked and what LM Studio lists.
+    """
+    for prefix in _LITELLM_ROUTING_PREFIXES:
+        if model.startswith(prefix) and len(model) > len(prefix):
+            return model[len(prefix) :]
+    return model
 
 
 def describe_provider_failure(
@@ -204,7 +283,7 @@ def describe_provider_failure(
     it without inventing placeholder values.
     """
     where = f" for {provider_name}" if provider_name else ""
-    named_model = f" '{model}'" if model else ""
+    named_model = f" '{display_model_id(model)}'" if model else ""
 
     if kind is ProviderFailureKind.AUTH:
         return ProviderFailure(
@@ -212,7 +291,7 @@ def describe_provider_failure(
             cause=f"The API key{where} was rejected.",
             fix=(
                 "Check the key has not been revoked or regenerated, then update "
-                "it in Settings → Providers."
+                "it in Settings → LLM Providers."
             ),
         )
 
@@ -229,7 +308,20 @@ def describe_provider_failure(
             ),
             fix=(
                 "Pick a model from the provider's current list in "
-                "Settings → Providers, which is fetched from your account."
+                "Settings → LLM Providers, which is fetched from your account."
+            ),
+        )
+
+    if kind is ProviderFailureKind.MODEL_NOT_LOADED:
+        return ProviderFailure(
+            kind=kind,
+            # Provider-neutral: "failed to load model" also comes from Ollama
+            # and other local servers, not only LM Studio.
+            cause=f"The model{named_model} is not loaded on the model server{where}.",
+            fix=(
+                "Load the model on the model server (in LM Studio, load it in the app "
+                "or run `lms load`), then retry. If it does not load, check that it is "
+                "downloaded and that there is enough free memory for it."
             ),
         )
 
@@ -262,10 +354,21 @@ def describe_provider_failure(
             fix="Wait and retry, or check the account's usage limits with the provider.",
         )
 
+    if kind is ProviderFailureKind.SERVER_ERROR:
+        return ProviderFailure(
+            kind=kind,
+            cause=f"The provider's server{where} failed with an internal error (HTTP 500).",
+            fix=(
+                "Check the server's own log. A local server (LM Studio, Ollama) "
+                "usually fails this way when the model crashed, was unloaded or "
+                "ran out of memory: reload the model and try again."
+            ),
+        )
+
     return ProviderFailure(
         kind=ProviderFailureKind.UNKNOWN,
         cause="The provider call failed.",
-        fix="See the detail below; if it is not clear, check Settings → Providers.",
+        fix="See the detail below; if it is not clear, check Settings → LLM Providers.",
     )
 
 
@@ -287,6 +390,31 @@ class ProviderFailureError(RuntimeError):
         self.fix_text = failure.fix
         # Redacted upstream text, for the answer card's small-print line.
         self.detail = detail
+
+
+_E = TypeVar("_E", bound=BaseException)
+
+
+def as_provider_failure(
+    exc: _E, *, model: str | None = None, api_base: str | None = None
+) -> _E | ProviderFailureError:
+    """Return *exc* classified the way the run path classifies a chat error.
+
+    For a raw provider exception that did not come through the LLM adapter
+    (the RAG embedder calls LiteLLM itself).  An exception that already
+    carries a kind, or that the classifier does not recognise, is returned
+    unchanged so it keeps its own detail.
+    """
+    if failure_kind_of(exc) is not None:
+        return exc
+    kind = classify_provider_failure(exc)
+    if kind is ProviderFailureKind.UNKNOWN:
+        return exc
+    failure = describe_provider_failure(kind, model=model, api_base=api_base)
+    detail = redact_secrets(strip_html(str(exc)))
+    return ProviderFailureError(
+        f"{failure.cause} {failure.fix} (Detail: {detail})", failure, detail
+    )
 
 
 def failure_kind_of(exc: BaseException) -> ProviderFailureKind | None:
@@ -317,9 +445,11 @@ def failure_kind_value(exc: BaseException) -> str | None:
 _FAILURE_TITLES: dict[ProviderFailureKind, str] = {
     ProviderFailureKind.AUTH: "Authentication failed",
     ProviderFailureKind.MODEL_UNAVAILABLE: "Model not available",
+    ProviderFailureKind.MODEL_NOT_LOADED: "Model not loaded",
     ProviderFailureKind.CONNECTION: "Cannot reach the provider",
     ProviderFailureKind.TIMEOUT: "The provider did not respond in time",
     ProviderFailureKind.RATE_LIMIT: "Rate limited by the provider",
+    ProviderFailureKind.SERVER_ERROR: "The provider's server failed",
     ProviderFailureKind.UNKNOWN: "The provider call failed",
 }
 

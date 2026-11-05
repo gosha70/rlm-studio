@@ -154,6 +154,53 @@ class TestDiagnosticsEndpoint:
         assert "1" in data["provider"]["message"]
         assert data["provider"]["fixUrl"] is None
 
+    @pytest.mark.parametrize("failed_status", ["offline", "error"])
+    def test_provider_warn_when_every_provider_failed_its_test(
+        self, client: TestClient, isolate_provider_env, failed_status: str
+    ) -> None:
+        # M16: a provider whose last connection test failed is not usable,
+        # so the check must not report "ok".
+        state = get_state()
+        state.config.llm_providers = [
+            LLMProviderConfig(
+                id="lp-lmstudio-down",
+                name="LM Studio",
+                backend="lmstudio",
+                model="qwen2.5-7b-instruct",
+                status=failed_status,
+            ),
+        ]
+        state.config.provider_configs = []
+        data = client.get("/api/diagnostics").json()
+        assert data["provider"]["status"] == "warn", data["provider"]
+        assert "connection test" in data["provider"]["message"]
+        assert data["provider"]["fixUrl"] == "/settings"
+
+    def test_provider_ok_when_one_of_several_providers_is_reachable(
+        self, client: TestClient, isolate_provider_env
+    ) -> None:
+        state = get_state()
+        state.config.llm_providers = [
+            LLMProviderConfig(
+                id="lp-lmstudio-down",
+                name="LM Studio",
+                backend="lmstudio",
+                model="qwen2.5-7b-instruct",
+                status="offline",
+            ),
+            LLMProviderConfig(
+                id="lp-ollama-up",
+                name="Ollama",
+                backend="ollama",
+                model="llama3.2",
+                status="connected",
+            ),
+        ]
+        state.config.provider_configs = []
+        data = client.get("/api/diagnostics").json()
+        assert data["provider"]["status"] == "ok", data["provider"]
+        assert "1" in data["provider"]["message"]
+
     def test_provider_ok_via_legacy_provider_configs_fallback(
         self, client: TestClient, isolate_provider_env
     ) -> None:

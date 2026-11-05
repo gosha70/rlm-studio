@@ -5,6 +5,9 @@ import { ChartContainer } from "./chart-container";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ModeSummary } from "@/lib/api";
 import { useChartTooltipStyle } from "./use-chart-tooltip";
+import { formatUsd, formatUsdTick } from "@/lib/format";
+import { MODE_DIRECT, MODE_RAG, MODE_RLM, MODE_RLM_OFFICIAL } from "@/lib/constants";
+import { MODE_COLORS } from "./series-colors";
 
 interface ComparisonChartProps {
   rlmData: ModeSummary | undefined;
@@ -15,6 +18,17 @@ interface ComparisonChartProps {
 }
 
 const OFFICIAL_SERIES = "Official RLM";
+
+/**
+ * Draw every Y tick. In these short charts Recharts' default
+ * ("preserveEnd") dropped one tick, leaving uneven steps (0, 1000, 2000,
+ * 4000).
+ */
+const ALL_TICKS = 0;
+
+/** Room for sub-cent ticks such as "$0.00000015"; the 60px default clipped them. */
+const COST_AXIS_WIDTH = 96;
+const COST_TICK_FONT_SIZE = 12;
 
 export function ComparisonChart({
   rlmData,
@@ -69,14 +83,14 @@ export function ComparisonChart({
               <BarChart width={w} height={h} data={tokenData} barCategoryGap="20%">
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="name" className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
-                <YAxis className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
+                <YAxis className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} interval={ALL_TICKS} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Legend wrapperStyle={{ fontSize: "12px" }} />
-                {directData && <Bar dataKey="Direct" fill="#7c3aed" radius={[4, 4, 0, 0]} />}
-                {rlmData && <Bar dataKey="RLM" fill="#2563eb" radius={[4, 4, 0, 0]} />}
-                {ragData && <Bar dataKey="RAG" fill="#10b981" radius={[4, 4, 0, 0]} />}
+                {directData && <Bar dataKey="Direct" fill={MODE_COLORS[MODE_DIRECT]} radius={[4, 4, 0, 0]} />}
+                {rlmData && <Bar dataKey="RLM" fill={MODE_COLORS[MODE_RLM]} radius={[4, 4, 0, 0]} />}
+                {ragData && <Bar dataKey="RAG" fill={MODE_COLORS[MODE_RAG]} radius={[4, 4, 0, 0]} />}
                 {officialData && (
-                  <Bar dataKey={OFFICIAL_SERIES} fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey={OFFICIAL_SERIES} fill={MODE_COLORS[MODE_RLM_OFFICIAL]} radius={[4, 4, 0, 0]} />
                 )}
               </BarChart>
             )}
@@ -86,14 +100,20 @@ export function ComparisonChart({
               <BarChart width={w} height={h} data={costData} barCategoryGap="20%">
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="name" className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
-                <YAxis className="text-xs" tick={{ fill: "var(--color-muted-foreground)" }} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v) => `$${Number(v).toFixed(4)}`} />
+                <YAxis
+                  className="text-xs"
+                  tick={{ fill: "var(--color-muted-foreground)", fontSize: COST_TICK_FONT_SIZE }}
+                  interval={ALL_TICKS}
+                  width={COST_AXIS_WIDTH}
+                  tickFormatter={(v) => formatUsdTick(Number(v))}
+                />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v) => formatUsd(Number(v))} />
                 <Legend wrapperStyle={{ fontSize: "12px" }} />
-                {directData && <Bar dataKey="Direct" fill="#7c3aed" radius={[4, 4, 0, 0]} />}
-                {rlmData && <Bar dataKey="RLM" fill="#2563eb" radius={[4, 4, 0, 0]} />}
-                {ragData && <Bar dataKey="RAG" fill="#10b981" radius={[4, 4, 0, 0]} />}
+                {directData && <Bar dataKey="Direct" fill={MODE_COLORS[MODE_DIRECT]} radius={[4, 4, 0, 0]} />}
+                {rlmData && <Bar dataKey="RLM" fill={MODE_COLORS[MODE_RLM]} radius={[4, 4, 0, 0]} />}
+                {ragData && <Bar dataKey="RAG" fill={MODE_COLORS[MODE_RAG]} radius={[4, 4, 0, 0]} />}
                 {officialData && (
-                  <Bar dataKey={OFFICIAL_SERIES} fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey={OFFICIAL_SERIES} fill={MODE_COLORS[MODE_RLM_OFFICIAL]} radius={[4, 4, 0, 0]} />
                 )}
               </BarChart>
             )}

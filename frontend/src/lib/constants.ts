@@ -90,6 +90,55 @@ export const ENDPOINT_PLACEHOLDER: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Settings input bounds — mirror src/rlmstudio/server/models.py
+// ---------------------------------------------------------------------------
+
+/** Largest context window (tokens) an LLM Provider may be given. */
+export const CONTEXT_WINDOW_MAX_TOKENS = 10_000_000;
+/** Largest per-call output limit (tokens) a profile may set. */
+export const MAX_OUTPUT_TOKENS_LIMIT = 1_000_000;
+/** Longest scheduled connection-test interval, in minutes (24 hours). */
+export const CONNECTION_TEST_INTERVAL_MAX_MINUTES = 1440;
+
+/** Default RLM nudge point — mirrors RLM_DEFAULT_NUDGE_AT_FRACTION (sandbox_vars.py). */
+export const RLM_DEFAULT_NUDGE_AT_FRACTION = 0.4;
+
+/** Whether `text` is a plain whole number ("1e3", "5s" and "-5" are not). */
+export function isWholeNumber(text: string): boolean {
+  return /^\d+$/.test(text.trim());
+}
+
+// ---------------------------------------------------------------------------
+// RAG embedding models
+// ---------------------------------------------------------------------------
+
+/** Embedding model a new RAG Chat Provider starts with on a cloud LLM. */
+export const EMBEDDING_MODEL_DEFAULT = "text-embedding-3-small";
+
+/**
+ * A RAG Chat Provider on a local server starts with that server's own
+ * embedding model, so document text never leaves the machine by default.
+ * The `ollama/` and `lm_studio/` prefixes route the embedder to the server.
+ */
+export const EMBEDDING_MODEL_DEFAULT_BY_BACKEND: Record<string, string> = {
+  [BACKEND_OLLAMA]: "ollama/nomic-embed-text",
+  [BACKEND_LMSTUDIO]: "lm_studio/text-embedding-nomic-embed-text-v1.5",
+};
+
+/** The default embedding model for a Chat Provider on `backend`. */
+export function defaultEmbeddingModelFor(backend: string | null | undefined): string {
+  return (backend && EMBEDDING_MODEL_DEFAULT_BY_BACKEND[backend]) || EMBEDDING_MODEL_DEFAULT;
+}
+
+/** Whether `model` is one of the defaults above, i.e. not chosen by the user. */
+export function isDefaultEmbeddingModel(model: string): boolean {
+  return (
+    model === EMBEDDING_MODEL_DEFAULT ||
+    Object.values(EMBEDDING_MODEL_DEFAULT_BY_BACKEND).includes(model)
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -103,6 +152,9 @@ export function displayProviderName(key: string): string {
  * back to the identifier so a server that grows a mode ahead of the UI still
  * renders something.
  */
+/** Query parameter that opens one execution on the Traces page. */
+export const TRACE_EXEC_PARAM = "exec";
+
 export function displayModeName(key: string): string {
   return MODE_DISPLAY_NAMES[key] ?? key;
 }
@@ -163,3 +215,9 @@ export const REFINEMENT_POLL_MS = 2_000;
 export const HEALTH_POLL_MS = 10_000;
 /** How often it retries while the backend is unreachable, so it recovers on its own. */
 export const HEALTH_RETRY_MS = 5_000;
+
+/** SWR key for the sidebar session list; revalidate it when a session is created. */
+export const SESSIONS_SWR_KEY = "sessions";
+
+/** SWR key for the user's Chat Providers (Chat, Dashboard, Settings share it). */
+export const CHAT_PROVIDERS_SWR_KEY = "chat-providers";

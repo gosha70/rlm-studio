@@ -3,7 +3,11 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { AppShell } from "@/components/shared/app-shell";
+import { COST_UNKNOWN_HINT, TOKENS_UNKNOWN_HINT, formatCostOrUnknown, formatTokensOrUnknown } from "@/lib/format";
+import { SESSIONS_SWR_KEY, TRACE_EXEC_PARAM, displayModeName } from "@/lib/constants";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { PERF_UI_ENABLED } from "@/lib/branding";
 import { Timeline } from "@/components/trace/timeline";
@@ -30,6 +34,28 @@ import {
   type TraceResponse,
   type TraceStep,
 } from "@/lib/api";
+
+/** A bold title line such as "⚠️ **Execution error**." at the top of a failure answer. */
+const FAILURE_TITLE_RE = /^(⚠️?\s*)?\*\*[^*]+\*\*[.:]?$/;
+
+/** Text with the warning sign, markdown emphasis and extra whitespace removed. */
+function plainText(markdown: string): string {
+  return markdown.replace(/⚠️?|[*_`]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * True when a failed run's answer says nothing its error does not: every
+ * paragraph is either the title line or text the error already contains.
+ */
+function answerOnlyRepeatsError(answer: string, error: string): boolean {
+  const errorText = plainText(error);
+  if (!errorText) return false;
+  return answer
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph && !FAILURE_TITLE_RE.test(paragraph))
+    .every((paragraph) => errorText.includes(plainText(paragraph)));
+}
 
 interface TraceDetailPanelProps {
   trace: TraceResponse;
@@ -67,7 +93,9 @@ function TraceDetailPanel({
     ? "data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:ring-1 data-[state=active]:ring-zinc-400 dark:data-[state=active]:bg-zinc-700 dark:data-[state=active]:ring-zinc-500"
     : "data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:ring-1 data-[state=active]:ring-zinc-400 dark:data-[state=active]:bg-zinc-950 dark:data-[state=active]:ring-zinc-600";
   return (
-    <div className="flex flex-col gap-4">
+    // Inline-size containment: long code or output scrolls or truncates inside
+    // the panel instead of widening the table and pushing columns out of view.
+    <div className="flex flex-col gap-4 [contain:inline-size]">
       {/* Summary bar */}
       <Card className={innerBg}>
         <CardContent className="flex flex-wrap items-center gap-4 p-4">
@@ -75,7 +103,7 @@ function TraceDetailPanel({
             <p className="text-xs text-muted-foreground">Query</p>
             <p className="truncate font-medium">{trace.query}</p>
           </div>
-          <Badge variant="outline">{trace.mode.toUpperCase()}</Badge>
+          <Badge variant="outline">{displayModeName(trace.mode)}</Badge>
           <EngineBadge mode={trace.mode} />
           {trace.chat_provider_name && (
             <>
@@ -94,18 +122,46 @@ function TraceDetailPanel({
           <Separator orientation="vertical" className="h-8" />
           <div className="text-sm">
             <span className="text-muted-foreground">Tokens: </span>
-            <span className="font-medium">{trace.budget.tokens_used.toLocaleString()}</span>
+            <span className="font-medium" title={trace.result.tokens_known === false ? TOKENS_UNKNOWN_HINT : undefined}>
+              {formatTokensOrUnknown(trace.budget.tokens_used, trace.result.tokens_known)}
+            </span>
           </div>
           <Separator orientation="vertical" className="h-8" />
           <div className="text-sm">
             <span className="text-muted-foreground">Cost: </span>
-            <span className="font-medium">${trace.budget.cost_used.toFixed(4)}</span>
+            <span className="font-medium" title={trace.result.cost_known === false ? COST_UNKNOWN_HINT : undefined}>
+              {formatCostOrUnknown(trace.budget.cost_used, trace.result.cost_known)}
+            </span>
           </div>
           <Badge variant={trace.result.success ? "success" : "destructive"}>
             {trace.status}
           </Badge>
         </CardContent>
       </Card>
+
+      {/* A failed run says why: its error, and the answer, which carries the
+          cause and the fix for budget and timeout stops. */}
+      {!trace.result.success && (trace.result.error || trace.result.answer) && (
+        <Card className={innerBg} role="region" aria-label="Why this run failed">
+          <CardContent className="space-y-3 p-4 text-sm">
+            {trace.result.error && (
+              <div>
+                <p className="text-xs text-muted-foreground">Error</p>
+                <p className="whitespace-pre-wrap break-words text-destructive">{trace.result.error}</p>
+              </div>
+            )}
+            {trace.result.answer &&
+              !answerOnlyRepeatsError(trace.result.answer, trace.result.error ?? "") && (
+                <div>
+                  <p className="text-xs text-muted-foreground">Answer</p>
+                  <div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto break-words">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{trace.result.answer}</ReactMarkdown>
+                  </div>
+                </div>
+              )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Tabbed views */}
       <Tabs defaultValue="timeline">
@@ -235,12 +291,17 @@ function PerformanceTab({ steps }: { steps: TraceStep[] }) {
   );
 }
 
+/** Query parameter holding the open trace's execution id (also used by Dashboard links). */
+const EXEC_PARAM = TRACE_EXEC_PARAM;
+
 function TracesPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [trace, setTrace] = useState<TraceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Start in the loading state when the URL names a trace, so the URL sync
+  // below does not drop the id before the mount effect has loaded it.
+  const [loading, setLoading] = useState(() => Boolean(searchParams.get(EXEC_PARAM)));
   const [selectedStep, setSelectedStep] = useState<TraceStep | null>(null);
   const [filterProviderId, setFilterProviderId] = useState<string>("");
   const [filterSessionId, setFilterSessionId] = useState<string>("");
@@ -248,7 +309,8 @@ function TracesPageInner() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
 
-  const { data: sessions = [] } = useSWR<SessionSummary[]>("sessions", getSessions);
+  // Wrap getSessions: SWR passes the key to the fetcher, where it would land as `limit`.
+  const { data: sessions = [] } = useSWR<SessionSummary[]>(SESSIONS_SWR_KEY, () => getSessions());
 
   // Unfiltered fetch — drives the chat-provider filter dropdown so it never disappears
   const { data: allExecutions = [] } = useSWR<ExecutionSummary[]>(
@@ -299,6 +361,8 @@ function TracesPageInner() {
 
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
+    const count = selectedIds.size;
+    if (!window.confirm(`Delete ${count} selected trace${count === 1 ? "" : "s"}? This cannot be undone.`)) return;
     setDeleting(true);
     try {
       await Promise.all([...selectedIds].map((id) => deleteExecution(id)));
@@ -348,12 +412,24 @@ function TracesPageInner() {
 
   // Auto-load trace when navigated from Dashboard with ?exec=<id>
   useEffect(() => {
-    const execId = searchParams.get("exec");
+    const execId = searchParams.get(EXEC_PARAM);
     if (execId) {
       handleSelectExecution(execId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep the open trace in the URL, so a reload or coming Back to this page
+  // reopens it (the effect above reads it on mount).
+  const openExecutionId = trace?.execution_id ?? null;
+  useEffect(() => {
+    if (loading) return;
+    if (searchParams.get(EXEC_PARAM) === openExecutionId) return;
+    router.replace(
+      openExecutionId ? `/traces?${EXEC_PARAM}=${encodeURIComponent(openExecutionId)}` : "/traces",
+      { scroll: false },
+    );
+  }, [openExecutionId, loading, router, searchParams]);
 
   return (
     <AppShell>
@@ -443,6 +519,7 @@ function TracesPageInner() {
                       />
                     </TableHead>
                     <TableHead>Query</TableHead>
+                    <TableHead>Started</TableHead>
                     <TableHead>Chat Provider</TableHead>
                     <TableHead>Mode</TableHead>
                     <TableHead>Status</TableHead>
@@ -508,12 +585,22 @@ function TracesPageInner() {
                       <TableCell className="max-w-[300px] truncate font-medium">
                         {exec.query}
                       </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                        {exec.started_at ? (
+                          <>
+                            <div>{new Date(exec.started_at).toLocaleDateString()}</div>
+                            <div>{new Date(exec.started_at).toLocaleTimeString()}</div>
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {exec.chat_provider_name || "—"}
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline">{exec.mode.toUpperCase()}</Badge>
+                          <Badge variant="outline">{displayModeName(exec.mode)}</Badge>
                           <EngineBadge mode={exec.mode} />
                         </div>
                       </TableCell>
@@ -531,10 +618,10 @@ function TracesPageInner() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        {exec.total_tokens.toLocaleString()}
+                        {formatTokensOrUnknown(exec.total_tokens, exec.tokens_known)}
                       </TableCell>
                       <TableCell className="text-right">
-                        ${exec.total_cost.toFixed(4)}
+                        {formatCostOrUnknown(exec.total_cost, exec.cost_known)}
                       </TableCell>
                       <TableCell
                         className="text-right"
@@ -567,7 +654,7 @@ function TracesPageInner() {
                           className={stripeClass}
                         >
                           <TableCell
-                            colSpan={8}
+                            colSpan={9}
                             className="p-4"
                             // Don't let clicks inside the detail bubble
                             // up to the row click handler and toggle

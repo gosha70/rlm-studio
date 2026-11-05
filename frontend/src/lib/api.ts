@@ -3,6 +3,7 @@
  */
 
 import type { RefinementStatus } from "./constants";
+import { BASE_PATH } from "./branding";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -114,6 +115,8 @@ export interface CompareMatrixSlotResponse {
   cache_hit_rate?: number;
   /** False when the run's price is unknown: its $0 is not free. */
   cost_known?: boolean;
+  /** False when the run's token usage is unknown: show "unknown", not 0. */
+  tokens_known?: boolean;
 }
 
 export interface CompareMatrixResponse {
@@ -142,6 +145,10 @@ export interface MessageMetrics {
   cost_usd: number;
   elapsed_seconds: number;
   steps: number;
+  /** False when the run's cost is unknown (no price, or an engine timeout): show "unknown", not $0. */
+  cost_known?: boolean;
+  /** False when the run's token usage is unknown: show "unknown", not 0. */
+  tokens_known?: boolean;
 }
 
 export interface SessionMessage {
@@ -182,6 +189,9 @@ export interface MetricsSummary {
   total_cost_usd: number;
   avg_latency_seconds: number;
   avg_token_savings_percent: number | null;
+  /** Runs in the totals whose cost / tokens are unknown: the totals are lower bounds. */
+  cost_unknown_runs?: number;
+  tokens_unknown_runs?: number;
 }
 
 export interface ModeSummary {
@@ -200,6 +210,10 @@ export interface TimelineEntry {
   provider: string;
   chat_provider_name?: string | null;
   execution_id?: string | null;
+  /** False when the run's cost is unknown (no price, or an engine timeout): show "unknown", not $0. */
+  cost_known?: boolean;
+  /** False when the run's token usage is unknown: show "unknown", not 0. */
+  tokens_known?: boolean;
 }
 
 export interface MetricsResponse {
@@ -256,10 +270,14 @@ export interface TraceResponse {
       | "connection"
       | "timeout"
       | "rate_limit"
+      | "server_error"
+      | "model_not_loaded"
       | null;
     input_tokens?: number;
     output_tokens?: number;
     total_cost?: number;
+    cost_known?: boolean;
+    tokens_known?: boolean;
   };
   budget: {
     steps_used: number;
@@ -335,6 +353,8 @@ export interface LLMProviderConfig {
   model_check_alternatives?: string[] | null;
   model_checked_at?: string | null;
   consecutive_failures?: number;
+  /** Whether a key is saved for this provider (the key is never returned). */
+  api_key_stored?: boolean;
 }
 
 export interface LLMProviderCreateRequest {
@@ -753,11 +773,12 @@ export interface LearnReplay {
 }
 
 // Bundled replays live under frontend/public/learn/replays/<id>.json so
-// they ship with the static asset pipeline.
+// they ship with the static asset pipeline. In the bundled UI they are
+// served under the base path (/studio), which fetch() does not add.
 const BUNDLED_REPLAY_PATH = "/learn/replays/bundled-rlm-demo.json";
 
 export async function getBundledReplay(): Promise<LearnReplay> {
-  const resp = await fetch(BUNDLED_REPLAY_PATH);
+  const resp = await fetch(`${BASE_PATH}${BUNDLED_REPLAY_PATH}`);
   if (!resp.ok) {
     throw new Error(`Bundled replay fetch failed: ${resp.status}`);
   }
@@ -818,7 +839,9 @@ export function uploadFile(
           reject(new Error("Invalid response from server"));
         }
       } else {
-        reject(new Error(`Upload failed: ${xhr.status}`));
+        // Carry the server's reason (unsupported type, too large, unreadable
+        // file) so the user sees why, not just a status code.
+        reject(new Error(serverErrorMessage(xhr.responseText) ?? `Upload failed (HTTP ${xhr.status})`));
       }
     };
     xhr.onerror = () => reject(new Error("Network error during upload"));
@@ -861,6 +884,10 @@ export interface ExecutionSummary {
   total_cost: number;
   chat_provider_id?: string | null;
   chat_provider_name?: string | null;
+  /** False when the run's cost is unknown (no price, or an engine timeout): show "unknown", not $0. */
+  cost_known?: boolean;
+  /** False when the run's token usage is unknown: show "unknown", not 0. */
+  tokens_known?: boolean;
 }
 
 export const getExecutions = (limit = 20, chatProviderId?: string, sessionId?: string) => {
@@ -1281,17 +1308,30 @@ export function apiErrorStatus(err: unknown): number {
  */
 export function apiErrorMessage(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err);
+  return serverErrorMessage(text) ?? text;
+}
+
+/** The message in a server error body (`{"error": {"message": …}}` or `{"detail": …}`), or null. */
+function serverErrorMessage(text: string): string | null {
   const brace = text.indexOf("{");
-  if (brace !== -1) {
-    try {
-      const body = JSON.parse(text.slice(brace));
-      const message = body?.error?.message ?? body?.detail;
-      if (typeof message === "string" && message) return message;
-    } catch {
-      // not JSON — fall through to the raw text
+  if (brace === -1) return null;
+  try {
+    const body = JSON.parse(text.slice(brace));
+    const message = body?.error?.message ?? body?.detail;
+    if (typeof message === "string" && message) return message;
+    // FastAPI request validation (422): {"detail": [{"loc": [..., "field"], "msg": "..."}]}
+    if (Array.isArray(message) && message.length > 0) {
+      return message
+        .map((d: { loc?: unknown[]; msg?: string }) => {
+          const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : undefined;
+          return field ? `${String(field)}: ${d.msg ?? ""}` : (d.msg ?? "");
+        })
+        .join("; ");
     }
+  } catch {
+    // not JSON
   }
-  return text;
+  return null;
 }
 
 // System Prompts

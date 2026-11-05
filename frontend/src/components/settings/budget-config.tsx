@@ -6,6 +6,15 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { FieldLabel } from "./field-label";
 import type { BudgetConfig as BudgetConfigType } from "@/lib/api";
+import { RLM_DEFAULT_NUDGE_AT_FRACTION } from "@/lib/constants";
+import {
+  BUDGET_MAX_COST_USD,
+  BUDGET_MAX_TOKENS,
+  BUDGET_MIN_COST_USD,
+  BUDGET_MIN_TOKENS,
+  decimalProblem,
+  wholeNumberProblem,
+} from "./input-limits";
 
 interface BudgetConfigProps {
   config: BudgetConfigType;
@@ -19,22 +28,40 @@ const DEFAULTS: BudgetConfigType = {
   max_time_seconds: 600,
   max_recursion_depth: 5,
   repeat_limit: 2,
-  nudge_at_fraction: 0.6,
+  nudge_at_fraction: RLM_DEFAULT_NUDGE_AT_FRACTION,
 };
 
 export function BudgetConfig({ config, onChange }: BudgetConfigProps) {
   const [local, setLocal] = useState(config);
+  // The typed inputs stay text until Save, so a blank field is refused
+  // instead of being read as 0.
+  const [maxTokensText, setMaxTokensText] = useState(String(config.max_tokens));
+  const [maxCostText, setMaxCostText] = useState(String(config.max_cost_usd));
+  const [error, setError] = useState<string | null>(null);
 
   const update = <K extends keyof BudgetConfigType>(key: K, value: BudgetConfigType[K]) => {
+    setError(null);
     setLocal((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleSave = () => {
-    onChange(local);
+    const problem =
+      wholeNumberProblem("Max Tokens", maxTokensText, BUDGET_MIN_TOKENS, BUDGET_MAX_TOKENS) ??
+      decimalProblem("Max Cost", maxCostText, BUDGET_MIN_COST_USD, BUDGET_MAX_COST_USD);
+    setError(problem);
+    if (problem) return;
+    onChange({
+      ...local,
+      max_tokens: Number(maxTokensText.trim()),
+      max_cost_usd: Number(maxCostText.trim()),
+    });
   };
 
   const handleReset = () => {
+    setError(null);
     setLocal(DEFAULTS);
+    setMaxTokensText(String(DEFAULTS.max_tokens));
+    setMaxCostText(String(DEFAULTS.max_cost_usd));
     onChange(DEFAULTS);
   };
 
@@ -59,23 +86,29 @@ export function BudgetConfig({ config, onChange }: BudgetConfigProps) {
         <Input
           id="max-tokens"
           type="number"
-          min={1000}
-          max={500000}
-          value={local.max_tokens}
-          onChange={(e) => update("max_tokens", Number(e.target.value))}
+          min={BUDGET_MIN_TOKENS}
+          max={BUDGET_MAX_TOKENS}
+          value={maxTokensText}
+          onChange={(e) => {
+            setError(null);
+            setMaxTokensText(e.target.value);
+          }}
         />
       </div>
 
       <div className="space-y-2">
-        <FieldLabel htmlFor="max-cost" tooltip="Dollar limit per query execution. The query is terminated if this cost is exceeded. Set to 0 for local models.">Max Cost (USD)</FieldLabel>
+        <FieldLabel htmlFor="max-cost" tooltip="Dollar limit per query execution. The query is stopped once this cost is reached. Local models cost nothing, so keep it above 0.">Max Cost (USD)</FieldLabel>
         <Input
           id="max-cost"
           type="number"
-          min={0.01}
-          max={100}
+          min={BUDGET_MIN_COST_USD}
+          max={BUDGET_MAX_COST_USD}
           step={0.01}
-          value={local.max_cost_usd}
-          onChange={(e) => update("max_cost_usd", Number(e.target.value))}
+          value={maxCostText}
+          onChange={(e) => {
+            setError(null);
+            setMaxCostText(e.target.value);
+          }}
         />
       </div>
 
@@ -106,6 +139,12 @@ export function BudgetConfig({ config, onChange }: BudgetConfigProps) {
           aria-valuetext={`${local.max_recursion_depth} levels`}
         />
       </div>
+
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {error} Not saved.
+        </p>
+      )}
 
       <div className="flex gap-2">
         <Button onClick={handleSave}>Save</Button>

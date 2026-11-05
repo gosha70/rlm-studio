@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_ratings_run ON ratings(run_id);
 # migration path via `_run_migrations()` using SQLite's `PRAGMA user_version`.
 # This keeps the bootstrap rule pinned: one code path, no branching.
 
-_CURRENT_SCHEMA_VERSION = 4
+_CURRENT_SCHEMA_VERSION = 5
 
 _MIGRATIONS: dict[int, list[str]] = {
     2: [
@@ -154,6 +154,13 @@ _MIGRATIONS: dict[int, list[str]] = {
             error           TEXT
         )""",
         "CREATE INDEX IF NOT EXISTS idx_refinements_profile ON refinements(profile_id, created_at)",
+    ],
+    5: [
+        # Whether a run's stored cost / token totals are measurements (1) or
+        # zero by ignorance (0) -- an official-engine timeout reports neither.
+        # NULL on legacy rows reads as known, which is what they claimed.
+        "ALTER TABLE runs ADD COLUMN cost_known INTEGER",
+        "ALTER TABLE runs ADD COLUMN tokens_known INTEGER",
     ],
 }
 
@@ -247,6 +254,10 @@ class RunSummary:
     outcome_category: str | None = None
     profile_id: str | None = None
     content_sha256: str | None = None
+    # False when total_cost / the token totals are 0 because none was
+    # reported (schema v5); legacy rows read as known.
+    cost_known: bool = True
+    tokens_known: bool = True
 
 
 @dataclass
@@ -379,6 +390,8 @@ class TelemetryStore:
         outcome_category: str | None = None,
         profile_id: str | None = None,
         content_sha256: str | None = None,
+        cost_known: bool = True,
+        tokens_known: bool = True,
     ) -> str:
         """Record a completed run. Returns the run ID.
 
@@ -392,6 +405,10 @@ class TelemetryStore:
         ``profile_id`` is the profile of the Chat Provider that ran, and
         ``content_sha256`` is :func:`content_sha256` of the document the run
         saw.  Both are schema v4 and drive prompt-refinement source selection.
+
+        ``cost_known`` / ``tokens_known`` are ``False`` when the run reported
+        no cost / no token count, so the stored 0 is not a measurement
+        (schema v5).
         """
         rid = run_id or uuid.uuid4().hex
         if answer_length is None:
@@ -406,8 +423,9 @@ class TelemetryStore:
                         output_tokens, total_tokens, total_cost, elapsed_seconds,
                         success, error, session_id, chat_provider_id,
                         chat_provider_name, comparison_group_id, steps_count,
-                        outcome_category, profile_id, content_sha256)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        outcome_category, profile_id, content_sha256,
+                        cost_known, tokens_known)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         rid,
                         created_at,
@@ -433,6 +451,8 @@ class TelemetryStore:
                         outcome_category,
                         profile_id,
                         content_sha256,
+                        int(cost_known),
+                        int(tokens_known),
                     ),
                 )
                 conn.commit()
@@ -683,6 +703,8 @@ class TelemetryStore:
             outcome_category=row["outcome_category"],
             profile_id=row["profile_id"],
             content_sha256=row["content_sha256"],
+            cost_known=_known(row["cost_known"]),
+            tokens_known=_known(row["tokens_known"]),
             input_tokens=row["input_tokens"],
             output_tokens=row["output_tokens"],
             content_length=row["content_length"],
@@ -1043,6 +1065,8 @@ class TelemetryStore:
         outcome_category = row["outcome_category"] if "outcome_category" in keys else None
         profile_id = row["profile_id"] if "profile_id" in keys else None
         run_content_sha256 = row["content_sha256"] if "content_sha256" in keys else None
+        cost_known = _known(row["cost_known"] if "cost_known" in keys else None)
+        tokens_known = _known(row["tokens_known"] if "tokens_known" in keys else None)
         return RunSummary(
             id=row["id"],
             created_at=row["created_at"],
@@ -1065,7 +1089,14 @@ class TelemetryStore:
             outcome_category=outcome_category,
             profile_id=profile_id,
             content_sha256=run_content_sha256,
+            cost_known=cost_known,
+            tokens_known=tokens_known,
         )
+
+
+def _known(stored: int | None) -> bool:
+    """Read a v5 ``*_known`` column: NULL (a legacy row) counts as known."""
+    return stored is None or bool(stored)
 
 
 # ---------------------------------------------------------------------------

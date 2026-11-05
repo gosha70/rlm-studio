@@ -16,13 +16,13 @@ import {
   PanelLeft,
   Plus,
   Trash2,
+  Pencil,
   Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { PRODUCT_NAME } from "@/lib/branding";
+import { BASE_PATH, PRODUCT_NAME } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   getDiagnostics,
@@ -39,6 +39,23 @@ interface SidebarProps {
   onDeleteSession?: (id: string) => void;
   onSelectSession?: (id: string) => void;
   onRenameSession?: (id: string, name: string) => void;
+}
+
+const LOGO_SIZE_PX = 28;
+
+/**
+ * A session's Rename / Delete buttons take no width until the row is
+ * hovered, holds focus, or is the active session, so a name can use the
+ * whole row.  Zero width (not `hidden`) keeps them in the Tab order: Tab
+ * from the name lands on them, and the focused row shows them.
+ */
+function sessionActionClass(active: boolean): string {
+  return cn(
+    "h-6 shrink-0 overflow-hidden",
+    active
+      ? "w-6 opacity-100"
+      : "w-0 opacity-0 group-hover:w-6 group-hover:opacity-100 group-focus-within:w-6 group-focus-within:opacity-100",
+  );
 }
 
 const NAV_ITEMS = [
@@ -65,6 +82,11 @@ export function hasLearnErrorBadge(
     diagnostics.judge.status === "error" ||
     diagnostics.storage.status === "error"
   );
+}
+
+/** Confirmation text for deleting a session; its runs stay in Traces. */
+function deleteSessionPrompt(name: string): string {
+  return `Delete session "${name}"? Its conversation is removed; its runs stay in Traces. This cannot be undone.`;
 }
 
 export function Sidebar({
@@ -123,12 +145,14 @@ export function Sidebar({
       <div className="flex h-14 items-center justify-between border-b px-3">
         <div className="flex items-center gap-2">
           <Image
-            src="/logo.png"
+            src={`${BASE_PATH}/logo.png`}
             alt={PRODUCT_NAME}
-            width={28}
-            height={28}
+            width={LOGO_SIZE_PX}
+            height={LOGO_SIZE_PX}
             className="shrink-0 rounded-full"
-            style={{ width: "auto", height: "auto" }}
+            // Fixed display width: the unoptimized bundle serves the full-size
+            // file, which "auto" would render at its natural 671 px.
+            style={{ width: LOGO_SIZE_PX, height: "auto" }}
           />
           {!collapsed && <span className="text-sm font-semibold">{PRODUCT_NAME}</span>}
         </div>
@@ -212,7 +236,9 @@ export function Sidebar({
               />
             </div>
           </div>
-          <ScrollArea className="flex-1 px-2 py-1">
+          {/* A plain scroller: Radix ScrollArea wraps content in display:table,
+              which lets a long name widen every row past the sidebar. */}
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-1">
             <div className="flex flex-col gap-0.5">
               {filteredSessions.map((s) => (
                 <div
@@ -232,28 +258,45 @@ export function Sidebar({
                         if (e.key === "Enter") commitRename();
                         if (e.key === "Escape") setEditingSessionId(null);
                       }}
-                      className="flex-1 truncate bg-transparent text-sm outline-none ring-1 ring-primary rounded px-1"
+                      className="min-w-0 flex-1 truncate bg-transparent text-sm outline-none ring-1 ring-primary rounded px-1"
                       aria-label="Rename session"
                     />
                   ) : (
                     <button
                       type="button"
-                      className="flex-1 truncate text-left"
+                      className="min-w-0 flex-1 truncate text-left"
+                      title={s.name}
                       onClick={() => onSelectSession?.(s.id)}
                       onDoubleClick={() => startRename(s)}
                     >
                       {s.name}
                     </button>
                   )}
+                  {editingSessionId !== s.id && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={sessionActionClass(s.id === activeSessionId)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startRename(s);
+                      }}
+                      aria-label={`Rename session ${s.name}`}
+                      title="Rename"
+                    >
+                      <Pencil className="h-3 w-3" aria-hidden="true" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-6 w-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                    className={sessionActionClass(s.id === activeSessionId)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onDeleteSession?.(s.id);
+                      if (window.confirm(deleteSessionPrompt(s.name))) onDeleteSession?.(s.id);
                     }}
                     aria-label={`Delete session ${s.name}`}
+                    title="Delete"
                   >
                     <Trash2 className="h-3 w-3" aria-hidden="true" />
                   </Button>
@@ -265,7 +308,7 @@ export function Sidebar({
                 </p>
               )}
             </div>
-          </ScrollArea>
+          </div>
         </>
       )}
     </aside>

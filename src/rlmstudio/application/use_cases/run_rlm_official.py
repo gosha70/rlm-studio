@@ -32,13 +32,27 @@ from rlmstudio.application.sandbox_vars import (
     MODE_RLM_OFFICIAL,
     RESULT_KEY_COST_KNOWN,
     RESULT_KEY_ENGINE_VERSION,
+    RESULT_KEY_TOKENS_KNOWN,
 )
 from rlmstudio.application.services.provider_failure import (
     failure_answer,
     failure_kind_value,
 )
+from rlmstudio.application.use_cases.run_rlm import MAX_TIME_HINT
 
 logger = logging.getLogger(__name__)
+
+_EMPTY_ANSWER_ERROR = "Official RLM engine finished without an answer"
+# The guard abandons the engine before it reports anything it spent.
+_GUARD_USAGE_UNKNOWN = (
+    "Usage isn't available for this run: the engine was stopped before it reported "
+    "its tokens or cost, so they are unknown, not zero."
+)
+_EMPTY_ANSWER_CARD = (
+    "⚠️ **No answer** — the official engine finished without returning one.\n\n"
+    "It usually stops like this when it runs out of steps before it answers.\n\n"
+    "**How to fix:** raise **Max steps**, or ask a more focused question."
+)
 
 
 class _WallClockExceededError(Exception):
@@ -136,6 +150,7 @@ class RunRLMOfficialUseCase:
                     "cost_usd": result.total_cost,
                     "steps": result.steps,
                     "elapsed_seconds": result.elapsed_time,
+                    **result.usage_flags(),
                 }
             )
         return result
@@ -186,6 +201,18 @@ class RunRLMOfficialUseCase:
         metadata = dict(result.metadata)
         metadata.setdefault(RESULT_KEY_ENGINE_VERSION, self._engine.version)
         answer = result.answer
+        if result.success and not answer.strip():
+            # The engine finished without an answer; ranking it as a success
+            # put an empty cell above real answers.
+            return dataclasses.replace(
+                result,
+                answer=_EMPTY_ANSWER_CARD,
+                success=False,
+                error=_EMPTY_ANSWER_ERROR,
+                mode_used=MODE_RLM_OFFICIAL,
+                elapsed_time=result.elapsed_time or (time.time() - start),
+                metadata=metadata,
+            )
         if result.success:
             breach = self._budget_breach(result, config)
             if breach is not None:
@@ -218,7 +245,7 @@ class RunRLMOfficialUseCase:
             return None
         error = f"Official RLM engine unavailable: {reason}"
         return RunResultDTO(
-            answer=f"⚠️ **Execution error**.\n\n{error}",
+            answer=f"⚠️ **The official engine is unavailable**.\n\n{reason}",
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
             error=error,
@@ -232,9 +259,11 @@ class RunRLMOfficialUseCase:
         return RunResultDTO(
             answer=(
                 f"⚠️ **RLM run timed out** after {seconds:.0f}s.\n\n"
-                "The official engine did not finish within the wall-clock budget.\n\n"
-                "**How to fix** — in Settings → Profile → Runtime Settings:\n"
-                "- Increase **Timeout (s)**, or reduce **Max steps**."
+                "The official engine did not finish within its time limit.\n\n"
+                "**How to fix:**\n"
+                + MAX_TIME_HINT
+                + "- Or ask a more focused question.\n\n"
+                + _GUARD_USAGE_UNKNOWN
             ),
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
@@ -246,6 +275,7 @@ class RunRLMOfficialUseCase:
             metadata={
                 RESULT_KEY_ENGINE_VERSION: self._engine.version,
                 RESULT_KEY_COST_KNOWN: False,
+                RESULT_KEY_TOKENS_KNOWN: False,
             },
         )
 
@@ -263,5 +293,6 @@ class RunRLMOfficialUseCase:
             metadata={
                 RESULT_KEY_ENGINE_VERSION: self._engine.version,
                 RESULT_KEY_COST_KNOWN: False,
+                RESULT_KEY_TOKENS_KNOWN: False,
             },
         )

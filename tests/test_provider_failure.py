@@ -18,8 +18,10 @@ from rlmstudio.application.services.provider_failure import (
     ProviderFailureKind,
     classify_provider_failure,
     describe_provider_failure,
+    display_model_id,
     failure_answer,
     redact_secrets,
+    strip_html,
 )
 
 # ---------------------------------------------------------------------------
@@ -176,6 +178,24 @@ def test_redacts_every_known_key_shape(secret: str) -> None:
 
     assert secret not in out
     assert SECRET_PLACEHOLDER in out
+
+
+def test_redacts_a_key_the_provider_masked() -> None:
+    """OpenAI echoes a rejected key as prefix + last four; neither may be shown."""
+    out = redact_secrets(
+        "Incorrect API key provided: sk-proj-********************************ERzz. "
+        "You can find your API key at https://platform.openai.com/account/api-keys."
+    )
+
+    assert "sk-proj" not in out
+    assert "ERzz" not in out
+    assert "Incorrect API key provided: <redacted>." in out
+
+
+def test_every_fix_names_the_llm_providers_tab() -> None:
+    """The Settings tab is "LLM Providers"; there is no "Providers" tab."""
+    for kind in ProviderFailureKind:
+        assert "Settings → Providers" not in describe_provider_failure(kind).fix
 
 
 def test_redaction_leaves_ordinary_text_alone() -> None:
@@ -538,3 +558,213 @@ def test_all_three_execution_records_carry_the_same_keys() -> None:
         f"chat and Compare records drifted — "
         f"only chat: {rest[0] - compare[0]}, only Compare: {compare[0] - rest[0]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# M6: missing credentials, a local server's HTML 500, context-length wording
+# ---------------------------------------------------------------------------
+
+_LM_STUDIO_500 = (
+    "litellm.InternalServerError: InternalServerError: OpenAIException - <!DOCTYPE html>\n"
+    '<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n'
+    "<body>\n<pre>Internal Server Error</pre>\n</body>\n</html>\n"
+)
+
+
+def test_missing_credentials_is_an_auth_failure() -> None:
+    litellm = pytest.importorskip("litellm")
+    exc = litellm.InternalServerError(
+        "OpenAIException - Missing credentials. Please pass an api_key, "
+        "workload_identity, admin_api_key, or set the OPENAI_API_KEY environment variable.",
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+    assert classify_provider_failure(exc) is ProviderFailureKind.AUTH
+
+
+def test_html_500_is_a_server_error_with_readable_detail() -> None:
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+    exc = litellm.InternalServerError(_LM_STUDIO_500, llm_provider="openai", model="qwen")
+    assert classify_provider_failure(exc) is ProviderFailureKind.SERVER_ERROR
+
+    adapter = LiteLLMAdapter(model="openai/qwen2.5-7b-instruct")
+    err = adapter._translate_exception(exc, "LiteLLM completion failed")
+    answer = failure_answer(err)
+
+    assert answer is not None
+    assert answer.startswith("⚠️ **The provider's server failed**")
+    assert "reload the model" in answer
+    assert "<html" not in answer
+    assert "<pre>" not in answer
+    assert "Internal Server Error" in answer
+
+
+def test_strip_html_leaves_plain_text_alone() -> None:
+    text = "Error code: 400 - {'error': 'Model unloaded.'}\nsecond line"
+    assert strip_html(text) == text
+
+
+def test_direct_answer_names_a_context_length_overflow() -> None:
+    from rlmstudio.application.use_cases.run_direct import _format_error_answer
+
+    exc = RuntimeError(
+        "LiteLLM completion failed: litellm.BadRequestError: OpenAIException - "
+        "The number of tokens to keep from the initial prompt is greater than the "
+        "context length."
+    )
+    assert _format_error_answer(exc).startswith("⚠️ **Context window exceeded**")
+
+
+@pytest.mark.parametrize(
+    ("exc_class", "message"),
+    [
+        (
+            "BadRequestError",
+            'Lm_studioException - {"error":"Model was unloaded while the request was '
+            'still in queue.."}',
+        ),
+        (
+            "BadRequestError",
+            "OpenAIException - Error code: 400 - "
+            "{'error': 'Model has not started loading/has been unloaded.'}",
+        ),
+        (
+            "APIConnectionError",
+            "APIConnectionError: OpenAIException - Model has not started loading/has been "
+            "unloaded.",
+        ),
+        (
+            # Pass 4 (SC3-10): LM Studio with nothing loaded at all.
+            "BadRequestError",
+            'Lm_studioException - {"error":"No models loaded. Please load a model in the '
+            "developer page or use the 'lms load' command.\"}",
+        ),
+    ],
+)
+def test_lm_studio_unloaded_model_says_to_load_it(exc_class: str, message: str) -> None:
+    """CHAT2-04: LM Studio's "unloaded / not loaded" replies came through raw
+    and unclassified, or as "could not reach the provider" mid-stream."""
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+    exc = getattr(litellm, exc_class)(message, llm_provider="openai", model="qwen")
+    assert classify_provider_failure(exc) is ProviderFailureKind.MODEL_NOT_LOADED
+
+    adapter = LiteLLMAdapter(
+        model="openai/qwen2.5-7b-instruct", api_base="http://localhost:1234/v1"
+    )
+    err = adapter._translate_exception(exc, "LiteLLM completion failed")
+    answer = failure_answer(err)
+
+    assert isinstance(err, ProviderFailureError)
+    assert err.kind is ProviderFailureKind.MODEL_NOT_LOADED
+    assert answer is not None
+    assert answer.startswith("⚠️ **Model not loaded**")
+    assert "Load the model on the model server" in answer
+
+
+# The reply LM Studio gave in the browser pass when RAG's embedding model could
+# not be loaded (SC3-10).
+_LM_STUDIO_LOAD_FAILED = (
+    'Lm_studioException - {"error":"Failed to load model '
+    '\\"text-embedding-nomic-embed-text-v1.5\\". Error: Operation canceled."}'
+)
+
+
+def test_lm_studio_failing_to_load_a_chat_model_says_how_to_fix_it() -> None:
+    """SC3-10: "Failed to load model" came through as a raw BadRequestError."""
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.infrastructure.llm.litellm_adapter import LiteLLMAdapter
+
+    exc = litellm.BadRequestError(_LM_STUDIO_LOAD_FAILED, llm_provider="lm_studio", model="m")
+    assert classify_provider_failure(exc) is ProviderFailureKind.MODEL_NOT_LOADED
+
+    adapter = LiteLLMAdapter(model="openai/qwen2.5-7b-instruct", api_base="http://localhost:1234")
+    answer = failure_answer(adapter._translate_exception(exc, "LiteLLM completion failed"))
+
+    assert answer is not None
+    assert answer.startswith("⚠️ **Model not loaded**")
+    assert "downloaded" in answer
+    assert "enough free memory" in answer
+
+
+def test_a_rag_embedding_model_that_fails_to_load_is_classified_like_chat() -> None:
+    """SC3-10: the RAG embedder calls LiteLLM itself, so its raw error reached
+    the answer as "litellm.BadRequestError: Lm_studioException - {…}"."""
+    litellm = pytest.importorskip("litellm")
+    from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
+    from tests.test_use_cases import FakeEmbedder, FakeLLM, FakeStorage
+
+    class _UnloadableEmbedder(FakeEmbedder):
+        model = "lm_studio/text-embedding-nomic-embed-text-v1.5"
+
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            raise litellm.BadRequestError(
+                _LM_STUDIO_LOAD_FAILED, llm_provider="lm_studio", model=self.model
+            )
+
+    result = RunRAGUseCase(FakeLLM(["unused"]), _UnloadableEmbedder(), FakeStorage()).execute(
+        "a document", "q"
+    )
+
+    assert result.success is False
+    assert result.failure_kind == ProviderFailureKind.MODEL_NOT_LOADED.value
+    assert result.answer.startswith("⚠️ **Model not loaded**")
+    assert "The model 'text-embedding-nomic-embed-text-v1.5' is not loaded" in result.answer
+    assert "Load the model on the model server" in result.answer
+
+
+def test_an_unrecognised_rag_failure_keeps_its_own_message() -> None:
+    from rlmstudio.application.use_cases.run_rag import RunRAGUseCase
+    from tests.test_use_cases import FakeEmbedder, FakeLLM, FakeStorage
+
+    class _BrokenEmbedder(FakeEmbedder):
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            raise ValueError("vector store is read-only")
+
+    result = RunRAGUseCase(FakeLLM(["unused"]), _BrokenEmbedder(), FakeStorage()).execute(
+        "a document", "q"
+    )
+
+    assert result.failure_kind is None
+    assert result.error == "vector store is read-only"
+
+
+@pytest.mark.parametrize(
+    ("routed", "configured"),
+    [
+        ("openai/qwen2.5-7b-instruct", "qwen2.5-7b-instruct"),
+        ("lm_studio/text-embedding-nomic-embed-text-v1.5", "text-embedding-nomic-embed-text-v1.5"),
+        ("hosted_vllm/Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-7B-Instruct"),
+        ("ollama/llama3.2", "llama3.2"),
+        # Not routed: an id with a slash of its own is the user's id.
+        ("Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-7B-Instruct"),
+        ("gpt-4o", "gpt-4o"),
+    ],
+)
+def test_display_model_id_drops_one_routing_prefix(routed: str, configured: str) -> None:
+    assert display_model_id(routed) == configured
+
+
+def test_model_not_loaded_names_the_model_the_user_configured() -> None:
+    """P3-CS-3: it said "The model 'openai/qwen2.5-7b-instruct' is not loaded",
+    with the LM Studio routing prefix the user never typed."""
+    failure = describe_provider_failure(
+        ProviderFailureKind.MODEL_NOT_LOADED, model="openai/qwen2.5-7b-instruct"
+    )
+
+    assert "'qwen2.5-7b-instruct'" in failure.cause
+    assert "openai/" not in failure.cause
+
+
+def test_a_model_load_failure_from_another_server_does_not_blame_lm_studio() -> None:
+    """Review P2: generic "failed to load model" text (here from Ollama) was
+    described as "not loaded in LM Studio" with LM Studio-only steps."""
+    kind = classify_provider_failure(RuntimeError("Ollama failed to load model llama3"))
+    failure = describe_provider_failure(kind, model="llama3")
+
+    assert kind is ProviderFailureKind.MODEL_NOT_LOADED
+    assert "not loaded in LM Studio" not in failure.cause
+    assert "on the model server" in failure.cause

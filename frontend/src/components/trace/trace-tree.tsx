@@ -31,7 +31,7 @@ export function TraceTree({ steps, onSelect, selectedIndex }: TraceTreeProps) {
           <Badge variant="outline" className="text-xs">
             {step.action_type}
           </Badge>
-          <span className="flex-1 truncate font-mono text-xs">
+          <span className="min-w-0 flex-1 truncate font-mono text-xs">
             {step.code ?? step.output ?? "--"}
           </span>
           <span className="text-xs text-muted-foreground">

@@ -6,7 +6,7 @@ import { getSessions, getHealth, deleteSession as apiDeleteSession, renameSessio
 import { Sidebar } from "./sidebar";
 import { ThemeToggle } from "./theme-toggle";
 import { StatusIndicator } from "./status-indicator";
-import { HEALTH_POLL_MS, HEALTH_RETRY_MS } from "@/lib/constants";
+import { HEALTH_POLL_MS, HEALTH_RETRY_MS, SESSIONS_SWR_KEY } from "@/lib/constants";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -37,7 +37,7 @@ export function AppShell({
   const [collapsed, setCollapsed] = useState(false);
 
   const { data: sessions = [], mutate: mutateSessions } = useSWR<SessionSummary[]>(
-    "sessions",
+    SESSIONS_SWR_KEY,
     () => getSessions(),
   );
 

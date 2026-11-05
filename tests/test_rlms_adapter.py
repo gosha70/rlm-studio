@@ -43,8 +43,14 @@ from rlmstudio.application.services.outcome_classifier import (
     OutcomeCategory,
     classify_execution_outcome,
 )
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailureError,
+    ProviderFailureKind,
+    failure_answer,
+)
 from rlmstudio.envs.in_process_state import acquire_exclusive, release_exclusive
 from rlmstudio.infrastructure.engines.rlms_adapter import (
+    BUSY_AFTER_TIMEOUT_REASON,
     BUSY_REASON,
     MAX_TRACE_RECURSION_DEPTH,
     NOTE_COST_UNKNOWN,
@@ -53,6 +59,7 @@ from rlmstudio.infrastructure.engines.rlms_adapter import (
     NOTE_LOCAL_ENV,
     NOTE_NO_STREAMING,
     NOTE_NO_SUBCALL_FLOOR,
+    NOTE_TIMEOUT_USAGE_UNKNOWN,
     UNAVAILABLE_REASON,
     RlmsEngineAdapter,
     engine_max_depth,
@@ -973,13 +980,80 @@ class TestInterruptedRunKeepsWhatWasSpent:
 
         assert not result.success
         assert result.total_tokens == 50_000
-        assert result.steps == 2  # the two iterations the logger captured
+        assert result.tokens_known is True
+        # The two iterations the logger captured, plus the one that tripped the
+        # cap: the engine checks it before the logger records that iteration.
+        assert result.steps == 3
         assert len(result.trace) > 0
         assert "3 sections so far" in result.answer
         assert NOTE_INTERRUPTED_TOTALS in result.metadata[RESULT_KEY_ENGINE_NOTES]
         assert classify_execution_outcome(result.success, result.error, result.answer).category is (
             OutcomeCategory.BUDGET_EXHAUSTED
         )
+
+    def test_a_token_breach_is_worded_like_a_studio_budget_stop(self, fake_rlm: _FakeRlm) -> None:
+        """CMP2-04: it read "Execution error. Budget exceeded: …" followed by the
+        engine's last raw step — REPL code — as the "Partial answer"."""
+        fake_rlm.raise_on_completion = _raise(
+            "TokenLimitExceededError",
+            "Token limit exceeded after iteration 15: 52,240 of 50,000 tokens",
+            tokens_used=52_240,
+            token_limit=50_000,
+            partial_answer="Let me look.\n```repl\nprint(context[:100])\n```",
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert result.answer.startswith("⚠️ **Token budget exceeded** after 3 steps")
+        assert "52,240 of 50,000 tokens" in result.answer
+        assert "**Max Tokens**" in result.answer
+        assert "Execution error" not in result.answer
+        assert "print(context" not in result.answer
+        assert "Partial answer" not in result.answer
+        assert classify_execution_outcome(result.success, result.error, result.answer).category is (
+            OutcomeCategory.BUDGET_EXHAUSTED
+        )
+
+    def test_an_engine_timeout_names_the_time_limit_setting(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = _raise(
+            "TimeoutExceededError",
+            "Timeout exceeded after iteration 4: 18.3s of 18.0s limit",
+            elapsed=18.3,
+            timeout=18.0,
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert result.answer.startswith("⚠️ **Execution timed out** after 2 steps (90s limit)")
+        assert "**Max Execution Time (s)**" in result.answer
+        assert "Execution error" not in result.answer
+        assert classify_execution_outcome(result.success, result.error, result.answer).category is (
+            OutcomeCategory.TIMEOUT
+        )
+
+    def test_a_connection_failure_names_the_endpoint_and_the_fix(self, fake_rlm: _FakeRlm) -> None:
+        """CMP2-04: the engine's own client failed with a bare "Connection error."."""
+        endpoint = "http://127.0.0.1:18184"
+
+        class APIConnectionError(Exception): ...
+
+        fake_rlm.raise_on_completion = APIConnectionError("Connection error.")
+
+        with pytest.raises(ProviderFailureError) as raised:
+            _adapter(backend="lmstudio", base_url=endpoint).run("d", "q", _CONFIG)
+
+        assert raised.value.kind is ProviderFailureKind.CONNECTION
+        assert endpoint in raised.value.cause_text
+        card = failure_answer(raised.value)
+        assert card is not None
+        assert endpoint in card
+        assert "running and reachable" in card
+
+    def test_an_unrecognised_engine_failure_is_raised_unchanged(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = ValueError("something odd")
+
+        with pytest.raises(ValueError, match="something odd"):
+            _adapter().run("d", "q", _CONFIG)
 
     def test_a_token_breach_is_priced_from_the_slot_cost_table(self, fake_rlm: _FakeRlm) -> None:
         """The tokens are known even though the money is not, so price them."""
@@ -1027,11 +1101,44 @@ class TestInterruptedRunKeepsWhatWasSpent:
 
         assert result.total_cost == 0.0
         assert result.metadata[RESULT_KEY_COST_KNOWN] is False
-        assert NOTE_COST_UNKNOWN in result.metadata[RESULT_KEY_ENGINE_NOTES]
         assert result.steps == 2
         assert classify_execution_outcome(result.success, result.error, result.answer).category is (
             OutcomeCategory.TIMEOUT
         )
+
+    def test_a_timeout_says_its_usage_is_not_available(self, fake_rlm: _FakeRlm) -> None:
+        """SC3-02: the timed-out run read "0 tokens · $0.0000" with nothing to
+        say those were not its real figures.  The engine's timeout carries no
+        usage, and neither its logger nor the instance keeps the root calls'
+        usage, so the answer and the notes have to say it is unknown."""
+        fake_rlm.raise_on_completion = _raise(
+            "TimeoutExceededError", "90.0s of 90.0s", elapsed=90.0, partial_answer="so far"
+        )
+
+        result = _adapter(cost_fn=lambda _in, _out: 0.0).run("d", "q", _CONFIG)
+
+        assert (result.cost_known, result.tokens_known) == (False, False)
+        warning, _, partial = result.answer.partition("**Partial answer**")
+        assert NOTE_TIMEOUT_USAGE_UNKNOWN in warning
+        assert "so far" in partial
+        notes = result.metadata[RESULT_KEY_ENGINE_NOTES]
+        assert NOTE_TIMEOUT_USAGE_UNKNOWN in notes
+        # Neither "no price is known for this model" nor "the cost, where known"
+        # describes a run whose usage was never reported.
+        assert NOTE_COST_UNKNOWN not in notes
+        assert NOTE_INTERRUPTED_TOKENS_UNKNOWN not in notes
+
+    def test_a_budget_breach_does_not_claim_its_usage_is_unknown(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = _raise(
+            "BudgetExceededError", "spent $0.310000 of $0.250000", spent=0.31
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert NOTE_TIMEOUT_USAGE_UNKNOWN not in result.answer
+        assert NOTE_TIMEOUT_USAGE_UNKNOWN not in result.metadata[RESULT_KEY_ENGINE_NOTES]
+        # The money is known; the token count is not.
+        assert (result.cost_known, result.tokens_known) == (True, False)
 
     def test_a_breach_with_no_token_count_says_so_instead_of_claiming_a_total(
         self, fake_rlm: _FakeRlm
@@ -1063,6 +1170,32 @@ class TestInterruptedRunKeepsWhatWasSpent:
 
         assert NOTE_INTERRUPTED_TOTALS in notes
         assert NOTE_INTERRUPTED_TOKENS_UNKNOWN not in notes
+
+    @pytest.mark.parametrize(
+        ("exc_name", "attrs", "heading"),
+        [
+            ("TokenLimitExceededError", {"tokens_used": 1_718}, "Token budget exceeded"),
+            ("BudgetExceededError", {"spent": 0.31}, "Cost budget exceeded"),
+        ],
+    )
+    def test_a_cap_tripped_by_the_first_step_says_so(
+        self, fake_rlm: _FakeRlm, exc_name: str, attrs: dict[str, Any], heading: str
+    ) -> None:
+        """SC3-04: "Token budget exceeded after 0 steps (1,718 of 1,500 tokens)".
+
+        The engine checks its token and cost caps after an iteration has run
+        but before its logger records it, so a breach on the first iteration
+        leaves an empty trajectory although that iteration spent the tokens.
+        """
+        fake_rlm.logged_trajectory = {"iterations": []}
+        fake_rlm.raise_on_completion = _raise(exc_name, "cap", **attrs)
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert result.steps == 1
+        assert result.answer.startswith(f"⚠️ **{heading}** on the first step")
+        assert "0 steps" not in result.answer
+        assert "on the first step" in (result.error or "")
 
     def test_an_empty_logger_still_yields_a_classified_failure(self, fake_rlm: _FakeRlm) -> None:
         fake_rlm.logged_trajectory = None
@@ -1105,6 +1238,72 @@ class TestLocalEnvironmentIsSerialised:
         assert classify_execution_outcome(result.success, result.error, result.answer).category is (
             OutcomeCategory.GENERAL_ERROR
         )
+
+    def test_busy_behind_a_timed_out_run_says_that_run_is_still_finishing(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        """CMP2-02: the engine cannot be interrupted, so a run whose caller
+        timed out keeps the REPL on its abandoned thread.  The next run must
+        say that, not just "busy … use Docker"."""
+        holder_budget = 0.05
+        release = threading.Event()
+        started = threading.Event()
+
+        def block(**_: Any) -> None:
+            started.set()
+            release.wait(timeout=10.0)
+
+        fake_rlm.on_completion = block
+        holder = threading.Thread(
+            target=lambda: _adapter(sandbox_type="restricted").run(
+                "d", "q", dataclasses.replace(_CONFIG, max_time_seconds=holder_budget)
+            ),
+            daemon=True,
+        )
+        holder.start()
+        try:
+            assert started.wait(timeout=10.0)
+            time.sleep(holder_budget * 2)  # the holder's caller has given up by now
+            result = _adapter(sandbox_type="restricted").run(
+                "d", "q", dataclasses.replace(_CONFIG, max_time_seconds=0.4)
+            )
+        finally:
+            release.set()
+            holder.join(timeout=10.0)
+
+        assert not result.success
+        assert result.error == BUSY_AFTER_TIMEOUT_REASON
+        assert "timed out" in result.answer
+        assert "Try again shortly" in result.answer
+
+    def test_busy_behind_a_run_within_its_budget_keeps_the_general_reason(
+        self, fake_rlm: _FakeRlm
+    ) -> None:
+        release = threading.Event()
+        started = threading.Event()
+
+        def block(**_: Any) -> None:
+            started.set()
+            release.wait(timeout=10.0)
+
+        fake_rlm.on_completion = block
+        holder = threading.Thread(
+            target=lambda: _adapter(sandbox_type="restricted").run(
+                "d", "q", dataclasses.replace(_CONFIG, max_time_seconds=60.0)
+            ),
+            daemon=True,
+        )
+        holder.start()
+        try:
+            assert started.wait(timeout=10.0)
+            result = _adapter(sandbox_type="restricted").run(
+                "d", "q", dataclasses.replace(_CONFIG, max_time_seconds=0.4)
+            )
+        finally:
+            release.set()
+            holder.join(timeout=10.0)
+
+        assert result.error == BUSY_REASON
 
     def test_a_run_that_waited_is_charged_for_the_wait(self, fake_rlm: _FakeRlm) -> None:
         """Queueing spends budget, so the engine gets what is left, not the lot.

@@ -629,8 +629,9 @@ class TestRunRLMUseCase:
         uc = RunRLMUseCase(llm, sandbox)
         result = uc.execute("content", "question", config=config)
 
-        assert result.success is True
-        assert "⚠️" in result.answer
+        assert result.success is False
+        assert "⚠️ **Run stopped**" in result.answer
+        assert "Budget exceeded" in (result.error or "")
         assert result.steps < 10
 
     def test_sandbox_receives_content(self):
@@ -1105,8 +1106,9 @@ class TestRunRLMAsync:
             uc.execute_async("content", "question", config=config)
         )
 
-        assert result.success is True
-        assert "⚠️" in result.answer
+        assert result.success is False
+        assert "⚠️ **Run stopped**" in result.answer
+        assert "Budget exceeded" in (result.error or "")
         assert result.steps < 10
 
 
@@ -1440,7 +1442,8 @@ class TestJsonProtocolParsing:
         uc = RunRLMUseCase(llm, sandbox)
         result = uc.execute("content", "question", config=config)
 
-        assert result.success is True
+        # The repeated grep hits the repeat limit; no answer comes of it (M23).
+        assert result.success is False
         # The answer should NOT be the raw JSON action blob
         assert not result.answer.strip().startswith("{")
 
@@ -1704,8 +1707,9 @@ class TestCostAccounting:
         config = RunConfigDTO(mode="rlm", max_cost=0.000001)
         result = uc.execute("content", "query", config=config)
 
-        assert result.success is True
-        assert "⚠️" in result.answer
+        assert result.success is False
+        assert "⚠️ **Cost budget exceeded**" in result.answer
+        assert "Budget exceeded" in (result.error or "")
 
     def test_max_cost_enforced_on_immediate_final(self):
         """A single FINAL response that exceeds max_cost must not return success."""
@@ -1721,8 +1725,9 @@ class TestCostAccounting:
         config = RunConfigDTO(mode="rlm", max_cost=0.000001)
         result = uc.execute("content", "query", config=config)
 
-        assert result.success is True
-        assert "⚠️" in result.answer
+        assert result.success is False
+        assert "⚠️ **Cost budget exceeded**" in result.answer
+        assert "Budget exceeded" in (result.error or "")
 
     def test_subcall_cost_folded_into_parent(self):
         """Parent total_cost includes child RLM token usage."""
@@ -2169,6 +2174,21 @@ class TestHumanizeRAGError:
 _INSPECT_PEEK_0_500 = '{"type": "inspect", "tool": "peek", "args": {"start": 0, "end": 500}}'
 _INSPECT_PEEK_500_1000 = '{"type": "inspect", "tool": "peek", "args": {"start": 500, "end": 1000}}'
 _FINAL_DONE = '{"type": "final", "answer": "Done after exploration."}'
+_INSPECT_GREP = '{"type": "inspect", "tool": "grep", "args": {"pattern": "beta"}}'
+_SYNTH_ANSWER = "Synthesised from the inspected content."
+
+
+def _inspect_rows(result) -> int:
+    return sum(1 for e in result.trace if e.get("role") == "execution")
+
+
+def _repeat_limit_rows(result) -> int:
+    return sum(
+        1
+        for e in result.trace
+        if e.get("role") == "system"
+        and str(e.get("content", "")).startswith("Repeat limit reached")
+    )
 
 
 class TestRepeatDetection:
@@ -2190,10 +2210,12 @@ class TestRepeatDetection:
         assert result.answer == "Done after exploration."
 
     def test_repeat_detection_forces_final_after_repeat_limit(self):
-        """After repeat_limit duplicates, 'repeat_detected' message is injected."""
-        # All steps return same inspect → repeat_limit=2 means on 3rd dup
-        # the repeat_detected message fires.  Model then finalizes.
-        llm = FakeLLM([_INSPECT_PEEK_0_500, _INSPECT_PEEK_0_500, _INSPECT_PEEK_0_500, _FINAL_DONE])
+        """At repeat_limit duplicates the loop stops and synthesises an answer (M23)."""
+        # Same inspect three times: the 3rd is the 2nd duplicate, so with
+        # repeat_limit=2 the next LLM call is the synthesis call.
+        llm = FakeLLM(
+            [_INSPECT_PEEK_0_500, _INSPECT_PEEK_0_500, _INSPECT_PEEK_0_500, _SYNTH_ANSWER]
+        )
         sandbox = FakeSandbox()
         content = "A" * 1000
         config = RunConfigDTO(mode="rlm", max_steps=10, repeat_limit=2)
@@ -2201,7 +2223,24 @@ class TestRepeatDetection:
         result = uc.execute(content, "summarize", config=config)
 
         assert result.success is True
-        assert result.answer == "Done after exploration."
+        assert result.answer == _SYNTH_ANSWER
+        assert _repeat_limit_rows(result) == 1
+
+    def test_endless_repeats_stop_at_the_limit_not_max_steps(self):
+        """A model that repeats one grep forever ends after repeat_limit + 1 inspects."""
+        llm = FakeLLM([_INSPECT_GREP])  # the same action for every call
+        sandbox = FakeSandbox()
+        config = RunConfigDTO(mode="rlm", max_steps=20, repeat_limit=2)
+        uc = RunRLMUseCase(llm, sandbox)
+        result = uc.execute("alpha beta gamma\n" * 50, "q", config=config)
+
+        assert _inspect_rows(result) == 3
+        assert _repeat_limit_rows(result) == 1
+        assert result.steps < config.max_steps
+        # The synthesis reply is the same JSON action, so no answer: a limit stop.
+        assert result.success is False
+        assert result.answer.startswith("⚠️ **Run stopped at the repeat limit**")
+        assert "Budget exceeded" in (result.error or "")
 
     def test_no_repeat_detection_on_unique_outputs(self):
         """Different inspect ranges produce different outputs — no repeat nudge."""
@@ -2263,7 +2302,9 @@ class TestRepeatDetectionAsync:
         assert result.answer == "Done after exploration."
 
     def test_async_repeat_detection_forces_final(self):
-        llm = FakeLLM([_INSPECT_PEEK_0_500, _INSPECT_PEEK_0_500, _INSPECT_PEEK_0_500, _FINAL_DONE])
+        llm = FakeLLM(
+            [_INSPECT_PEEK_0_500, _INSPECT_PEEK_0_500, _INSPECT_PEEK_0_500, _SYNTH_ANSWER]
+        )
         sandbox = FakeSandbox()
         content = "A" * 1000
         config = RunConfigDTO(mode="rlm", max_steps=10, repeat_limit=2)
@@ -2273,7 +2314,22 @@ class TestRepeatDetectionAsync:
         )
 
         assert result.success is True
-        assert result.answer == "Done after exploration."
+        assert result.answer == _SYNTH_ANSWER
+        assert _repeat_limit_rows(result) == 1
+
+    def test_async_endless_repeats_stop_at_the_limit_not_max_steps(self):
+        llm = FakeLLM([_INSPECT_GREP])
+        sandbox = FakeSandbox()
+        config = RunConfigDTO(mode="rlm", max_steps=20, repeat_limit=2)
+        uc = RunRLMUseCase(llm, sandbox)
+        result = asyncio.get_event_loop().run_until_complete(
+            uc.execute_async("alpha beta gamma\n" * 50, "q", config=config)
+        )
+
+        assert _inspect_rows(result) == 3
+        assert _repeat_limit_rows(result) == 1
+        assert result.success is False
+        assert result.answer.startswith("⚠️ **Run stopped at the repeat limit**")
 
 
 class TestSoftNudge:

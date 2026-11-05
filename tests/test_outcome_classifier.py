@@ -203,3 +203,17 @@ class TestEdgeCases:
     def test_all_categories_have_distinct_values(self) -> None:
         values = [c.value for c in OutcomeCategory]
         assert len(values) == len(set(values))
+
+
+class TestContextLengthWording:
+    """M6: LM Studio reports an overflow as "greater than the context length"."""
+
+    def test_lm_studio_context_length_is_an_overflow(self) -> None:
+        error = (
+            "LiteLLM completion failed (after streaming fallback): litellm.BadRequestError: "
+            "OpenAIException - Error code: 400 - {'error': 'The number of tokens to keep "
+            "from the initial prompt is greater than the context length. Try to load the "
+            "model with a larger context length, or provide a shorter input'}"
+        )
+        result = classify_execution_outcome(success=False, error=error, answer="")
+        assert result.category == OutcomeCategory.CONTEXT_OVERFLOW

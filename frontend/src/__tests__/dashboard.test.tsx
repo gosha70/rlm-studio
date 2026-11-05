@@ -6,13 +6,14 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
-import { vi, describe, test, expect } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
+import { CHAT_PROVIDERS_SWR_KEY } from "@/lib/constants";
 import { Hash } from "lucide-react";
 import { MetricCard } from "@/components/metrics/metric-card";
 import { ComparisonChart } from "@/components/metrics/comparison-chart";
 import { PerformanceTrend } from "@/components/metrics/performance-trend";
-import { CostBreakdown } from "@/components/metrics/cost-breakdown";
+import { CostBreakdown, NO_COST_TEXT } from "@/components/metrics/cost-breakdown";
 import type { ModeSummary, TimelineEntry } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -28,17 +29,23 @@ vi.mock("recharts", () => {
     PieChart: Passthrough,
     // Marks which series a chart actually drew, keyed by dataKey.  Renders no
     // text, so it cannot collide with a getByText assertion.
-    Bar: ({ dataKey }: { dataKey?: string | number }) => (
-      <div data-testid={`bar-series-${String(dataKey)}`} />
+    Bar: ({ dataKey, fill }: { dataKey?: string | number; fill?: string }) => (
+      <div data-testid={`bar-series-${String(dataKey)}`} data-fill={fill} />
     ),
-    Line: () => null,
+    Line: ({ dataKey, stroke }: { dataKey?: string; stroke?: string }) => (
+      <div data-testid={`line-series-${dataKey}`} data-stroke={stroke} />
+    ),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Pie: ({ data }: { data?: Array<{ name: string; value: number }>; [k: string]: any }) => {
+    Pie: ({ data, children }: { data?: Array<{ name: string; value: number }>; [k: string]: any }) => {
       if (!data || data.length === 0) return null;
+      // The page colours each slice with a <Cell fill> child, in data order.
+      const fills = React.Children.toArray(children).map(
+        (c) => (c as React.ReactElement<{ fill?: string }>).props.fill,
+      );
       return (
         <div data-testid="pie-cells">
-          {data.map((entry) => (
-            <span key={entry.name} data-testid={`pie-entry-${entry.name}`}>
+          {data.map((entry, i) => (
+            <span key={entry.name} data-testid={`pie-entry-${entry.name}`} data-fill={fills[i]}>
               {entry.name}
             </span>
           ))}
@@ -47,8 +54,11 @@ vi.mock("recharts", () => {
     },
     Cell: () => null,
     XAxis: () => null,
-    YAxis: () => null,
+    YAxis: ({ interval, width }: { interval?: unknown; width?: number }) => (
+      <div data-testid="y-axis" data-interval={String(interval)} data-width={String(width)} />
+    ),
     CartesianGrid: () => null,
+    ReferenceLine: () => null,
     Tooltip: () => null,
     Legend: () => null,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -191,6 +201,16 @@ describe("ComparisonChart", () => {
     }
   });
 
+  test("draws every Y tick, so the steps stay even, and leaves room for sub-cent ticks", () => {
+    render(<ComparisonChart rlmData={makeModeSummary()} directData={makeModeSummary()} />);
+    const axes = screen.getAllByTestId("y-axis");
+    expect(axes).toHaveLength(2);
+    // interval 0 = no tick dropped (the default dropped one: 0, 1000, 2000, 4000).
+    for (const axis of axes) expect(axis.dataset.interval).toBe("0");
+    const costAxis = within(screen.getByRole("img", { name: /mode cost/ })).getByTestId("y-axis");
+    expect(Number(costAxis.dataset.width)).toBeGreaterThanOrEqual(96);
+  });
+
   test("draws all four mode series side by side when every mode has runs", () => {
     render(
       <ComparisonChart
@@ -283,6 +303,18 @@ describe("CostBreakdown", () => {
     expect(screen.getByTestId("pie-entry-direct")).toBeInTheDocument();
   });
 
+  test("says no cost was recorded instead of drawing an empty card", () => {
+    const free = Object.fromEntries(
+      ["Qwen Direct", "Qwen RLM"].map((name) => [
+        name,
+        { queries: 2, total_tokens: 900, total_cost_usd: 0, avg_latency_seconds: 1.0 },
+      ]),
+    );
+    render(<CostBreakdown data={free} title="Cost by Chat Provider" />);
+    expect(screen.getByText(NO_COST_TEXT)).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /Pie chart/ })).not.toBeInTheDocument();
+  });
+
   test("formats USD values to 4 decimal places via Tooltip formatter", () => {
     // The component's Tooltip formatter: `$${Number(value).toFixed(4)}`
     // We verify the formatter produces the expected string directly
@@ -298,8 +330,9 @@ describe("CostBreakdown", () => {
 // ---------------------------------------------------------------------------
 
 import useSWR from "swr";
-import type { MetricsResponse, SessionSummary } from "@/lib/api";
+import type { FailureMetricsResponse, MetricsResponse, SessionSummary } from "@/lib/api";
 import DashboardPage from "@/app/dashboard/page";
+import { MODE_COLORS, PROVIDER_PALETTE, providerColorMap } from "@/components/metrics/series-colors";
 
 const mockUseSWR = vi.mocked(useSWR);
 
@@ -332,8 +365,9 @@ const makeMetrics = (): MetricsResponse => ({
   timeline: [],
 });
 
-// Helper: stub all five useSWR calls made by DashboardPage:
+// Helper: stub all six useSWR calls made by DashboardPage:
 //   1. sessions  2. metrics  3. failureMetrics  4. evalSummary  5. evalDetail
+//   6. chatProviders
 const noData = { data: undefined, isLoading: false } as ReturnType<typeof useSWR>;
 
 describe("DashboardPage", () => {
@@ -344,7 +378,8 @@ describe("DashboardPage", () => {
       .mockReturnValueOnce({ data: metrics, isLoading: false } as ReturnType<typeof useSWR>)
       .mockReturnValueOnce(noData)  // failureMetrics
       .mockReturnValueOnce(noData)  // evalSummary
-      .mockReturnValueOnce(noData); // evalDetail
+      .mockReturnValueOnce(noData)  // evalDetail
+      .mockReturnValueOnce(noData); // chatProviders
 
     render(<DashboardPage />);
     expect(screen.getByText("Total Tokens")).toBeInTheDocument();
@@ -360,7 +395,8 @@ describe("DashboardPage", () => {
       .mockReturnValueOnce({ data: metrics, isLoading: false } as ReturnType<typeof useSWR>)
       .mockReturnValueOnce(noData)  // failureMetrics
       .mockReturnValueOnce(noData)  // evalSummary
-      .mockReturnValueOnce(noData); // evalDetail
+      .mockReturnValueOnce(noData)  // evalDetail
+      .mockReturnValueOnce(noData); // chatProviders
 
     render(<DashboardPage />);
     expect(screen.getByText("Mode Comparison")).toBeInTheDocument();
@@ -373,7 +409,8 @@ describe("DashboardPage", () => {
       .mockReturnValueOnce(noData)  // metrics
       .mockReturnValueOnce(noData)  // failureMetrics
       .mockReturnValueOnce(noData)  // evalSummary
-      .mockReturnValueOnce(noData); // evalDetail
+      .mockReturnValueOnce(noData)  // evalDetail
+      .mockReturnValueOnce(noData); // chatProviders
 
     render(<DashboardPage />);
     expect(
@@ -387,7 +424,8 @@ describe("DashboardPage", () => {
       .mockReturnValueOnce(noData)  // metrics
       .mockReturnValueOnce(noData)  // failureMetrics
       .mockReturnValueOnce(noData)  // evalSummary
-      .mockReturnValueOnce(noData); // evalDetail
+      .mockReturnValueOnce(noData)  // evalDetail
+      .mockReturnValueOnce(noData); // chatProviders
 
     render(<DashboardPage />);
     // SWR was called at least twice: once for sessions, once for metrics
@@ -441,5 +479,251 @@ describe("FailureBreakdown", () => {
     // so bars don't appear in the DOM — the assertion above covers the
     // category-coverage invariant.
     expect(screen.getByText(/2 of 5 runs failed/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dashboard page — wording and empty states
+// ---------------------------------------------------------------------------
+
+function renderDashboard(
+  metrics: MetricsResponse | undefined,
+  sessions = makeSessions(),
+  failures?: FailureMetricsResponse,
+) {
+  mockUseSWR
+    .mockReturnValueOnce({ data: sessions, isLoading: false } as ReturnType<typeof useSWR>)
+    .mockReturnValueOnce({ data: metrics, isLoading: false } as ReturnType<typeof useSWR>)
+    .mockReturnValueOnce({ data: failures, isLoading: false } as ReturnType<typeof useSWR>)
+    .mockReturnValueOnce(noData) // evalSummary
+    .mockReturnValueOnce(noData) // evalDetail
+    .mockReturnValueOnce(noData); // chatProviders
+  return render(<DashboardPage />);
+}
+
+describe("DashboardPage — LLM Tuner note", () => {
+  test("says LLM Tuner runs are not counted and points to Traces", () => {
+    renderDashboard(makeMetrics());
+    expect(screen.getByTestId("dashboard-tuner-note")).toHaveTextContent(
+      "LLM Tuner runs are not counted here; find them in Traces.",
+    );
+    expect(screen.getByRole("link", { name: "Traces" })).toHaveAttribute("href", "/traces");
+  });
+});
+
+describe("DashboardPage — summary cards", () => {
+  const emptyMetrics = (): MetricsResponse => ({
+    session_id: "sess-1",
+    summary: {
+      total_queries: 0,
+      total_tokens: 0,
+      total_cost_usd: 0,
+      avg_latency_seconds: 0,
+      avg_token_savings_percent: null,
+    },
+    by_mode: {},
+    by_provider: {},
+    timeline: [],
+  });
+
+  test("show no numbers before any session exists", () => {
+    renderDashboard(undefined, []);
+    expect(screen.getByLabelText("Total Tokens: —")).toBeInTheDocument();
+    expect(screen.getByLabelText("Total Cost: —")).toBeInTheDocument();
+    expect(screen.getByLabelText("Avg Latency: —")).toBeInTheDocument();
+  });
+
+  test("show no numbers once every run was cleared, not Avg Latency 0.0 s", () => {
+    renderDashboard(emptyMetrics());
+    expect(screen.getByLabelText("Avg Latency: —")).toBeInTheDocument();
+    expect(screen.queryByText("0.0")).not.toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+  });
+
+  test("show no numbers when every run failed", () => {
+    renderDashboard({ ...emptyMetrics(), summary: { ...emptyMetrics().summary, total_queries: 3 } });
+    expect(screen.getByLabelText("Total Tokens: —")).toBeInTheDocument();
+  });
+
+  test("say how many times Direct's tokens RLM used when RLM used more", () => {
+    renderDashboard({
+      ...makeMetrics(),
+      summary: { ...makeMetrics().summary, avg_token_savings_percent: -1734 },
+    });
+    expect(screen.getByLabelText("RLM Tokens vs Direct: 18.3×")).toBeInTheDocument();
+    expect(screen.queryByText(/-1734%/)).not.toBeInTheDocument();
+  });
+
+  test("keep the savings percentage when RLM used fewer tokens", () => {
+    renderDashboard(makeMetrics());
+    expect(screen.getByLabelText("Token Savings: 25%")).toBeInTheDocument();
+  });
+});
+
+describe("DashboardPage — Recent Executions", () => {
+  test("labels the official engine's runs by name, not RLM_OFFICIAL", () => {
+    renderDashboard({
+      ...makeMetrics(),
+      timeline: [makeTimelineEntry({ mode: "rlm_official", chat_provider_name: "Official Llama" })],
+    });
+    expect(screen.getByText("Official RLM (rlms)")).toBeInTheDocument();
+    expect(screen.queryByText(/rlm_official/i)).not.toBeInTheDocument();
+  });
+
+  test("shows a tiny cost instead of $0.0000", () => {
+    renderDashboard({
+      ...makeMetrics(),
+      timeline: [makeTimelineEntry({ mode: "rag", cost_usd: 6e-7 })],
+    });
+    expect(screen.getByText("$0.0000006")).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard chart colours", () => {
+  test("a provider's colour does not depend on the order a chart lists it", () => {
+    expect(providerColorMap(["Qwen RAG", "Qwen Direct", "Qwen RLM"])).toEqual(
+      providerColorMap(["Qwen RLM", "Qwen Direct", "Qwen RAG", "Qwen RAG"]),
+    );
+  });
+
+  test("providers never take a mode's colour", () => {
+    for (const modeColor of Object.values(MODE_COLORS)) {
+      expect(PROVIDER_PALETTE).not.toContain(modeColor);
+    }
+  });
+
+  test("each Chat Provider has the same colour in the cost pie, trend and failure charts", () => {
+    const provider = { queries: 1, total_tokens: 100, total_cost_usd: 0.01, avg_latency_seconds: 1 };
+    // Each source lists the providers in a different order.
+    const metrics: MetricsResponse = {
+      ...makeMetrics(),
+      by_chat_provider: { "Qwen RAG": provider, "Qwen RLM": provider, "Qwen Direct": provider },
+      timeline: [
+        makeTimelineEntry({ chat_provider_name: "Qwen Direct", mode: "direct" }),
+        makeTimelineEntry({ chat_provider_name: "Qwen RLM", mode: "rlm" }),
+        makeTimelineEntry({ chat_provider_name: "Qwen RAG", mode: "rag" }),
+      ],
+    };
+    const failures: FailureMetricsResponse = {
+      session_id: "sess-1",
+      total_runs: 3,
+      total_failures: 2,
+      failure_rate: 0.67,
+      by_category: [{ category: "timeout", count: 2 }],
+      by_mode: {},
+      by_provider: {
+        "Qwen RLM": [{ category: "timeout", count: 1 }],
+        "Qwen RAG": [{ category: "timeout", count: 1 }],
+      },
+    };
+    renderDashboard(metrics, makeSessions(), failures);
+
+    for (const name of ["Qwen RAG", "Qwen RLM", "Qwen Direct"]) {
+      const pie = screen.getByTestId(`pie-entry-${name}`).dataset.fill;
+      expect(pie).toBeTruthy();
+      expect(screen.getByTestId(`line-series-${name} (latency)`).dataset.stroke).toBe(pie);
+      if (name !== "Qwen Direct") {
+        expect(screen.getByTestId(`bar-series-${name}`).dataset.fill).toBe(pie);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Browser pass 2 CMP2-05: LLM Tuner judge scores are not counted either.
+// ---------------------------------------------------------------------------
+
+describe("DashboardPage — judge cards (CMP2-05)", () => {
+  const TUNER_CP = "5f0c2a8e-0d7e-4e43-9a51-6f1f7c0b9d11";
+  const quality = (id: string, name: string, judge: number) => ({
+    chat_provider_id: id,
+    chat_provider_name: name,
+    thumb_up: 0,
+    thumb_down: 0,
+    thumb_score: 0,
+    best_picks: 0,
+    pick_rate: 0,
+    judge_avg_score: judge,
+    combined_score: 0.5,
+  });
+  const judgeScore = (cpId: string, score: number) => ({
+    id: `j-${cpId}`,
+    execution_id: `exec-${cpId}`,
+    session_id: "sess-1",
+    chat_provider_id: cpId,
+    judge_provider_id: "judge",
+    dimensions: { relevance: score, correctness: score },
+    overall_score: score,
+    reasoning: "",
+    created_at: "2026-11-04T10:00:00Z",
+  });
+
+  beforeEach(() => {
+    mockUseSWR.mockReset();
+  });
+  afterEach(() => {
+    mockUseSWR.mockReset();
+  });
+
+  // Keyed by SWR key, since the judge chart re-renders the page.
+  function renderWithJudges(summary: object, detail: object, chatProviders: object[]) {
+    mockUseSWR.mockImplementation(((key: string | null) => {
+      const data =
+        key === "sessions"
+          ? makeSessions()
+          : key === CHAT_PROVIDERS_SWR_KEY
+            ? chatProviders
+            : key?.startsWith("eval-summary-")
+              ? summary
+              : key?.startsWith("eval-detail-")
+                ? detail
+                : undefined;
+      return { data, isLoading: false };
+    }) as unknown as typeof useSWR);
+    return render(<DashboardPage />);
+  }
+
+  test("an LLM Tuner-only session shows no judge cards and no raw ids", () => {
+    // The Tuner's temporary Chat Provider is gone, so the server names it by its id.
+    renderWithJudges(
+      {
+        session_id: "sess-1",
+        by_chat_provider: { [TUNER_CP]: quality(TUNER_CP, TUNER_CP, 4) },
+        recommendation: TUNER_CP,
+        recommendation_reason: "Best quality: judge score 4/5",
+      },
+      { thumb_ratings: [], best_picks: [], judge_scores: [judgeScore(TUNER_CP, 4)], judge_pairwise: [] },
+      [{ id: "cp-chat", name: "Qwen Direct" }],
+    );
+    expect(screen.queryByText(/Judge Dimensions/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Judge Quality Scores")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Recommendation/)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(TUNER_CP);
+  });
+
+  test("Chat runs keep their judge cards, and the recommendation names the provider", () => {
+    renderWithJudges(
+      {
+        session_id: "sess-1",
+        by_chat_provider: {
+          "cp-chat": quality("cp-chat", "Qwen Direct", 4.5),
+          [TUNER_CP]: quality(TUNER_CP, "[compare] Qwen · RLM", 3),
+        },
+        recommendation: "cp-chat",
+        recommendation_reason: "Best quality: judge score 4.5/5",
+      },
+      {
+        thumb_ratings: [],
+        best_picks: [],
+        judge_scores: [judgeScore("cp-chat", 4.5), judgeScore(TUNER_CP, 3)],
+        judge_pairwise: [],
+      },
+      [{ id: "cp-chat", name: "Qwen Direct" }],
+    );
+    expect(screen.getByText(/Judge Dimensions/)).toBeInTheDocument();
+    expect(screen.getByTestId("bar-series-Qwen Direct")).toBeInTheDocument();
+    expect(screen.queryByTestId("bar-series-[compare] Qwen · RLM")).not.toBeInTheDocument();
+    expect(screen.getByText("Recommendation: Qwen Direct")).toBeInTheDocument();
+    expect(screen.queryByText(/\[compare\]/)).not.toBeInTheDocument();
   });
 });

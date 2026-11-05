@@ -13,6 +13,7 @@ from rlmstudio.application.sandbox_vars import (
     MODE_RLM_OFFICIAL,
     RESULT_KEY_COST_KNOWN,
     RESULT_KEY_ENGINE_VERSION,
+    RESULT_KEY_TOKENS_KNOWN,
 )
 from rlmstudio.application.use_cases.run_matrix_comparison import (
     MatrixSlotDTO,
@@ -218,3 +219,60 @@ class TestSerialModes:
         RunMatrixComparisonUseCase().execute("doc", "q", self._slots())
 
         assert _OverlapProbe.peak > 1
+
+
+def test_default_slot_label_names_the_official_engine_not_its_id() -> None:
+    """M22: a server-built label never shows the raw ``rlm_official`` id."""
+    slots = [
+        MatrixSlotDTO(
+            slot_id="o",
+            mode=MODE_RLM_OFFICIAL,
+            llm=_FakeLLM(),
+            provider="openai",
+            model="gpt-4o",
+            engine=FakeRLMEngine(),
+        )
+    ]
+    out = RunMatrixComparisonUseCase().execute("doc", "q", slots)
+
+    assert out.slots[0].label == "openai/gpt-4o · Official RLM (rlms)"
+    assert out.slots[0].mode == MODE_RLM_OFFICIAL
+
+
+class TestUnknownTokenRanking:
+    """Review P1: an unreported token count stored as 0 ranked ahead of every
+    measured run under "tokens"."""
+
+    def test_an_unknown_token_count_ranks_after_measured_runs(self) -> None:
+        unknown = MatrixSlotResultDTO(
+            slot_id="unknown",
+            label="unknown",
+            mode=MODE_RLM_OFFICIAL,
+            provider="p",
+            model="m",
+            result=RunResultDTO(
+                answer="a",
+                mode_used=MODE_RLM_OFFICIAL,
+                success=True,
+                metadata={RESULT_KEY_TOKENS_KNOWN: False},
+            ),
+        )
+        measured = MatrixSlotResultDTO(
+            slot_id="measured",
+            label="measured",
+            mode=MODE_RLM_OFFICIAL,
+            provider="p",
+            model="m",
+            result=RunResultDTO(
+                answer="a",
+                mode_used=MODE_RLM_OFFICIAL,
+                success=True,
+                input_tokens=900,
+                output_tokens=100,
+            ),
+        )
+        slots = [unknown, measured]
+
+        ranking = RunMatrixComparisonUseCase._rank(slots, "tokens")
+
+        assert [slots[i].slot_id for i in ranking] == ["measured", "unknown"]

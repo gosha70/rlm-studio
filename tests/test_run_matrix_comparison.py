@@ -472,3 +472,40 @@ class TestConfigIsolation:
         assert base.extra == {"k": "v"}
         assert a.mode == "direct"
         assert b.mode == "rlm"
+
+
+class TestSlotMaxTime:
+    """M3: a Studio slot is held to its max time like an official slot."""
+
+    def test_slow_direct_slot_times_out_at_its_max_time(self) -> None:
+        from rlmstudio.application.sandbox_vars import RESULT_KEY_COST_KNOWN
+        from rlmstudio.application.services.outcome_classifier import (
+            OutcomeCategory,
+            classify_execution_outcome,
+        )
+
+        slow = MatrixSlotDTO(
+            slot_id="slow",
+            mode="direct",
+            llm=FakeLLM("late answer", latency=1.0),
+            config=RunConfigDTO(mode="direct", max_time_seconds=0.1),
+        )
+        fast = MatrixSlotDTO(
+            slot_id="fast",
+            mode="direct",
+            llm=FakeLLM("quick answer"),
+            config=RunConfigDTO(mode="direct", max_time_seconds=0.1),
+        )
+        out = RunMatrixComparisonUseCase().execute("doc", "q", [slow, fast])
+
+        timed_out = out.get_slot("slow")
+        assert timed_out is not None
+        result = timed_out.result
+        assert result.success is False
+        assert result.elapsed_time < 0.9
+        assert result.answer.startswith("⚠️ **Direct run timed out**")
+        assert result.metadata[RESULT_KEY_COST_KNOWN] is False
+        category = classify_execution_outcome(result.success, result.error, result.answer)
+        assert category.category is OutcomeCategory.TIMEOUT
+        # The slot that finished in time is unaffected and ranks first.
+        assert out.slots[out.ranking[0]].slot_id == "fast"
