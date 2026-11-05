@@ -211,6 +211,8 @@ RESULT_KEY_ENGINE_VERSION = "engine_version"
 """``RunResultDTO.metadata`` key: version of the third-party engine that ran."""
 RESULT_KEY_COST_KNOWN = "cost_known"
 """``RunResultDTO.metadata`` key: ``False`` when no price was reported or derivable, so ``total_cost`` is 0 by ignorance, not by measurement."""
+RESULT_KEY_TOKENS_KNOWN = "tokens_known"
+"""``RunResultDTO.metadata`` key: ``False`` when the engine reported no token count, so the token fields are 0 by ignorance, not by measurement."""
 RESULT_KEY_ENGINE_NOTES = "engine_notes"
 """``RunResultDTO.metadata`` key: user-facing caveats about the engine run (list of strings)."""
 

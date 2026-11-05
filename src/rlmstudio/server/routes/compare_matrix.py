@@ -27,7 +27,6 @@ from rlmstudio.application.sandbox_vars import (
     MODE_RLM,
     MODE_RLM_OFFICIAL,
     MODES_RLM_INTERNAL,
-    RESULT_KEY_COST_KNOWN,
     RLM_DEFAULT_MAX_STEPS,
     RLM_DEFAULT_NUDGE_AT_FRACTION,
     RLM_DEFAULT_REPEAT_LIMIT,
@@ -204,6 +203,9 @@ class CompareMatrixSlotResponse(BaseModel):
     # False when the run's price is unknown (an unpriced model): its $0 is
     # not free, and the page must rank it last on cost like the server does.
     cost_known: bool = True
+    # False when the run reported no token count (an official-engine
+    # timeout or cost breach): its token fields are 0 by ignorance.
+    tokens_known: bool = True
 
 
 class CompareMatrixResponse(BaseModel):
@@ -508,6 +510,7 @@ async def _compare_matrix_v2(
                 "cost_usd": slot_result.result.total_cost,
                 "elapsed_seconds": slot_result.result.elapsed_time,
                 "steps": slot_result.result.steps,
+                **slot_result.result.usage_flags(),
             },
             "timestamp": finish.isoformat(),
             "comparison_group_id": result.comparison_group_id,
@@ -536,7 +539,8 @@ async def _compare_matrix_v2(
             total_cost=s.result.total_cost,
             elapsed_seconds=s.result.elapsed_time,
             steps=s.result.steps,
-            cost_known=s.result.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False,
+            cost_known=s.result.cost_known,
+            tokens_known=s.result.tokens_known,
             **_slot_perf_aggregates(s.result.trace),
         )
         for s in result.slots
@@ -783,6 +787,7 @@ async def compare_matrix(
                 "cost_usd": slot_result.result.total_cost,
                 "elapsed_seconds": slot_result.result.elapsed_time,
                 "steps": slot_result.result.steps,
+                **slot_result.result.usage_flags(),
             },
             "timestamp": finish.isoformat(),
             "comparison_group_id": result.comparison_group_id,
@@ -812,7 +817,8 @@ async def compare_matrix(
             total_cost=s.result.total_cost,
             elapsed_seconds=s.result.elapsed_time,
             steps=s.result.steps,
-            cost_known=s.result.metadata.get(RESULT_KEY_COST_KNOWN, True) is not False,
+            cost_known=s.result.cost_known,
+            tokens_known=s.result.tokens_known,
             **_slot_perf_aggregates(s.result.trace),
         )
         for s in result.slots

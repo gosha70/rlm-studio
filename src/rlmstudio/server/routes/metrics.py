@@ -26,7 +26,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from rlmstudio.application.sandbox_vars import EPHEMERAL_CP_PREFIX
+from rlmstudio.application.sandbox_vars import (
+    EPHEMERAL_CP_PREFIX,
+    RESULT_KEY_COST_KNOWN,
+    RESULT_KEY_TOKENS_KNOWN,
+)
 from rlmstudio.application.services.outcome_classifier import (
     ExecutionOutcome,
     OutcomeCategory,
@@ -89,6 +93,10 @@ class _RunPoint:
     # at write time. Fallback to the no-trace classifier path when
     # None — see ``_aggregate_failures``.
     outcome_category: str | None = None
+    # False when the run reported no cost / no token count, so its 0 is
+    # not a measurement (an official-engine timeout).
+    cost_known: bool = True
+    tokens_known: bool = True
 
 
 @router.get("/api/metrics/failures/{session_id}")
@@ -215,6 +223,8 @@ def _point_from_telemetry(run: Any) -> _RunPoint:
         error=run.error,
         answer=run.answer,
         outcome_category=getattr(run, "outcome_category", None),
+        cost_known=getattr(run, "cost_known", True),
+        tokens_known=getattr(run, "tokens_known", True),
     )
 
 
@@ -251,6 +261,8 @@ def _point_from_message(
         # Legacy messages pre-date the outcome_category column; the
         # dashboard re-derives via the no-trace classifier fallback.
         outcome_category=None,
+        cost_known=bool(msg_metrics.get(RESULT_KEY_COST_KNOWN, True)),
+        tokens_known=bool(msg_metrics.get(RESULT_KEY_TOKENS_KNOWN, True)),
     )
 
 
@@ -264,6 +276,8 @@ def _build_metrics_response(
     total_latency = 0.0
     query_count = 0
     usable_count = 0
+    cost_unknown_runs = 0
+    tokens_unknown_runs = 0
 
     by_mode: dict[str, _GroupAcc] = {}
     by_provider: dict[str, _GroupAcc] = {}
@@ -285,6 +299,8 @@ def _build_metrics_response(
             total_tokens += point.tokens
             total_cost += point.cost
             total_latency += point.latency
+            cost_unknown_runs += not point.cost_known
+            tokens_unknown_runs += not point.tokens_known
 
             _acc(by_mode, point.mode, point.tokens, point.cost, point.latency)
             _acc(by_provider, point.provider, point.tokens, point.cost, point.latency)
@@ -307,6 +323,8 @@ def _build_metrics_response(
                 provider=point.provider,
                 chat_provider_name=point.chat_provider_name,
                 execution_id=point.execution_id,
+                cost_known=point.cost_known,
+                tokens_known=point.tokens_known,
             )
         )
 
@@ -338,6 +356,8 @@ def _build_metrics_response(
             total_cost_usd=round(total_cost, 4),
             avg_latency_seconds=round(avg_latency, 2),
             avg_token_savings_percent=savings,
+            cost_unknown_runs=cost_unknown_runs,
+            tokens_unknown_runs=tokens_unknown_runs,
         ),
         by_mode=mode_summaries,
         by_provider=provider_summaries,

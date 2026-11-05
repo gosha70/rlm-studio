@@ -69,7 +69,10 @@ class TestSchemaV4:
     def test_fresh_database_has_v4_columns_and_table(self) -> None:
         store = TelemetryStore(":memory:")
         conn = store._connect()
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 4
+        assert (
+            int(conn.execute("PRAGMA user_version").fetchone()[0])
+            == store_module._CURRENT_SCHEMA_VERSION
+        )
         assert {"profile_id", "content_sha256"} <= _columns(conn, "runs")
         assert {
             "id",
@@ -96,7 +99,10 @@ class TestSchemaV4:
         conn.close()
 
         store = TelemetryStore(db)
-        assert int(store._connect().execute("PRAGMA user_version").fetchone()[0]) == 4
+        assert (
+            int(store._connect().execute("PRAGMA user_version").fetchone()[0])
+            == store_module._CURRENT_SCHEMA_VERSION
+        )
         legacy = store.get_run("legacy")
         assert legacy is not None
         assert legacy.profile_id is None

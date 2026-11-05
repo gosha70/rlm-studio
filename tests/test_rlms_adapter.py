@@ -59,6 +59,7 @@ from rlmstudio.infrastructure.engines.rlms_adapter import (
     NOTE_LOCAL_ENV,
     NOTE_NO_STREAMING,
     NOTE_NO_SUBCALL_FLOOR,
+    NOTE_TIMEOUT_USAGE_UNKNOWN,
     UNAVAILABLE_REASON,
     RlmsEngineAdapter,
     engine_max_depth,
@@ -979,6 +980,7 @@ class TestInterruptedRunKeepsWhatWasSpent:
 
         assert not result.success
         assert result.total_tokens == 50_000
+        assert result.tokens_known is True
         assert result.steps == 2  # the two iterations the logger captured
         assert len(result.trace) > 0
         assert "3 sections so far" in result.answer
@@ -1097,11 +1099,44 @@ class TestInterruptedRunKeepsWhatWasSpent:
 
         assert result.total_cost == 0.0
         assert result.metadata[RESULT_KEY_COST_KNOWN] is False
-        assert NOTE_COST_UNKNOWN in result.metadata[RESULT_KEY_ENGINE_NOTES]
         assert result.steps == 2
         assert classify_execution_outcome(result.success, result.error, result.answer).category is (
             OutcomeCategory.TIMEOUT
         )
+
+    def test_a_timeout_says_its_usage_is_not_available(self, fake_rlm: _FakeRlm) -> None:
+        """SC3-02: the timed-out run read "0 tokens · $0.0000" with nothing to
+        say those were not its real figures.  The engine's timeout carries no
+        usage, and neither its logger nor the instance keeps the root calls'
+        usage, so the answer and the notes have to say it is unknown."""
+        fake_rlm.raise_on_completion = _raise(
+            "TimeoutExceededError", "90.0s of 90.0s", elapsed=90.0, partial_answer="so far"
+        )
+
+        result = _adapter(cost_fn=lambda _in, _out: 0.0).run("d", "q", _CONFIG)
+
+        assert (result.cost_known, result.tokens_known) == (False, False)
+        warning, _, partial = result.answer.partition("**Partial answer**")
+        assert NOTE_TIMEOUT_USAGE_UNKNOWN in warning
+        assert "so far" in partial
+        notes = result.metadata[RESULT_KEY_ENGINE_NOTES]
+        assert NOTE_TIMEOUT_USAGE_UNKNOWN in notes
+        # Neither "no price is known for this model" nor "the cost, where known"
+        # describes a run whose usage was never reported.
+        assert NOTE_COST_UNKNOWN not in notes
+        assert NOTE_INTERRUPTED_TOKENS_UNKNOWN not in notes
+
+    def test_a_budget_breach_does_not_claim_its_usage_is_unknown(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = _raise(
+            "BudgetExceededError", "spent $0.310000 of $0.250000", spent=0.31
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert NOTE_TIMEOUT_USAGE_UNKNOWN not in result.answer
+        assert NOTE_TIMEOUT_USAGE_UNKNOWN not in result.metadata[RESULT_KEY_ENGINE_NOTES]
+        # The money is known; the token count is not.
+        assert (result.cost_known, result.tokens_known) == (True, False)
 
     def test_a_breach_with_no_token_count_says_so_instead_of_claiming_a_total(
         self, fake_rlm: _FakeRlm

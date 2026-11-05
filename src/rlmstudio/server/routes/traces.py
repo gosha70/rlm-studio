@@ -7,6 +7,8 @@ from pydantic import BaseModel
 
 from rlmstudio.application.sandbox_vars import (
     MODES_RLM_INTERNAL,
+    RESULT_KEY_COST_KNOWN,
+    RESULT_KEY_TOKENS_KNOWN,
     TRACE_KEY_COST,
     TRACE_KEY_COST_KNOWN,
 )
@@ -36,6 +38,9 @@ class ExecutionSummary(BaseModel):
     total_cost: float = 0.0
     chat_provider_id: str | None = None
     chat_provider_name: str | None = None
+    # False when the run reported no cost / no token count: the 0 is unknown.
+    cost_known: bool = True
+    tokens_known: bool = True
 
 
 @router.get("/api/executions")
@@ -75,6 +80,8 @@ async def list_executions(
                     total_cost=rd.get("total_cost", 0.0),
                     chat_provider_id=e.chat_provider_id,
                     chat_provider_name=e.chat_provider_name,
+                    cost_known=rd.get(RESULT_KEY_COST_KNOWN, True),
+                    tokens_known=rd.get(RESULT_KEY_TOKENS_KNOWN, True),
                 ),
             )
         )
@@ -105,6 +112,8 @@ async def list_executions(
                     total_cost=r.total_cost,
                     chat_provider_id=r.chat_provider_id,
                     chat_provider_name=r.chat_provider_name,
+                    cost_known=r.cost_known,
+                    tokens_known=r.tokens_known,
                 ),
             )
         )
@@ -286,6 +295,8 @@ def _trace_from_execution_record(execution: ExecutionRecord, state: AppState) ->
             input_tokens=result_data.get("input_tokens", 0),
             output_tokens=result_data.get("output_tokens", 0),
             total_cost=result_data.get("total_cost", 0.0),
+            cost_known=result_data.get(RESULT_KEY_COST_KNOWN, True),
+            tokens_known=result_data.get(RESULT_KEY_TOKENS_KNOWN, True),
         ),
         budget=TraceBudget(
             # The run's own step count (what its answer and footer report),
@@ -370,6 +381,8 @@ def _trace_from_telemetry(
             input_tokens=detail.input_tokens,
             output_tokens=detail.output_tokens,
             total_cost=detail.total_cost,
+            cost_known=detail.cost_known,
+            tokens_known=detail.tokens_known,
         ),
         budget=TraceBudget(
             steps_used=detail.steps_count,

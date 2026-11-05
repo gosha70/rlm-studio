@@ -128,6 +128,7 @@ def budget_stop_outcome(
     config: BudgetConfig,
     partial: str = "",
     exc: BaseException | None = None,
+    usage_note: str = "",
 ) -> tuple[str, str]:
     """Return ``(answer, error)`` for a run stopped by budget *limit*.
 
@@ -138,7 +139,8 @@ def budget_stop_outcome(
     stopped rather than as a success.  *limit* is one of the ``LIMIT_*``
     names, or ``None`` for the no-progress circuit breaker (*exc* says why).
     Shared with the official engine's adapter so both engines word a stop
-    the same way.
+    the same way.  *usage_note*, when given, follows the warning to say
+    why the run's usage figures are missing.
     """
     steps = state.steps
     if limit == LIMIT_TOKENS:
@@ -185,6 +187,8 @@ def budget_stop_outcome(
             "RLM action format more reliably."
         )
         error = f"Budget exceeded: stall limit reached ({exc})"
+    if usage_note:
+        warning = f"{warning}\n\n{usage_note}"
     if partial:
         return f"{warning}\n\n---\n\n**Partial answer**\n\n{partial}", error
     return warning, error

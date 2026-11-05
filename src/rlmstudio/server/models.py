@@ -315,6 +315,10 @@ class MessageMetrics(BaseModel):
     cost_usd: float = 0.0
     elapsed_seconds: float = 0.0
     steps: int = 0
+    # False when the run reported no cost / no token count (an official-engine
+    # timeout): the 0 shown is not a measurement, so show "unknown" instead.
+    cost_known: bool = True
+    tokens_known: bool = True
 
 
 class SessionMessage(BaseModel):
@@ -380,6 +384,10 @@ class MetricsSummary(BaseModel):
     total_cost_usd: float = 0.0
     avg_latency_seconds: float = 0.0
     avg_token_savings_percent: float | None = None
+    # Runs counted in the totals above whose cost / token count was never
+    # reported, so the totals are lower bounds when these are non-zero.
+    cost_unknown_runs: int = 0
+    tokens_unknown_runs: int = 0
 
 
 class TimelineEntry(BaseModel):
@@ -391,6 +399,10 @@ class TimelineEntry(BaseModel):
     provider: str = ""
     chat_provider_name: str | None = None
     execution_id: str | None = None
+    # False when the run reported no cost / no token count (an official-engine
+    # timeout): the 0 shown is not a measurement, so show "unknown" instead.
+    cost_known: bool = True
+    tokens_known: bool = True
 
 
 class MetricsResponse(BaseModel):
@@ -484,6 +496,10 @@ class TraceResult(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_cost: float = 0.0
+    # False when the run reported no cost / no token count (an official-engine
+    # timeout): the 0 shown is not a measurement, so show "unknown" instead.
+    cost_known: bool = True
+    tokens_known: bool = True
 
 
 class TraceResponse(BaseModel):

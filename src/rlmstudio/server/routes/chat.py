@@ -633,6 +633,8 @@ def _record_telemetry(
         outcome_category=outcome.category.value,
         profile_id=profile_id,
         content_sha256=content_sha256(content) if content is not None else None,
+        cost_known=result.cost_known,
+        tokens_known=result.tokens_known,
     )
     total = len(result.trace)
     for i, step_data in enumerate(result.trace):
@@ -839,6 +841,7 @@ async def _run_execution(
             "elapsed_time": result.elapsed_time,
             "steps_count": result.steps,
             "steps_limit": run_config.max_steps,
+            **result.usage_flags(),
         }
         execution.steps = result.trace
 
@@ -898,6 +901,7 @@ async def _run_execution(
                         "cost_usd": res.total_cost,
                         "elapsed_seconds": res.elapsed_time,
                         "steps": res.steps,
+                        **res.usage_flags(),
                     },
                     "timestamp": now.isoformat(),
                 }
@@ -1279,6 +1283,7 @@ async def websocket_chat(
                             "elapsed_time": result.elapsed_time,
                             "steps_count": result.steps,
                             "steps_limit": cfg.max_steps,
+                            **result.usage_flags(),
                         }
                         exec_rec.steps = result.trace
 
@@ -1325,6 +1330,7 @@ async def websocket_chat(
                                     "cost_usd": res.total_cost,
                                     "elapsed_seconds": res.elapsed_time,
                                     "steps": res.steps,
+                                    **res.usage_flags(),
                                 },
                                 "timestamp": finish.isoformat(),
                             }
@@ -1363,6 +1369,7 @@ async def websocket_chat(
                                                 "cost_usd": res.total_cost,
                                                 "elapsed_seconds": res.elapsed_time,
                                                 "steps": res.steps,
+                                                **res.usage_flags(),
                                             },
                                         },
                                     }

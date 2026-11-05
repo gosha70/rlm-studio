@@ -50,6 +50,7 @@ from rlmstudio.application.sandbox_vars import (
     RESULT_KEY_COST_KNOWN,
     RESULT_KEY_ENGINE_NOTES,
     RESULT_KEY_ENGINE_VERSION,
+    RESULT_KEY_TOKENS_KNOWN,
     TRACE_KEY_CODE,
     TRACE_KEY_CONTENT,
     TRACE_KEY_ELAPSED_SECONDS,
@@ -177,6 +178,11 @@ NOTE_INTERRUPTED_TOKENS_UNKNOWN = (
     "The run was stopped by a cap that reported no token count, so this run's tokens "
     "are shown as 0; the cost, where known, is the figure the cap was checked against."
 )
+NOTE_TIMEOUT_USAGE_UNKNOWN = (
+    "Usage isn't available for this run: the official engine reports no token or "
+    "cost figures when it stops on its own time limit, so its tokens and cost are "
+    "unknown, not zero."
+)
 BUSY_REASON = (
     "Another in-process RLM cell — an official run or a Studio sandbox — is still "
     "holding the process's shared streams and working directory, which only one such "
@@ -254,9 +260,11 @@ def engine_timeout(max_time_seconds: float | None) -> float | None:
 
     Both clocks measure the same budget, but the use case's guard starts first,
     so an equal deadline means the guard always wins — and the guard can only
-    abandon the run, reporting no tokens, no cost and no trace.  Stopping the
-    engine a little earlier instead lets it raise its own timeout, which carries
-    the usage and the trajectory to report.  The guard remains the backstop for
+    abandon the run, reporting no trace at all.  Stopping the engine a little
+    earlier instead lets it raise its own timeout, after which the trajectory
+    its logger captured can still be reported.  The usage cannot: the engine's
+    timeout carries no token or cost figures, so the run is reported with its
+    cost unknown (:data:`NOTE_TIMEOUT_USAGE_UNKNOWN`).  The guard remains the backstop for
     the case the engine cannot handle: a REPL execution stuck inside one
     iteration, which it never gets to check between.
     """
@@ -696,6 +704,7 @@ class RlmsEngineAdapter:
         *,
         cost_known: bool,
         interrupted_tokens: int | None = None,
+        usage_unknown: bool = False,
     ) -> list[str]:
         """Notes for one result.
 
@@ -703,13 +712,18 @@ class RlmsEngineAdapter:
         count when it had one, 0 when the breach reported none, and ``None``
         for a run that was not interrupted.  The two cases get different notes
         because claiming a combined total was recorded would be false when no
-        count was ever reported.
+        count was ever reported.  ``usage_unknown`` marks a stop that reported
+        neither tokens nor cost (an engine timeout): one note says so, in place
+        of the notes that blame a missing price or a missing token count.
         """
         notes = [NOTE_NO_STREAMING, NOTE_NO_STEP_TOKENS]
         if environment == _ENV_LOCAL:
             notes.append(NOTE_LOCAL_ENV)
         if config.max_recursion_depth <= 0:
             notes.append(NOTE_NO_SUBCALL_FLOOR)
+        if usage_unknown:
+            notes.append(NOTE_TIMEOUT_USAGE_UNKNOWN)
+            return notes
         if not cost_known:
             notes.append(NOTE_COST_UNKNOWN)
         if interrupted_tokens is not None:
@@ -810,7 +824,7 @@ class RlmsEngineAdapter:
         reports money but no tokens, so the token count stays 0 under
         :data:`NOTE_INTERRUPTED_TOKENS_UNKNOWN`; a timeout reports neither, so
         the cost is unknown rather than $0 — a run does not become free by
-        being cut short.
+        being cut short — and the answer says so (:data:`NOTE_TIMEOUT_USAGE_UNKNOWN`).
         """
         captured = trajectory.get_trajectory() if hasattr(trajectory, "get_trajectory") else None
         partial = str(getattr(exc, "partial_answer", None) or "")
@@ -821,6 +835,7 @@ class RlmsEngineAdapter:
         )
         tokens_used = int(getattr(exc, "tokens_used", 0) or 0)
         spent: float | None = getattr(exc, "spent", None)
+        usage_unknown = limit == LIMIT_TIME and spent is None and not tokens_used
         if spent is not None:
             total_cost, cost_known = float(spent), True
         elif tokens_used:
@@ -848,6 +863,7 @@ class RlmsEngineAdapter:
                 max_time_seconds=config.max_time_seconds,
             ),
             "" if _CODE_FENCE in partial else partial,
+            usage_note=NOTE_TIMEOUT_USAGE_UNKNOWN if usage_unknown else "",
         )
         return RunResultDTO(
             answer=answer,
@@ -862,8 +878,15 @@ class RlmsEngineAdapter:
             metadata={
                 RESULT_KEY_ENGINE_VERSION: self.version,
                 RESULT_KEY_COST_KNOWN: cost_known,
+                # A breach that reported no token count (a timeout, a cost
+                # breach) records 0 tokens; this says the 0 is not a count.
+                RESULT_KEY_TOKENS_KNOWN: bool(tokens_used),
                 RESULT_KEY_ENGINE_NOTES: self._notes(
-                    environment, config, cost_known=cost_known, interrupted_tokens=tokens_used
+                    environment,
+                    config,
+                    cost_known=cost_known,
+                    interrupted_tokens=tokens_used,
+                    usage_unknown=usage_unknown,
                 ),
             },
         )
