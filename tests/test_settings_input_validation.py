@@ -64,6 +64,8 @@ def client() -> TestClient:
         ("max_steps", 0),
         ("max_time_seconds", -3),
         ("max_recursion_depth", -1),
+        # Review P1: the profile form now edits this field; the API agrees on 0..100.
+        ("max_recursion_depth", 101),
         ("repeat_limit", 0),
         ("nudge_at_fraction", 1.5),
     ],

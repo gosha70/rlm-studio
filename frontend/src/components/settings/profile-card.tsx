@@ -42,10 +42,13 @@ import {
 import { StrategySelectItems } from "./strategy-select-items";
 import {
   BUDGET_MAX_COST_USD,
+  BUDGET_MAX_RECURSION_DEPTH,
   BUDGET_MAX_REPEAT_LIMIT,
   BUDGET_MAX_STEPS,
   BUDGET_MAX_TIME_SECONDS,
+  BUDGET_MAX_TOKENS,
   BUDGET_MIN_COST_USD,
+  BUDGET_MIN_TOKENS,
   RUNTIME_MAX_TIMEOUT_SECONDS,
   decimalProblem,
   wholeNumberProblem,
@@ -190,11 +193,6 @@ export function ProfileCard({
   const MIN_EXECUTION_TIME_SECONDS = 10;
 
   const handleSaveEdit = async () => {
-    // Strict parser that rejects partial matches like "5s", "1.5foo", "1e3".
-    const strictInt = (s: string): number => {
-      const trimmed = s.trim();
-      return /^-?\d+$/.test(trimmed) ? parseInt(trimmed, 10) : NaN;
-    };
 
     // Validate every edited field before saving; the first problem is shown.
     const problem =
@@ -221,6 +219,20 @@ export function ProfileCard({
         editData.max_time_seconds,
         MIN_EXECUTION_TIME_SECONDS,
         BUDGET_MAX_TIME_SECONDS,
+      ) ??
+      // Editable since an older profile can hold a value the API now refuses;
+      // a hidden field would block every save with no way to fix it.
+      wholeNumberProblem(
+        "Max Tokens (budget)",
+        editData.max_tokens,
+        BUDGET_MIN_TOKENS,
+        BUDGET_MAX_TOKENS,
+      ) ??
+      wholeNumberProblem(
+        "Max Recursion Depth",
+        editData.max_recursion_depth,
+        0,
+        BUDGET_MAX_RECURSION_DEPTH,
       );
     if (problem) {
       setMessage(problem);
@@ -237,17 +249,8 @@ export function ProfileCard({
     const nudgeFraction = Number(editData.nudge_at_fraction.trim());
     const maxTime = Number(editData.max_time_seconds.trim());
 
-    // Not editable here; carried over from the stored profile.
-    const maxTokensBudget = strictInt(editData.max_tokens);
-    const maxRecursion = strictInt(editData.max_recursion_depth);
-    if (isNaN(maxTokensBudget) || maxTokensBudget < 1) {
-      setMessage("Max Tokens (budget) must be at least 1");
-      return;
-    }
-    if (isNaN(maxRecursion) || maxRecursion < 0) {
-      setMessage("Max Recursion Depth must be 0 or greater");
-      return;
-    }
+    const maxTokensBudget = Number(editData.max_tokens.trim());
+    const maxRecursion = Number(editData.max_recursion_depth.trim());
 
     // Keep every stored per-mode prompt; only the RLM entry is editable here.
     // An empty RLM field removes the key so the profile follows its prompt group.
@@ -530,6 +533,28 @@ export function ProfileCard({
                   className="h-8 text-xs"
                   value={editData.max_time_seconds}
                   onChange={(e) => updateEditData({ max_time_seconds: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <FieldLabel htmlFor={`edit-max-tokens-budget-${profile.id}`} className="text-xs" tooltip="Total tokens one query may use across all steps. The run stops once it is reached.">Max Tokens (budget)</FieldLabel>
+                <Input
+                  id={`edit-max-tokens-budget-${profile.id}`}
+                  type="text"
+                  inputMode="numeric"
+                  className="h-8 text-xs"
+                  value={editData.max_tokens}
+                  onChange={(e) => updateEditData({ max_tokens: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1">
+                <FieldLabel htmlFor={`edit-max-recursion-${profile.id}`} className="text-xs" tooltip="How many levels of sub-RLM calls a run may nest. 0 allows none.">Max Recursion Depth</FieldLabel>
+                <Input
+                  id={`edit-max-recursion-${profile.id}`}
+                  type="text"
+                  inputMode="numeric"
+                  className="h-8 text-xs"
+                  value={editData.max_recursion_depth}
+                  onChange={(e) => updateEditData({ max_recursion_depth: e.target.value })}
                 />
               </div>
               <div className="space-y-1">

@@ -31,6 +31,8 @@ export const BUDGET_MAX_STEPS = 500;
 export const BUDGET_MAX_TIME_SECONDS = 86_400;
 /** Duplicate inspect actions RLM tolerates before it finalizes. */
 export const BUDGET_MAX_REPEAT_LIMIT = 20;
+/** Nested sub-RLM levels a profile may allow (matches the API bound). */
+export const BUDGET_MAX_RECURSION_DEPTH = 100;
 /** Token budget per query (Settings → Budget). */
 export const BUDGET_MIN_TOKENS = 1;
 export const BUDGET_MAX_TOKENS = 500_000;

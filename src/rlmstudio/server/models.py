@@ -49,6 +49,7 @@ BUDGET_MAX_STEPS_LIMIT = 500
 BUDGET_MAX_TOKENS_LIMIT = 500_000
 BUDGET_MAX_COST_USD_LIMIT = 100.0
 BUDGET_MAX_REPEAT_LIMIT = 20
+BUDGET_MAX_RECURSION_DEPTH = 100
 RAG_MAX_CHUNK_SIZE = 100_000
 RAG_MAX_TOP_K = 100
 NUDGE_AT_FRACTION_MIN = 0.1
@@ -770,7 +771,9 @@ class BudgetConfigInput(BudgetConfig):
         ge=BUDGET_MIN_TIME_SECONDS,
         le=BUDGET_MAX_TIME_SECONDS,
     )
-    max_recursion_depth: int = Field(default=RLM_DEFAULT_MAX_RECURSION_DEPTH, ge=0)
+    max_recursion_depth: int = Field(
+        default=RLM_DEFAULT_MAX_RECURSION_DEPTH, ge=0, le=BUDGET_MAX_RECURSION_DEPTH
+    )
     repeat_limit: int = Field(default=RLM_DEFAULT_REPEAT_LIMIT, ge=1, le=BUDGET_MAX_REPEAT_LIMIT)
     nudge_at_fraction: float = Field(
         default=RLM_DEFAULT_NUDGE_AT_FRACTION, ge=NUDGE_AT_FRACTION_MIN, le=NUDGE_AT_FRACTION_MAX

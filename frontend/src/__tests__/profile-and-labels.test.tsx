@@ -323,6 +323,36 @@ describe("ProfileCard — editing form", () => {
     expect(vi.mocked(updateProfile)).not.toHaveBeenCalled();
   });
 
+  test("a stored out-of-range budget can be seen, fixed and saved (review P1)", async () => {
+    // Older profiles may hold values the API now refuses; the form used to
+    // resend them from hidden fields, so every save failed with no way out.
+    const { updateProfile } = await import("@/lib/api");
+    vi.mocked(updateProfile).mockClear();
+    vi.mocked(updateProfile).mockResolvedValue(makeProfile());
+    const base = makeProfile();
+    render(
+      <ProfileCard
+        profile={makeProfile({ budget: { ...base.budget, max_tokens: 99_999_999_999_999, max_recursion_depth: -1 } })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(screen.getByRole("status")).toHaveTextContent("Max Tokens (budget) must be between 1 and 500,000.");
+    fireEvent.change(screen.getByLabelText("Max Tokens (budget)"), { target: { value: "50000" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(screen.getByRole("status")).toHaveTextContent("Max Recursion Depth must be between 0 and 100.");
+    fireEvent.change(screen.getByLabelText("Max Recursion Depth"), { target: { value: "3" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    });
+
+    expect(vi.mocked(updateProfile)).toHaveBeenCalledTimes(1);
+    const sent = vi.mocked(updateProfile).mock.calls[0][1] as { budget: { max_tokens: number; max_recursion_depth: number } };
+    expect(sent.budget.max_tokens).toBe(50000);
+    expect(sent.budget.max_recursion_depth).toBe(3);
+  });
+
   test("SC3-03: editing a field clears the last Save message", async () => {
     const { updateProfile } = await import("@/lib/api");
     vi.mocked(updateProfile).mockClear();
