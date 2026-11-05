@@ -280,4 +280,8 @@ class RunRAGUseCase:
             chunk = text[i : i + chunk_size]
             if chunk.strip():
                 chunks.append(chunk)
+            # Stop once a chunk reaches the end: the next one would lie wholly
+            # inside it (with an overlap) and only add a duplicate tail.
+            if i + chunk_size >= len(text):
+                break
         return chunks

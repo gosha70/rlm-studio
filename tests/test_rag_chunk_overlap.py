@@ -72,13 +72,24 @@ class _RecordingStorage:
 
 
 def test_chunks_share_the_overlap() -> None:
-    assert RunRAGUseCase._chunk_text("abcdefghij", 4, 2) == [
-        "abcd",
-        "cdef",
-        "efgh",
-        "ghij",
-        "ij",
-    ]
+    # Review P2: no trailing "ij" — it lay wholly inside "ghij".
+    assert RunRAGUseCase._chunk_text("abcdefghij", 4, 2) == ["abcd", "cdef", "efgh", "ghij"]
+
+
+@pytest.mark.parametrize(
+    ("text", "size", "overlap", "expected"),
+    [
+        ("abcd", 4, 2, ["abcd"]),  # exactly one chunk long: no duplicate tail
+        ("abcd", 4, 0, ["abcd"]),
+        ("abcdef", 4, 2, ["abcd", "cdef"]),  # last chunk ends exactly at EOF
+        ("abcdefg", 4, 2, ["abcd", "cdef", "efg"]),  # a short final chunk is kept
+        ("", 4, 2, []),
+    ],
+)
+def test_chunking_stops_at_the_end_of_the_text(
+    text: str, size: int, overlap: int, expected: list[str]
+) -> None:
+    assert RunRAGUseCase._chunk_text(text, size, overlap) == expected
 
 
 def test_no_overlap_keeps_back_to_back_chunks() -> None:
