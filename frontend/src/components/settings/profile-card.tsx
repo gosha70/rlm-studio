@@ -40,6 +40,16 @@ import {
   displayModeName,
 } from "@/lib/constants";
 import { StrategySelectItems } from "./strategy-select-items";
+import {
+  BUDGET_MAX_COST_USD,
+  BUDGET_MAX_REPEAT_LIMIT,
+  BUDGET_MAX_STEPS,
+  BUDGET_MAX_TIME_SECONDS,
+  BUDGET_MIN_COST_USD,
+  RUNTIME_MAX_TIMEOUT_SECONDS,
+  decimalProblem,
+  wholeNumberProblem,
+} from "./input-limits";
 import { RefinementPanel } from "./refinement-panel";
 
 interface ProfileCardProps {
@@ -171,73 +181,65 @@ export function ProfileCard({
   };
 
   const MIN_TIMEOUT_SECONDS = 5;
+  const MIN_EXECUTION_TIME_SECONDS = 10;
 
   const handleSaveEdit = async () => {
-    // Strict parsers that reject partial matches like "5s", "1.5foo", "1e3".
+    // Strict parser that rejects partial matches like "5s", "1.5foo", "1e3".
     const strictInt = (s: string): number => {
       const trimmed = s.trim();
       return /^-?\d+$/.test(trimmed) ? parseInt(trimmed, 10) : NaN;
     };
-    const strictFloat = (s: string): number => {
-      const trimmed = s.trim();
-      return /^-?\d+(\.\d+)?$/.test(trimmed) ? parseFloat(trimmed) : NaN;
-    };
 
-    // Parse all string fields back to numbers and validate before saving.
-    const temperature = strictFloat(editData.temperature);
-    const topP = strictFloat(editData.top_p);
-    const maxTokens = strictInt(editData.max_output_tokens);
-    const timeout = strictInt(editData.timeout_seconds);
-    const maxSteps = strictInt(editData.max_steps);
+    // Validate every edited field before saving; the first problem is shown.
+    const problem =
+      decimalProblem("Temperature", editData.temperature, 0, 2) ??
+      decimalProblem("Top P", editData.top_p, 0, 1) ??
+      wholeNumberProblem("Max Tokens", editData.max_output_tokens, 1, MAX_OUTPUT_TOKENS_LIMIT) ??
+      wholeNumberProblem(
+        "Timeout (s)",
+        editData.timeout_seconds,
+        MIN_TIMEOUT_SECONDS,
+        RUNTIME_MAX_TIMEOUT_SECONDS,
+      ) ??
+      wholeNumberProblem("Max Steps", editData.max_steps, 1, BUDGET_MAX_STEPS) ??
+      decimalProblem(
+        "Max Cost ($)",
+        editData.max_cost_usd,
+        BUDGET_MIN_COST_USD,
+        BUDGET_MAX_COST_USD,
+      ) ??
+      wholeNumberProblem("Repeat Limit", editData.repeat_limit, 1, BUDGET_MAX_REPEAT_LIMIT) ??
+      decimalProblem("Nudge at Fraction", editData.nudge_at_fraction, 0.1, 1) ??
+      wholeNumberProblem(
+        "Max Execution Time (s)",
+        editData.max_time_seconds,
+        MIN_EXECUTION_TIME_SECONDS,
+        BUDGET_MAX_TIME_SECONDS,
+      );
+    if (problem) {
+      setMessage(problem);
+      return;
+    }
+
+    const temperature = Number(editData.temperature.trim());
+    const topP = Number(editData.top_p.trim());
+    const maxTokens = Number(editData.max_output_tokens.trim());
+    const timeout = Number(editData.timeout_seconds.trim());
+    const maxSteps = Number(editData.max_steps.trim());
+    const maxCost = Number(editData.max_cost_usd.trim());
+    const repeatLimit = Number(editData.repeat_limit.trim());
+    const nudgeFraction = Number(editData.nudge_at_fraction.trim());
+    const maxTime = Number(editData.max_time_seconds.trim());
+
+    // Not editable here; carried over from the stored profile.
     const maxTokensBudget = strictInt(editData.max_tokens);
-    const maxCost = strictFloat(editData.max_cost_usd);
-    const maxTime = strictInt(editData.max_time_seconds);
     const maxRecursion = strictInt(editData.max_recursion_depth);
-    const repeatLimit = strictInt(editData.repeat_limit);
-    const nudgeFraction = strictFloat(editData.nudge_at_fraction);
-
-    if (isNaN(temperature) || temperature < 0 || temperature > 2) {
-      setMessage("Temperature must be between 0 and 2");
-      return;
-    }
-    if (isNaN(topP) || topP < 0 || topP > 1) {
-      setMessage("Top P must be between 0 and 1");
-      return;
-    }
-    if (isNaN(maxTokens) || maxTokens < 1 || maxTokens > MAX_OUTPUT_TOKENS_LIMIT) {
-      setMessage(`Max Tokens must be between 1 and ${MAX_OUTPUT_TOKENS_LIMIT.toLocaleString()}`);
-      return;
-    }
-    if (isNaN(timeout) || timeout < MIN_TIMEOUT_SECONDS) {
-      setMessage(`Timeout must be at least ${MIN_TIMEOUT_SECONDS} seconds`);
-      return;
-    }
-    if (isNaN(maxSteps) || maxSteps < 1) {
-      setMessage("Max Steps must be at least 1");
-      return;
-    }
-    if (isNaN(maxCost) || maxCost < 0) {
-      setMessage("Max Cost must be 0 or greater");
-      return;
-    }
     if (isNaN(maxTokensBudget) || maxTokensBudget < 1) {
       setMessage("Max Tokens (budget) must be at least 1");
       return;
     }
     if (isNaN(maxRecursion) || maxRecursion < 0) {
       setMessage("Max Recursion Depth must be 0 or greater");
-      return;
-    }
-    if (isNaN(repeatLimit) || repeatLimit < 1) {
-      setMessage("Repeat Limit must be at least 1");
-      return;
-    }
-    if (isNaN(nudgeFraction) || nudgeFraction < 0.1 || nudgeFraction > 1) {
-      setMessage("Nudge at Fraction must be between 0.1 and 1.0");
-      return;
-    }
-    if (isNaN(maxTime) || maxTime < 10) {
-      setMessage("Max Execution Time must be at least 10 seconds");
       return;
     }
 

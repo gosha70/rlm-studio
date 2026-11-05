@@ -305,6 +305,41 @@ describe("ProfileCard — editing form", () => {
     expect(vi.mocked(updateProfile)).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ["Timeout (s)", "99999999999999", "Timeout (s) must be between 5 and 3,600."],
+    ["Max Steps", "99999999999999", "Max Steps must be between 1 and 500."],
+    ["Max Execution Time (s)", "99999999999999", "Max Execution Time (s) must be between 10 and 86,400."],
+    ["Max Cost ($)", "99999999999999", "Max Cost ($) must be between 0 and 100."],
+    ["Repeat Limit", "99999999999999", "Repeat Limit must be between 1 and 20."],
+    ["Max Steps", "2.5", "Max Steps must be a whole number."],
+    ["Max Cost ($)", "", "Enter a value for Max Cost ($)."],
+  ])("refuses %s of %j with the actual problem", async (label, value, message) => {
+    const { updateProfile } = await import("@/lib/api");
+    vi.mocked(updateProfile).mockClear();
+    openEditor();
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(screen.getByRole("status")).toHaveTextContent(message);
+    expect(vi.mocked(updateProfile)).not.toHaveBeenCalled();
+  });
+
+  test("saves values inside the bounds", async () => {
+    const { updateProfile } = await import("@/lib/api");
+    vi.mocked(updateProfile).mockClear();
+    openEditor();
+    fireEvent.change(screen.getByLabelText("Max Steps"), { target: { value: "500" } });
+    fireEvent.change(screen.getByLabelText("Max Cost ($)"), { target: { value: "100" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    });
+    expect(vi.mocked(updateProfile)).toHaveBeenCalledWith(
+      "test-id-1",
+      expect.objectContaining({
+        budget: expect.objectContaining({ max_steps: 500, max_cost_usd: 100 }),
+      }),
+    );
+  });
+
   test("Cancel closes the edit form", () => {
     openEditor();
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));

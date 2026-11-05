@@ -202,9 +202,13 @@ describe("BudgetConfig", () => {
   });
 
   test.each([
-    ["Max Tokens", "-5", /Max Tokens must be a whole number of at least 1/],
-    ["Max Tokens", "", /Max Tokens must be a whole number of at least 1/],
-    ["Max Cost (USD)", "-1", /Max Cost must be 0 or more/],
+    ["Max Tokens", "-5", /Max Tokens must be between 1 and 500,000\. Not saved\./],
+    ["Max Tokens", "99999999999999", /Max Tokens must be between 1 and 500,000\. Not saved\./],
+    ["Max Tokens", "12.5", /Max Tokens must be a whole number\. Not saved\./],
+    ["Max Tokens", "", /Enter a value for Max Tokens\. Not saved\./],
+    ["Max Cost (USD)", "-1", /Max Cost must be between 0 and 100\. Not saved\./],
+    ["Max Cost (USD)", "99999999999999", /Max Cost must be between 0 and 100\. Not saved\./],
+    ["Max Cost (USD)", "", /Enter a value for Max Cost\. Not saved\./],
   ])("refuses to save %s = %j and says why", (label, value, message) => {
     const onChange = vi.fn();
     render(<BudgetConfig config={DEFAULT_CONFIG} onChange={onChange} />);
