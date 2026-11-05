@@ -200,6 +200,18 @@ class TestWallClockBudget:
         assert result.answer.startswith("⚠️")
         assert _category(result) is OutcomeCategory.TIMEOUT
 
+    def test_timeout_card_points_at_the_time_limit_setting(self) -> None:
+        """CMP2-04: the hint named "Settings → Profile → Runtime Settings:
+        Timeout / Max steps", which is not the setting that applies."""
+        engine = FakeRLMEngine(delay=_SLOW)
+        config = RunConfigDTO(max_time_seconds=_TIGHT_BUDGET)
+        result = RunRLMOfficialUseCase(engine).execute("doc", "q", config)
+
+        assert "**Max Execution Time (s)**" in result.answer
+        assert "**Max time** in the LLM Tuner" in result.answer
+        assert "Runtime Settings" not in result.answer
+        assert "**Timeout (s)**" not in result.answer
+
     def test_an_abandoned_run_reports_its_cost_as_unknown(self) -> None:
         """The guard cannot see what the abandoned engine had already spent.
 

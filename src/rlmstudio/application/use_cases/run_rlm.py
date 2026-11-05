@@ -82,17 +82,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Which budget limit stopped a run (see ``RunRLMUseCase._exceeded_limit``).
-_LIMIT_TOKENS = "tokens"
-_LIMIT_COST = "cost"
-_LIMIT_TIME = "time"
-_LIMIT_STEPS = "steps"
+# Which budget limit stopped a run (see ``RunRLMUseCase._exceeded_limit``);
+# the official engine's adapter names its own stops with the same values.
+LIMIT_TOKENS = "tokens"
+LIMIT_COST = "cost"
+LIMIT_TIME = "time"
+LIMIT_STEPS = "steps"
 
 # Where a run's step limit is set: the Chat Provider's profile, or the LLM
 # Tuner's own control for a Compare run.  Chat Providers have no such field.
 _MAX_STEPS_HINT = (
     "- Increase **Max Steps** on the Chat Provider's profile (Settings → Profiles), "
     "or **Max steps** in the LLM Tuner.\n"
+)
+# Where a run's time limit is set, likewise.
+MAX_TIME_HINT = (
+    "- Increase **Max Execution Time (s)** on the Chat Provider's profile "
+    "(Settings → Profiles), or **Max time** in the LLM Tuner.\n"
 )
 
 # The repeat limit ends the loop: a trace row, and the answer when no answer
@@ -114,6 +120,74 @@ _REPEAT_LIMIT_WARNING = (
 # A final action whose JSON did not parse (see ``_recover_final_answer``).
 _FINAL_TYPE_RE = re.compile(r'"type"\s*:\s*"final"')
 _ANSWER_VALUE_RE = re.compile(r'"answer"\s*:\s*(?=")')
+
+
+def budget_stop_outcome(
+    limit: str | None,
+    state: BudgetState,
+    config: BudgetConfig,
+    partial: str = "",
+    exc: BaseException | None = None,
+) -> tuple[str, str]:
+    """Return ``(answer, error)`` for a run stopped by budget *limit*.
+
+    The answer leads with a warning naming the limit that was hit and
+    where to change it, followed by any partial answer.  The error
+    carries the keyword the outcome classifier keys on ("budget", or
+    "timed out" for the time limit), so the run is classified as
+    stopped rather than as a success.  *limit* is one of the ``LIMIT_*``
+    names, or ``None`` for the no-progress circuit breaker (*exc* says why).
+    Shared with the official engine's adapter so both engines word a stop
+    the same way.
+    """
+    steps = state.steps
+    if limit == LIMIT_TOKENS:
+        max_tokens = config.max_tokens or 0
+        warning = (
+            f"⚠️ **Token budget exceeded** after {steps} steps "
+            f"({state.total_tokens:,} of {max_tokens:,} tokens).\n\n"
+            "**How to fix** — in Settings → Budget:\n"
+            "- Increase **Max Tokens**.\n"
+            "- Or ask a more focused question."
+        )
+        error = f"Budget exceeded: the {max_tokens:,}-token limit was reached after {steps} steps"
+    elif limit == LIMIT_COST:
+        max_cost = config.max_cost or 0.0
+        warning = (
+            f"⚠️ **Cost budget exceeded** after {steps} steps "
+            f"(${state.cost:.4f} of ${max_cost:.4f}).\n\n"
+            "**How to fix** — in Settings → Budget:\n"
+            "- Increase **Max Cost (USD)**.\n"
+            "- Or ask a more focused question."
+        )
+        error = f"Budget exceeded: the ${max_cost:.4f} cost limit was reached after {steps} steps"
+    elif limit == LIMIT_TIME:
+        seconds = round(config.max_time_seconds or 0)
+        warning = (
+            f"⚠️ **Execution timed out** after {steps} steps ({seconds}s limit).\n\n"
+            "**How to fix:**\n" + MAX_TIME_HINT + "- Or ask a more focused question."
+        )
+        error = f"Execution timed out: the {seconds}s time limit was reached after {steps} steps"
+    elif limit == LIMIT_STEPS:
+        max_steps = config.max_steps or 0
+        warning = (
+            f"⚠️ **Step budget exhausted** ({steps} of {max_steps} steps used) "
+            "without producing a complete answer.\n\n"
+            "**How to fix:**\n" + _MAX_STEPS_HINT + "- Or ask a more focused question."
+        )
+        error = f"Budget exceeded: the {max_steps}-step limit was reached"
+    else:
+        warning = (
+            f"⚠️ **Run stopped** after {steps} steps: the model kept replying "
+            "without code or a final answer.\n\n"
+            "**How to fix:**\n"
+            "- Ask a more focused question, or try a model that follows the "
+            "RLM action format more reliably."
+        )
+        error = f"Budget exceeded: stall limit reached ({exc})"
+    if partial:
+        return f"{warning}\n\n---\n\n**Partial answer**\n\n{partial}", error
+    return warning, error
 
 
 @dataclass(frozen=True)
@@ -2773,13 +2847,13 @@ class RunRLMUseCase:
         for another reason (the no-progress circuit breaker).
         """
         if config.max_tokens is not None and state.total_tokens >= config.max_tokens:
-            return _LIMIT_TOKENS
+            return LIMIT_TOKENS
         if config.max_cost is not None and state.cost >= config.max_cost:
-            return _LIMIT_COST
+            return LIMIT_COST
         if config.max_time_seconds is not None and state.elapsed_seconds >= config.max_time_seconds:
-            return _LIMIT_TIME
+            return LIMIT_TIME
         if config.max_steps is not None and state.steps > config.max_steps:
-            return _LIMIT_STEPS
+            return LIMIT_STEPS
         return None
 
     @classmethod
@@ -2790,72 +2864,8 @@ class RunRLMUseCase:
         partial: str,
         exc: BudgetExceededError,
     ) -> tuple[str, str]:
-        """Return ``(answer, error)`` for a run stopped by a budget limit.
-
-        The answer leads with a warning naming the limit that was hit and
-        where to change it, followed by any partial answer.  The error
-        carries the keyword the outcome classifier keys on ("budget", or
-        "timed out" for the time limit), so the run is classified as
-        stopped rather than as a success.
-        """
-        limit = cls._exceeded_limit(state, config)
-        steps = state.steps
-        if limit == _LIMIT_TOKENS:
-            max_tokens = config.max_tokens or 0
-            warning = (
-                f"⚠️ **Token budget exceeded** after {steps} steps "
-                f"({state.total_tokens:,} of {max_tokens:,} tokens).\n\n"
-                "**How to fix** — in Settings → Budget:\n"
-                "- Increase **Max Tokens**.\n"
-                "- Or ask a more focused question."
-            )
-            error = (
-                f"Budget exceeded: the {max_tokens:,}-token limit was reached after {steps} steps"
-            )
-        elif limit == _LIMIT_COST:
-            max_cost = config.max_cost or 0.0
-            warning = (
-                f"⚠️ **Cost budget exceeded** after {steps} steps "
-                f"(${state.cost:.4f} of ${max_cost:.4f}).\n\n"
-                "**How to fix** — in Settings → Budget:\n"
-                "- Increase **Max Cost (USD)**.\n"
-                "- Or ask a more focused question."
-            )
-            error = (
-                f"Budget exceeded: the ${max_cost:.4f} cost limit was reached after {steps} steps"
-            )
-        elif limit == _LIMIT_TIME:
-            seconds = int(config.max_time_seconds or 0)
-            warning = (
-                f"⚠️ **Execution timed out** after {steps} steps ({seconds}s limit).\n\n"
-                "**How to fix:**\n"
-                "- Increase **Max Execution Time (s)** on the Chat Provider's profile "
-                "(Settings → Profiles), or **Max time** in the LLM Tuner.\n"
-                "- Or ask a more focused question."
-            )
-            error = (
-                f"Execution timed out: the {seconds}s time limit was reached after {steps} steps"
-            )
-        elif limit == _LIMIT_STEPS:
-            max_steps = config.max_steps or 0
-            warning = (
-                f"⚠️ **Step budget exhausted** ({steps} of {max_steps} steps used) "
-                "without producing a complete answer.\n\n"
-                "**How to fix:**\n" + _MAX_STEPS_HINT + "- Or ask a more focused question."
-            )
-            error = f"Budget exceeded: the {max_steps}-step limit was reached"
-        else:
-            warning = (
-                f"⚠️ **Run stopped** after {steps} steps: the model kept replying "
-                "without code or a final answer.\n\n"
-                "**How to fix:**\n"
-                "- Ask a more focused question, or try a model that follows the "
-                "RLM action format more reliably."
-            )
-            error = f"Budget exceeded: stall limit reached ({exc})"
-        if partial:
-            return f"{warning}\n\n---\n\n**Partial answer**\n\n{partial}", error
-        return warning, error
+        """Return ``(answer, error)`` for a run stopped by a budget limit."""
+        return budget_stop_outcome(cls._exceeded_limit(state, config), state, config, partial, exc)
 
     @staticmethod
     def _format_timeout_warning(timeout_seconds: float | None, steps_used: int) -> str:

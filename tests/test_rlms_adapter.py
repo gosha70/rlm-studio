@@ -43,6 +43,11 @@ from rlmstudio.application.services.outcome_classifier import (
     OutcomeCategory,
     classify_execution_outcome,
 )
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailureError,
+    ProviderFailureKind,
+    failure_answer,
+)
 from rlmstudio.envs.in_process_state import acquire_exclusive, release_exclusive
 from rlmstudio.infrastructure.engines.rlms_adapter import (
     BUSY_AFTER_TIMEOUT_REASON,
@@ -981,6 +986,70 @@ class TestInterruptedRunKeepsWhatWasSpent:
         assert classify_execution_outcome(result.success, result.error, result.answer).category is (
             OutcomeCategory.BUDGET_EXHAUSTED
         )
+
+    def test_a_token_breach_is_worded_like_a_studio_budget_stop(self, fake_rlm: _FakeRlm) -> None:
+        """CMP2-04: it read "Execution error. Budget exceeded: …" followed by the
+        engine's last raw step — REPL code — as the "Partial answer"."""
+        fake_rlm.raise_on_completion = _raise(
+            "TokenLimitExceededError",
+            "Token limit exceeded after iteration 15: 52,240 of 50,000 tokens",
+            tokens_used=52_240,
+            token_limit=50_000,
+            partial_answer="Let me look.\n```repl\nprint(context[:100])\n```",
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert result.answer.startswith("⚠️ **Token budget exceeded** after 2 steps")
+        assert "52,240 of 50,000 tokens" in result.answer
+        assert "**Max Tokens**" in result.answer
+        assert "Execution error" not in result.answer
+        assert "print(context" not in result.answer
+        assert "Partial answer" not in result.answer
+        assert classify_execution_outcome(result.success, result.error, result.answer).category is (
+            OutcomeCategory.BUDGET_EXHAUSTED
+        )
+
+    def test_an_engine_timeout_names_the_time_limit_setting(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = _raise(
+            "TimeoutExceededError",
+            "Timeout exceeded after iteration 4: 18.3s of 18.0s limit",
+            elapsed=18.3,
+            timeout=18.0,
+        )
+
+        result = _adapter().run("d", "q", _CONFIG)
+
+        assert result.answer.startswith("⚠️ **Execution timed out** after 2 steps (90s limit)")
+        assert "**Max Execution Time (s)**" in result.answer
+        assert "Execution error" not in result.answer
+        assert classify_execution_outcome(result.success, result.error, result.answer).category is (
+            OutcomeCategory.TIMEOUT
+        )
+
+    def test_a_connection_failure_names_the_endpoint_and_the_fix(self, fake_rlm: _FakeRlm) -> None:
+        """CMP2-04: the engine's own client failed with a bare "Connection error."."""
+        endpoint = "http://127.0.0.1:18184"
+
+        class APIConnectionError(Exception): ...
+
+        fake_rlm.raise_on_completion = APIConnectionError("Connection error.")
+
+        with pytest.raises(ProviderFailureError) as raised:
+            _adapter(backend="lmstudio", base_url=endpoint).run("d", "q", _CONFIG)
+
+        assert raised.value.kind is ProviderFailureKind.CONNECTION
+        assert endpoint in raised.value.cause_text
+        card = failure_answer(raised.value)
+        assert card is not None
+        assert endpoint in card
+        assert "running and reachable" in card
+
+    def test_an_unrecognised_engine_failure_is_raised_unchanged(self, fake_rlm: _FakeRlm) -> None:
+        fake_rlm.raise_on_completion = ValueError("something odd")
+
+        with pytest.raises(ValueError, match="something odd"):
+            _adapter().run("d", "q", _CONFIG)
 
     def test_a_token_breach_is_priced_from_the_slot_cost_table(self, fake_rlm: _FakeRlm) -> None:
         """The tokens are known even though the money is not, so price them."""

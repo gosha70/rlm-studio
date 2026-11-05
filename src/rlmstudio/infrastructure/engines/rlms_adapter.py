@@ -61,6 +61,22 @@ from rlmstudio.application.sandbox_vars import (
     TRACE_KEY_ROLE,
     TRACE_KEY_STEP,
 )
+from rlmstudio.application.services.provider_failure import (
+    ProviderFailureError,
+    ProviderFailureKind,
+    classify_provider_failure,
+    describe_provider_failure,
+    failure_answer,
+    redact_secrets,
+    strip_html,
+)
+from rlmstudio.application.use_cases.run_rlm import (
+    LIMIT_COST,
+    LIMIT_TIME,
+    LIMIT_TOKENS,
+    budget_stop_outcome,
+)
+from rlmstudio.domain.entities import BudgetConfig, BudgetState
 from rlmstudio.envs.in_process_state import acquire_exclusive, release_exclusive
 
 logger = logging.getLogger(__name__)
@@ -119,6 +135,13 @@ _ENGINE_TIMEOUT_MARGIN_CAP_SECONDS = 5.0
 # fans out over a thread pool, and every child that is allowed its own REPL
 # swaps this process's streams and directory.  One at a time inside a run, too.
 _LOCAL_MAX_CONCURRENT_SUBCALLS = 1
+
+# The engine's partial answer is its last step's raw response; one with a code
+# block in it is REPL code, not an answer, and stays in the trace only.
+_CODE_FENCE = "```"
+# Title of a run's answer card for an unclassified failure, as Studio's own runs.
+_ERROR_TITLE = "⚠️ **Execution error**."
+_BUSY_TITLE = "⚠️ **The official engine is busy**."
 
 # Deepest sub-call nesting converted into trace entries.  The trajectory comes
 # from another library, so the walk is bounded rather than trusting its shape.
@@ -520,14 +543,17 @@ class RlmsEngineAdapter:
         try:
             # ``prompt`` is the context the REPL exposes; ``root_prompt`` is the question.
             completion = engine.completion(prompt=content, root_prompt=query)
-        except (rlm.BudgetExceededError, rlm.TokenLimitExceededError) as exc:
-            return self._interrupted(
-                f"Budget exceeded: {exc}", exc, trajectory, start, environment, config
-            )
+        except rlm.BudgetExceededError as exc:
+            return self._interrupted(LIMIT_COST, exc, trajectory, start, environment, config)
+        except rlm.TokenLimitExceededError as exc:
+            return self._interrupted(LIMIT_TOKENS, exc, trajectory, start, environment, config)
         except rlm.TimeoutExceededError as exc:
-            return self._interrupted(
-                f"Official RLM engine timed out: {exc}", exc, trajectory, start, environment, config
-            )
+            return self._interrupted(LIMIT_TIME, exc, trajectory, start, environment, config)
+        except Exception as exc:
+            classified = self._classified(exc)
+            if classified is None:
+                raise
+            raise classified from exc
         finally:
             engine.close()
         return self._to_result(completion, start, environment, config)
@@ -579,6 +605,23 @@ class RlmsEngineAdapter:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _classified(self, exc: BaseException) -> ProviderFailureError | None:
+        """A provider failure the engine hit, worded like Studio's own runs.
+
+        The engine calls the provider through its own client, so a dead
+        server surfaced as the bare "Connection error." with no endpoint
+        and no fix.  ``None`` when the failure is not a recognised provider
+        failure, so it keeps its own detail.
+        """
+        kind = classify_provider_failure(exc)
+        if kind is ProviderFailureKind.UNKNOWN:
+            return None
+        failure = describe_provider_failure(kind, model=self._model, api_base=self._base_url)
+        detail = redact_secrets(strip_html(str(exc)))
+        return ProviderFailureError(
+            f"{failure.cause} {failure.fix} (Detail: {detail})", failure, detail
+        )
 
     def _engine_backend(self) -> tuple[str, dict[str, Any]]:
         """Map Studio's provider onto an ``rlms`` backend + client kwargs, or raise ``ValueError``."""
@@ -695,11 +738,14 @@ class RlmsEngineAdapter:
         }
         error = getattr(completion, "error", None)
         if error:
+            classified = self._classified(RuntimeError(str(error)))
             return RunResultDTO(
-                answer=f"⚠️ **Execution error**.\n\n{error}",
+                answer=(failure_answer(classified) if classified else None)
+                or f"{_ERROR_TITLE}\n\n{error}",
                 mode_used=MODE_RLM_OFFICIAL,
                 success=False,
-                error=str(error),
+                error=str(classified or error),
+                failure_kind=classified.kind.value if classified else None,
                 steps=steps,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -724,9 +770,9 @@ class RlmsEngineAdapter:
     def _failed(
         self, error: str, start: float, environment: str, config: RunConfigDTO
     ) -> RunResultDTO:
-        """Failed result for a run that never reached the engine (nothing was spent)."""
+        """Failed result for a run that never got the engine (nothing was spent)."""
         return RunResultDTO(
-            answer=f"⚠️ **Execution error**.\n\n{error}",
+            answer=f"{_BUSY_TITLE}\n\n{error}",
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
             error=error,
@@ -740,7 +786,7 @@ class RlmsEngineAdapter:
 
     def _interrupted(
         self,
-        error: str,
+        limit: str,
         exc: BaseException,
         trajectory: Any,
         start: float,
@@ -785,15 +831,30 @@ class RlmsEngineAdapter:
             # not "none used", so the cost-table shortcut in _price for a run
             # that genuinely used nothing must not apply.
             total_cost, cost_known = 0.0, False
-        answer = f"⚠️ **Execution error**.\n\n{error}"
-        if partial:
-            answer = f"{answer}\n\n**Partial answer**\n\n{partial}"
+        steps = len((captured or {}).get("iterations") or [])
+        # Worded like Studio's own budget stops: the limit, where to change it.
+        answer, error = budget_stop_outcome(
+            limit,
+            BudgetState(
+                steps=steps,
+                input_tokens=tokens_used,
+                cost=total_cost,
+                elapsed_seconds=time.time() - start,
+            ),
+            BudgetConfig(
+                max_steps=config.max_steps,
+                max_tokens=getattr(exc, "token_limit", None) or config.max_tokens,
+                max_cost=getattr(exc, "budget", None) or config.max_cost,
+                max_time_seconds=config.max_time_seconds,
+            ),
+            "" if _CODE_FENCE in partial else partial,
+        )
         return RunResultDTO(
             answer=answer,
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
             error=error,
-            steps=len((captured or {}).get("iterations") or []),
+            steps=steps,
             input_tokens=tokens_used,
             total_cost=total_cost,
             elapsed_time=time.time() - start,

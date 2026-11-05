@@ -37,6 +37,7 @@ from rlmstudio.application.services.provider_failure import (
     failure_answer,
     failure_kind_value,
 )
+from rlmstudio.application.use_cases.run_rlm import MAX_TIME_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +238,7 @@ class RunRLMOfficialUseCase:
             return None
         error = f"Official RLM engine unavailable: {reason}"
         return RunResultDTO(
-            answer=f"⚠️ **Execution error**.\n\n{error}",
+            answer=f"⚠️ **The official engine is unavailable**.\n\n{reason}",
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
             error=error,
@@ -251,9 +252,8 @@ class RunRLMOfficialUseCase:
         return RunResultDTO(
             answer=(
                 f"⚠️ **RLM run timed out** after {seconds:.0f}s.\n\n"
-                "The official engine did not finish within the wall-clock budget.\n\n"
-                "**How to fix** — in Settings → Profile → Runtime Settings:\n"
-                "- Increase **Timeout (s)**, or reduce **Max steps**."
+                "The official engine did not finish within its time limit.\n\n"
+                "**How to fix:**\n" + MAX_TIME_HINT + "- Or ask a more focused question."
             ),
             mode_used=MODE_RLM_OFFICIAL,
             success=False,
