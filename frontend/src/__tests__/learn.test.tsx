@@ -1125,6 +1125,24 @@ describe("TroubleshootEntry card", () => {
     expect(screen.getByText("cookbook/groq")).toBeInTheDocument();
     expect(screen.getByText("cookbook/anthorpic")).toBeInTheDocument();
   });
+
+  test("fix steps render `code` as code, not literal backticks (SH2-6)", () => {
+    render(
+      <TroubleshootEntry
+        entry={{
+          ...entry,
+          id: "ollama-model",
+          fix: ["Run `ollama pull <model-name>` on the host running Ollama", "A stray ` stays as written"],
+        }}
+      />,
+    );
+    const code = screen.getByText("ollama pull <model-name>");
+    expect(code.tagName).toBe("CODE");
+    const step = code.closest("li")!;
+    expect(step).toHaveTextContent("Run ollama pull <model-name> on the host running Ollama");
+    expect(step.textContent).not.toContain("`");
+    expect(screen.getByText("A stray ` stays as written")).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

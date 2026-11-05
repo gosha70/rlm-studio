@@ -10,6 +10,7 @@
  * but we still don't want to promise routes that don't exist).
  */
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -76,7 +77,7 @@ export function TroubleshootEntry({
             </p>
             <ol className="ml-5 list-decimal space-y-1 text-sm">
               {entry.fix.map((step, i) => (
-                <li key={i}>{step}</li>
+                <li key={i}>{withInlineCode(step)}</li>
               ))}
             </ol>
           </>
@@ -91,6 +92,26 @@ export function TroubleshootEntry({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+const INLINE_CODE_MARK = "`";
+
+/**
+ * Render `code` spans in a YAML fix step as code instead of literal
+ * backticks. Text with an unmatched backtick is left as written.
+ */
+function withInlineCode(text: string): ReactNode {
+  const parts = text.split(INLINE_CODE_MARK);
+  if (parts.length % 2 === 0) return text;
+  return parts.map((part, i) =>
+    i % 2 === 1 ? (
+      <code key={i} className="rounded bg-muted px-1 font-mono text-[0.85em]">
+        {part}
+      </code>
+    ) : (
+      part
+    ),
   );
 }
 
