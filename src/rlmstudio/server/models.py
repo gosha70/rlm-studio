@@ -36,10 +36,21 @@ from rlmstudio.application.sandbox_vars import (
 # config file saved before these existed still loads.  Mirrored in
 # frontend/src/lib/constants.ts.
 CONTEXT_WINDOW_MAX_TOKENS = 10_000_000
+# Smaller than any real model's context, and the smallest that still leaves a
+# Chat Provider room to answer.
+CONTEXT_WINDOW_MIN_TOKENS = 1_024
 MAX_OUTPUT_TOKENS_LIMIT = 1_000_000
 RUNTIME_MAX_TEMPERATURE = 2.0
 RUNTIME_MIN_TIMEOUT_SECONDS = 5
+RUNTIME_MAX_TIMEOUT_SECONDS = 3_600
 BUDGET_MIN_TIME_SECONDS = 10
+BUDGET_MAX_TIME_SECONDS = 86_400
+BUDGET_MAX_STEPS_LIMIT = 500
+BUDGET_MAX_TOKENS_LIMIT = 500_000
+BUDGET_MAX_COST_USD_LIMIT = 100.0
+BUDGET_MAX_REPEAT_LIMIT = 20
+RAG_MAX_CHUNK_SIZE = 100_000
+RAG_MAX_TOP_K = 100
 NUDGE_AT_FRACTION_MIN = 0.1
 NUDGE_AT_FRACTION_MAX = 1.0
 
@@ -513,7 +524,9 @@ class RuntimeSettingsInput(RuntimeSettings):
         default=RUNTIME_DEFAULT_MAX_OUTPUT_TOKENS, ge=1, le=MAX_OUTPUT_TOKENS_LIMIT
     )
     timeout_seconds: int = Field(
-        default=RUNTIME_DEFAULT_TIMEOUT_SECONDS, ge=RUNTIME_MIN_TIMEOUT_SECONDS
+        default=RUNTIME_DEFAULT_TIMEOUT_SECONDS,
+        ge=RUNTIME_MIN_TIMEOUT_SECONDS,
+        le=RUNTIME_MAX_TIMEOUT_SECONDS,
     )
 
 
@@ -660,7 +673,9 @@ class LLMProviderCreateRequest(BaseModel):
     endpoint: str | None = None
     runtime_settings: RuntimeSettingsInput | None = None
     # Manual override; auto-discovered if omitted.
-    context_window: int | None = Field(default=None, gt=0, le=CONTEXT_WINDOW_MAX_TOKENS)
+    context_window: int | None = Field(
+        default=None, ge=CONTEXT_WINDOW_MIN_TOKENS, le=CONTEXT_WINDOW_MAX_TOKENS
+    )
 
 
 class LLMProviderUpdateRequest(BaseModel):
@@ -671,6 +686,16 @@ class LLMProviderUpdateRequest(BaseModel):
     runtime_settings: RuntimeSettingsInput | None = None
     # 0 clears a manual override (see the update route).
     context_window: int | None = Field(default=None, ge=0, le=CONTEXT_WINDOW_MAX_TOKENS)
+
+    @field_validator("context_window")
+    @classmethod
+    def _realistic_context_window(cls, v: int | None) -> int | None:
+        if v is not None and 0 < v < CONTEXT_WINDOW_MIN_TOKENS:
+            raise ValueError(
+                f"context_window must be at least {CONTEXT_WINDOW_MIN_TOKENS:,} tokens "
+                "(or 0 to clear the override)"
+            )
+        return v
 
 
 class LLMProviderModelsRequest(BaseModel):
@@ -718,14 +743,19 @@ class BudgetConfig(BaseModel):
 class BudgetConfigInput(BudgetConfig):
     """Budget limits as a request sends them: out-of-range values are a 422."""
 
-    max_steps: int = Field(default=RLM_DEFAULT_MAX_STEPS, ge=1)
-    max_tokens: int = Field(default=RLM_DEFAULT_MAX_TOKENS_BUDGET, ge=1)
-    max_cost_usd: float = Field(default=RLM_DEFAULT_MAX_COST_USD, ge=0)
+    max_steps: int = Field(default=RLM_DEFAULT_MAX_STEPS, ge=1, le=BUDGET_MAX_STEPS_LIMIT)
+    max_tokens: int = Field(default=RLM_DEFAULT_MAX_TOKENS_BUDGET, ge=1, le=BUDGET_MAX_TOKENS_LIMIT)
+    # A number is required: a blank (null) is refused rather than read as $0.
+    max_cost_usd: float = Field(
+        default=RLM_DEFAULT_MAX_COST_USD, ge=0, le=BUDGET_MAX_COST_USD_LIMIT
+    )
     max_time_seconds: int = Field(
-        default=RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS, ge=BUDGET_MIN_TIME_SECONDS
+        default=RLM_DEFAULT_WALL_CLOCK_BUDGET_SECONDS,
+        ge=BUDGET_MIN_TIME_SECONDS,
+        le=BUDGET_MAX_TIME_SECONDS,
     )
     max_recursion_depth: int = Field(default=RLM_DEFAULT_MAX_RECURSION_DEPTH, ge=0)
-    repeat_limit: int = Field(default=RLM_DEFAULT_REPEAT_LIMIT, ge=1)
+    repeat_limit: int = Field(default=RLM_DEFAULT_REPEAT_LIMIT, ge=1, le=BUDGET_MAX_REPEAT_LIMIT)
     nudge_at_fraction: float = Field(
         default=RLM_DEFAULT_NUDGE_AT_FRACTION, ge=NUDGE_AT_FRACTION_MIN, le=NUDGE_AT_FRACTION_MAX
     )
@@ -748,6 +778,22 @@ class RAGConfig(BaseModel):
     chunk_overlap: int = 200
     top_k: int = 5
     embedding_model: str = "text-embedding-3-small"
+
+
+class RAGConfigInput(RAGConfig):
+    """RAG settings as a request sends them: out-of-range values are a 422."""
+
+    @model_validator(mode="after")
+    def _within_bounds(self) -> RAGConfigInput:
+        if not 1 <= self.chunk_size <= RAG_MAX_CHUNK_SIZE:
+            raise ValueError(f"chunk_size must be between 1 and {RAG_MAX_CHUNK_SIZE:,}")
+        if not 0 <= self.chunk_overlap < self.chunk_size:
+            raise ValueError("chunk_overlap must be at least 0 and smaller than chunk_size")
+        if not 1 <= self.top_k <= RAG_MAX_TOP_K:
+            raise ValueError(f"top_k must be between 1 and {RAG_MAX_TOP_K}")
+        if not self.embedding_model.strip():
+            raise ValueError("embedding_model must not be blank")
+        return self
 
 
 class ModeConfig(BaseModel):
@@ -822,7 +868,7 @@ class ChatProviderCreateRequest(BaseModel):
     llm_provider_id: str  # UUID of the LLMProviderConfig to use
     profile_id: str | None = None
     execution_mode: ExecutionMode = MODE_DIRECT
-    rag_config: RAGConfig | None = None
+    rag_config: RAGConfigInput | None = None
     rlm_max_steps: int | None = None
     rlm_timeout_seconds: int | None = None
     rlm_repeat_limit: int | None = None
@@ -851,7 +897,7 @@ class ChatProviderUpdateRequest(BaseModel):
     llm_provider_id: str | None = None  # switch to a different LLM Provider
     profile_id: str | None = None
     execution_mode: ExecutionMode | None = None
-    rag_config: RAGConfig | None = None
+    rag_config: RAGConfigInput | None = None
     rlm_max_steps: int | None = None
     rlm_timeout_seconds: int | None = None
     rlm_repeat_limit: int | None = None
