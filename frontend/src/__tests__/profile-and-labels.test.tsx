@@ -323,6 +323,19 @@ describe("ProfileCard — editing form", () => {
     expect(vi.mocked(updateProfile)).not.toHaveBeenCalled();
   });
 
+  test("SC3-03: editing a field clears the last Save message", async () => {
+    const { updateProfile } = await import("@/lib/api");
+    vi.mocked(updateProfile).mockClear();
+    openEditor();
+    fireEvent.change(screen.getByLabelText("Max Steps"), { target: { value: "9999" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(screen.getByRole("status")).toHaveTextContent("Max Steps must be between 1 and 500.");
+
+    fireEvent.change(screen.getByLabelText("Max Steps"), { target: { value: "50" } });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(vi.mocked(updateProfile)).not.toHaveBeenCalled();
+  });
+
   test("saves values inside the bounds", async () => {
     const { updateProfile } = await import("@/lib/api");
     vi.mocked(updateProfile).mockClear();

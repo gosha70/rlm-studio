@@ -97,6 +97,12 @@ export function ProfileCard({
     rlm_prompt: profile.system_prompts?.[MODE_RLM] ?? "",
   });
 
+  // Editing a field clears the last Save message: it described the old values.
+  const updateEditData = (patch: Partial<typeof editData>) => {
+    setMessage(null);
+    setEditData((prev) => ({ ...prev, ...patch }));
+  };
+
   const usedBy = chatProviders.filter((cp) => cp.profile_id === profile.id);
 
   const handleDelete = async () => {
@@ -429,14 +435,14 @@ export function ProfileCard({
                 id={`edit-name-${profile.id}`}
                 className="h-8 text-xs"
                 value={editData.name}
-                onChange={(e) => setEditData({ ...editData, name: e.target.value })}
+                onChange={(e) => updateEditData({ name: e.target.value })}
               />
             </div>
             <div className="space-y-1">
               <Label htmlFor={`edit-strategy-${profile.id}`} className="text-xs">Strategy</Label>
               <Select
                 value={editData.strategy}
-                onValueChange={(v) => setEditData({ ...editData, strategy: v })}
+                onValueChange={(v) => updateEditData({ strategy: v })}
               >
                 <SelectTrigger id={`edit-strategy-${profile.id}`} className="h-8 text-xs">
                   <SelectValue />
@@ -452,7 +458,7 @@ export function ProfileCard({
                 id={`edit-desc-${profile.id}`}
                 className="h-8 text-xs"
                 value={editData.description}
-                onChange={(e) => setEditData({ ...editData, description: e.target.value })}
+                onChange={(e) => updateEditData({ description: e.target.value })}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -466,7 +472,7 @@ export function ProfileCard({
                   max="2"
                   className="h-8 text-xs"
                   value={editData.temperature}
-                  onChange={(e) => setEditData({ ...editData, temperature: e.target.value })}
+                  onChange={(e) => updateEditData({ temperature: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -479,7 +485,7 @@ export function ProfileCard({
                   max="1"
                   className="h-8 text-xs"
                   value={editData.top_p}
-                  onChange={(e) => setEditData({ ...editData, top_p: e.target.value })}
+                  onChange={(e) => updateEditData({ top_p: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -490,7 +496,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.max_output_tokens}
-                  onChange={(e) => setEditData({ ...editData, max_output_tokens: e.target.value })}
+                  onChange={(e) => updateEditData({ max_output_tokens: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -501,7 +507,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.timeout_seconds}
-                  onChange={(e) => setEditData({ ...editData, timeout_seconds: e.target.value })}
+                  onChange={(e) => updateEditData({ timeout_seconds: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -512,7 +518,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.max_steps}
-                  onChange={(e) => setEditData({ ...editData, max_steps: e.target.value })}
+                  onChange={(e) => updateEditData({ max_steps: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -523,7 +529,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.max_time_seconds}
-                  onChange={(e) => setEditData({ ...editData, max_time_seconds: e.target.value })}
+                  onChange={(e) => updateEditData({ max_time_seconds: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -534,7 +540,7 @@ export function ProfileCard({
                   inputMode="decimal"
                   className="h-8 text-xs"
                   value={editData.max_cost_usd}
-                  onChange={(e) => setEditData({ ...editData, max_cost_usd: e.target.value })}
+                  onChange={(e) => updateEditData({ max_cost_usd: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -545,7 +551,7 @@ export function ProfileCard({
                   inputMode="numeric"
                   className="h-8 text-xs"
                   value={editData.repeat_limit}
-                  onChange={(e) => setEditData({ ...editData, repeat_limit: e.target.value })}
+                  onChange={(e) => updateEditData({ repeat_limit: e.target.value })}
                 />
               </div>
               <div className="space-y-1">
@@ -558,7 +564,7 @@ export function ProfileCard({
                   max="1.0"
                   className="h-8 text-xs"
                   value={editData.nudge_at_fraction}
-                  onChange={(e) => setEditData({ ...editData, nudge_at_fraction: e.target.value })}
+                  onChange={(e) => updateEditData({ nudge_at_fraction: e.target.value })}
                 />
               </div>
             </div>
@@ -571,8 +577,7 @@ export function ProfileCard({
               <Select
                 value={editData.prompt_template_name ?? "__global__"}
                 onValueChange={(value) => {
-                  setEditData({
-                    ...editData,
+                  updateEditData({
                     prompt_template_name: value === "__global__" ? null : value,
                   });
                 }}
@@ -608,7 +613,7 @@ export function ProfileCard({
                 id={`edit-rlm-prompt-${profile.id}`}
                 className="min-h-24 text-xs font-mono"
                 value={editData.rlm_prompt}
-                onChange={(e) => setEditData({ ...editData, rlm_prompt: e.target.value })}
+                onChange={(e) => updateEditData({ rlm_prompt: e.target.value })}
               />
             </div>
             <div className="flex gap-2">
