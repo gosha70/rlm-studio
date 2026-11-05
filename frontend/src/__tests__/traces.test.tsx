@@ -5,7 +5,7 @@
  * and the Traces page.
  */
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { vi, describe, test, expect, beforeEach, afterEach } from "vitest";
 import { CodeBlock } from "@/components/trace/code-block";
 import { Timeline } from "@/components/trace/timeline";
@@ -582,6 +582,30 @@ describe("TracesPage failed run (CHAT2-03, CMP2-07)", () => {
     openTrace(failedTrace({ error: "Timed out after 120 s", answer: "Timed out after 120 s" }));
     const reason = await screen.findByRole("region", { name: "Why this run failed" });
     expect(reason.textContent?.match(/Timed out after 120 s/g)).toHaveLength(1);
+  });
+
+  test("P3-CS-1: the answer's markdown is rendered, not shown raw", async () => {
+    openTrace(
+      failedTrace({
+        error: "litellm.ContextWindowExceededError: 53,839 tokens > 32,768",
+        answer:
+          "⚠️ **Context window exceeded**.\n\nThe document is too large.\n\n**How to fix:**\n- Use RAG mode.\n\n_Connection error._",
+      }),
+    );
+    const reason = await screen.findByRole("region", { name: "Why this run failed" });
+    expect(reason).not.toHaveTextContent("**");
+    expect(reason).not.toHaveTextContent("_Connection error._");
+    expect(within(reason).getByText("How to fix:").tagName).toBe("STRONG");
+    expect(within(reason).getByText("Connection error.").tagName).toBe("EM");
+    expect(within(reason).getByRole("listitem")).toHaveTextContent("Use RAG mode.");
+  });
+
+  test("P3-CS-1: an answer that only wraps the error in a title is not shown", async () => {
+    const error = "Cannot connect to the LLM server at 'http://127.0.0.1:9/v1'.";
+    openTrace(failedTrace({ error, answer: `⚠️ **Execution error**.\n\n${error}` }));
+    const reason = await screen.findByRole("region", { name: "Why this run failed" });
+    expect(within(reason).queryByText("Answer")).not.toBeInTheDocument();
+    expect(reason.textContent?.match(/Cannot connect to the LLM server/g)).toHaveLength(1);
   });
 
   test("a successful run shows no failure panel", async () => {

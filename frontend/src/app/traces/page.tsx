@@ -3,6 +3,8 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { AppShell } from "@/components/shared/app-shell";
 import { SESSIONS_SWR_KEY, TRACE_EXEC_PARAM, displayModeName } from "@/lib/constants";
 import { EngineBadge } from "@/components/shared/engine-badge";
@@ -31,6 +33,28 @@ import {
   type TraceResponse,
   type TraceStep,
 } from "@/lib/api";
+
+/** A bold title line such as "⚠️ **Execution error**." at the top of a failure answer. */
+const FAILURE_TITLE_RE = /^(⚠️?\s*)?\*\*[^*]+\*\*[.:]?$/;
+
+/** Text with the warning sign, markdown emphasis and extra whitespace removed. */
+function plainText(markdown: string): string {
+  return markdown.replace(/⚠️?|[*_`]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * True when a failed run's answer says nothing its error does not: every
+ * paragraph is either the title line or text the error already contains.
+ */
+function answerOnlyRepeatsError(answer: string, error: string): boolean {
+  const errorText = plainText(error);
+  if (!errorText) return false;
+  return answer
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph && !FAILURE_TITLE_RE.test(paragraph))
+    .every((paragraph) => errorText.includes(plainText(paragraph)));
+}
 
 interface TraceDetailPanelProps {
   trace: TraceResponse;
@@ -121,12 +145,15 @@ function TraceDetailPanel({
                 <p className="whitespace-pre-wrap break-words text-destructive">{trace.result.error}</p>
               </div>
             )}
-            {trace.result.answer && trace.result.answer !== trace.result.error && (
-              <div>
-                <p className="text-xs text-muted-foreground">Answer</p>
-                <p className="whitespace-pre-wrap break-words">{trace.result.answer}</p>
-              </div>
-            )}
+            {trace.result.answer &&
+              !answerOnlyRepeatsError(trace.result.answer, trace.result.error ?? "") && (
+                <div>
+                  <p className="text-xs text-muted-foreground">Answer</p>
+                  <div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto break-words">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{trace.result.answer}</ReactMarkdown>
+                  </div>
+                </div>
+              )}
           </CardContent>
         </Card>
       )}
