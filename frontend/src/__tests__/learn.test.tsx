@@ -1372,15 +1372,23 @@ describe("ConceptsPage", () => {
     ).toBeInTheDocument();
   });
 
-  test("mode guide covers all four modes including Auto", () => {
+  test("mode guide covers the four Chat Provider modes (SH2-2)", () => {
     mockUseSWR.mockImplementation(conceptsSwr);
     render(<ConceptsPage />);
     // Strong-text labels inside the mode list are unique; matching with
     // exact text avoids colliding with the body paragraphs.
-    for (const mode of ["Direct", "RLM", "Compare", "Auto"]) {
+    for (const mode of ["Direct", "RLM", "RAG", "Official RLM (rlms)"]) {
       expect(screen.getByText(mode, { selector: "span.font-semibold" }))
         .toBeInTheDocument();
     }
+  });
+
+  test("never recommends Auto, which 1.0 does not offer (SH2-2)", () => {
+    mockUseSWR.mockImplementation(conceptsSwr);
+    const { container } = render(<ConceptsPage />);
+    // The deep-dive markdown is fetched separately; the page's own copy is what is checked.
+    expect(container.textContent).not.toMatch(/\bAuto\b/);
+    expect(screen.getByText(/four modes a Chat Provider can run/)).toBeInTheDocument();
   });
 
   test("includes the 'When not to use RLM' callout near the mode guide", () => {

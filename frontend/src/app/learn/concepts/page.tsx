@@ -68,11 +68,10 @@ export default function ConceptsPage() {
               to fit the whole input into a single request.
             </p>
             <p className="mt-3 text-sm text-muted-foreground">
-              You don&apos;t have to pick a strategy by hand. Start with{" "}
-              <span className="font-medium text-foreground">Auto</span>{" "}
-              and Studio routes short inputs through one-shot generation
-              and longer ones through iterative inspection. Use the other
-              modes when you want control or a side-by-side comparison.
+              Each Chat Provider runs one mode — Direct, RLM, RAG or
+              Official RLM. Not sure which fits? Select a Direct and an RLM
+              Chat Provider together in Chat and compare their answers,
+              tokens, cost and time side by side.
             </p>
           </div>
         </section>
@@ -94,17 +93,23 @@ export default function ConceptsPage() {
           <ModeChooser />
 
           <p className="mt-3 text-xs text-muted-foreground">
-            The four modes above are also wired into Settings &rarr; Chat
-            Providers; this is just a guided way to pick the right one
-            for the task you&apos;re about to run.
+            These are the four modes a Chat Provider can run (Settings
+            &rarr; Chat Providers); this is just a guided way to pick the
+            right one for the task you&apos;re about to run.
           </p>
 
           <aside className="mt-4 rounded-md border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-200">
             <p className="font-semibold">When not to use RLM</p>
             <ul className="mt-2 ml-5 list-disc space-y-1">
               <li>Short note or single-turn chat — use Direct.</li>
-              <li>Side-by-side benchmarking — use Compare.</li>
-              <li>Not sure — start with Auto; don&apos;t force RLM.</li>
+              <li>
+                Side-by-side benchmarking — select several Chat Providers in
+                Chat, or use the LLM Tuner.
+              </li>
+              <li>
+                Not sure — compare Direct and RLM side by side; don&apos;t
+                force RLM.
+              </li>
             </ul>
           </aside>
         </section>

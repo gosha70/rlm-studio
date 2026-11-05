@@ -5,9 +5,10 @@
  *
  * Pure client-side lookup. Selecting a scenario in the dropdown
  * highlights the recommended mode and surfaces a one-line rationale
- * directly under the strip. The dropdown opens with the
- * "Not sure…" scenario selected so the chooser is never an empty
- * prompt and Auto is the safe-default reveal.
+ * directly under the strip. The rows are the modes a Chat Provider
+ * can run (Settings → Chat Providers). The dropdown opens with the
+ * "Not sure…" scenario selected, which recommends comparing modes side
+ * by side, so the chooser is never an empty prompt.
  */
 
 import { useState } from "react";
@@ -18,9 +19,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  displayModeName,
+  MODE_DIRECT,
+  MODE_RAG,
+  MODE_RLM,
+  MODE_RLM_OFFICIAL,
+  type ALL_EXECUTION_MODES,
+} from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
-export type LearnMode = "Direct" | "RLM" | "Compare" | "Auto";
+export type LearnMode = (typeof ALL_EXECUTION_MODES)[number];
 
 interface ModeRow {
   mode: LearnMode;
@@ -30,64 +39,75 @@ interface ModeRow {
 
 const MODE_ROWS: ReadonlyArray<ModeRow> = [
   {
-    mode: "Direct",
+    mode: MODE_DIRECT,
     body: "small, self-contained input that fits in one prompt.",
     dot: "bg-emerald-500",
   },
   {
-    mode: "RLM",
+    mode: MODE_RLM,
     body:
       "large or complex content; the model inspects and reasons step-by-step through a sandboxed Python REPL.",
     dot: "bg-blue-500",
   },
   {
-    mode: "Compare",
-    body: "run strategies, providers, or profiles side-by-side for a benchmark.",
-    dot: "bg-purple-500",
+    mode: MODE_RAG,
+    body:
+      "a specific question about a large document; the model answers from the passages most similar to the question.",
+    dot: "bg-amber-500",
   },
   {
-    mode: "Auto",
+    mode: MODE_RLM_OFFICIAL,
     body:
-      "Studio picks Direct or RLM for you based on input size. Good default when you're not sure.",
-    dot: "bg-slate-500",
+      "the RLM paper authors' own implementation (the rlms package), to check Studio's RLM against the reference. Needs the interop extra.",
+    dot: "bg-purple-500",
   },
 ];
+
+/** What the "not sure" scenario recommends instead of a single mode. */
+const COMPARE_RECOMMENDATION = "compare side by side";
 
 interface Scenario {
   id: string;
   prompt: string;
-  recommendedMode: LearnMode;
+  /** The highlighted row; none when the advice is to compare modes. */
+  recommendedMode?: LearnMode;
   rationale: string;
 }
 
 const SCENARIOS: ReadonlyArray<Scenario> = [
   {
     id: "not-sure",
-    prompt: "Not sure how large or complex the input is",
-    recommendedMode: "Auto",
+    prompt: "Not sure which mode fits the task",
     rationale:
-      "Auto routes short inputs through Direct and longer ones through RLM, so you don't have to predict the shape of the task.",
+      "Select several Chat Providers in Chat — say a Direct one and an RLM one — and each answers the same question side by side with its tokens, cost and time, so you can pick by evidence. The LLM Tuner runs a whole provider × mode grid.",
   },
   {
     id: "short-note",
     prompt: "Summarize a short note",
-    recommendedMode: "Direct",
+    recommendedMode: MODE_DIRECT,
     rationale:
       "Direct is one-shot and cheapest — the right call when the input fits comfortably in a single prompt.",
   },
   {
     id: "long-doc",
     prompt: "Answer questions about a long design doc",
-    recommendedMode: "RLM",
+    recommendedMode: MODE_RLM,
     rationale:
       "RLM lets the model inspect the document iteratively instead of trying to fit it all into one prompt.",
   },
   {
-    id: "compare-prompts",
-    prompt: "Compare prompt strategies",
-    recommendedMode: "Compare",
+    id: "fact-lookup",
+    prompt: "Look up one fact in a large document",
+    recommendedMode: MODE_RAG,
     rationale:
-      "Compare runs the same input through multiple strategies, providers, or profiles side-by-side so you can pick by evidence.",
+      "RAG retrieves the passages most similar to the question and answers from those — quick and cheap for a lookup, but it can miss answers that need the whole document.",
+  },
+  {
+    id: "reference-check",
+    prompt: "Check a result against the paper's own RLM",
+    recommendedMode: MODE_RLM_OFFICIAL,
+    rationale:
+      "Official RLM runs the authors' implementation instead of Studio's RLM loop, so you can tell the RLM idea apart from Studio's implementation of it.",
   },
 ];
 
@@ -158,7 +178,7 @@ export function ModeChooser({ className }: { className?: string }) {
                 )}
               />
               <span>
-                <span className="font-semibold">{row.mode}</span> — {row.body}
+                <span className="font-semibold">{displayModeName(row.mode)}</span> — {row.body}
               </span>
             </li>
           );
@@ -171,7 +191,11 @@ export function ModeChooser({ className }: { className?: string }) {
           className="mt-3 text-sm text-muted-foreground"
         >
           <span className="font-semibold text-foreground">
-            Recommendation: {scenario.recommendedMode}.
+            Recommendation:{" "}
+            {scenario.recommendedMode
+              ? displayModeName(scenario.recommendedMode)
+              : COMPARE_RECOMMENDATION}
+            .
           </span>{" "}
           {scenario.rationale}
         </p>
