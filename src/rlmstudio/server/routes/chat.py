@@ -19,6 +19,7 @@ from rlmstudio.application.dto import RunResultDTO
 from rlmstudio.application.sandbox_vars import (
     EXTRA_KEY_HISTORY_MESSAGES,
     EXTRA_KEY_HISTORY_VARIABLE,
+    EXTRA_KEY_RAG_CHUNK_OVERLAP,
     HISTORY_PATH_DISABLED,
     HISTORY_PATH_EMPTY,
     HISTORY_PATH_INPROMPT,
@@ -782,6 +783,7 @@ async def _run_execution(
 
             run_config.extra["collection"] = collection
             run_config.extra["chunk_size"] = rag_cfg.chunk_size
+            run_config.extra[EXTRA_KEY_RAG_CHUNK_OVERLAP] = rag_cfg.chunk_overlap
             run_config.extra["top_k"] = rag_cfg.top_k
             embedder = build_rag_embedder(state, cp, rag_cfg)
             uc_rag = RunRAGUseCase(llm, embedder, storage)
@@ -1226,6 +1228,7 @@ async def websocket_chat(
                             ws_collection = f"rag_{uuid.uuid4().hex}"
                             cfg.extra["collection"] = ws_collection
                             cfg.extra["chunk_size"] = rag_cfg.chunk_size
+                            cfg.extra[EXTRA_KEY_RAG_CHUNK_OVERLAP] = rag_cfg.chunk_overlap
                             cfg.extra["top_k"] = rag_cfg.top_k
                             ws_embedder = build_rag_embedder(state, ws_cp, rag_cfg)
                             ws_storage = SQLiteStorageAdapter(":memory:")

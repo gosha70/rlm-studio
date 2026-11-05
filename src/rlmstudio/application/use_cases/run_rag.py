@@ -13,6 +13,7 @@ from rlmstudio.application.ports.embedding_port import EmbeddingPort
 from rlmstudio.application.ports.llm_port import LLMPort
 from rlmstudio.application.ports.storage_port import StoragePort
 from rlmstudio.application.sandbox_vars import (
+    EXTRA_KEY_RAG_CHUNK_OVERLAP,
     MODE_RAG,
     TRACE_KEY_CONTENT,
     TRACE_KEY_ELAPSED_SECONDS,
@@ -131,12 +132,13 @@ class RunRAGUseCase:
         start = time.time()
         top_k = config.extra.get("top_k", 5)
         chunk_size = config.extra.get("chunk_size", 1000)
+        chunk_overlap = config.extra.get(EXTRA_KEY_RAG_CHUNK_OVERLAP, 0)
         collection = config.extra.get("collection", "rag_temp")
 
         try:
             if not skip_indexing:
                 # 1. Chunk the content
-                chunks = self._chunk_text(content, chunk_size)
+                chunks = self._chunk_text(content, chunk_size, chunk_overlap)
 
                 # 2. Embed all chunks and store (may be slow for large docs)
                 embeddings = self._embedder.embed_batch(chunks)
@@ -259,10 +261,16 @@ class RunRAGUseCase:
             )
 
     @staticmethod
-    def _chunk_text(text: str, chunk_size: int = 1000) -> list[str]:
-        """Split text into chunks of approximately chunk_size characters."""
+    def _chunk_text(text: str, chunk_size: int = 1000, overlap: int = 0) -> list[str]:
+        """Split text into chunks of approximately chunk_size characters.
+
+        Neighbouring chunks share ``overlap`` characters, so a fact cut at a
+        boundary is still whole in one of them.  An overlap outside
+        ``[0, chunk_size)`` is ignored rather than looping forever.
+        """
+        step = chunk_size - overlap if 0 <= overlap < chunk_size else chunk_size
         chunks = []
-        for i in range(0, len(text), chunk_size):
+        for i in range(0, len(text), step):
             chunk = text[i : i + chunk_size]
             if chunk.strip():
                 chunks.append(chunk)

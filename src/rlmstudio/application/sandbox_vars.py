@@ -39,6 +39,10 @@ EXTRA_KEY_HISTORY_VARIABLE = "history_variable"
 """Key in ``RunConfigDTO.extra`` that carries the ``history`` list from
 ``_prepare_history_context`` in ``chat.py`` to ``RunRLMUseCase``."""
 
+EXTRA_KEY_RAG_CHUNK_OVERLAP = "chunk_overlap"
+"""Key in ``RunConfigDTO.extra`` that carries the RAG Chunk Overlap (characters
+shared by neighbouring chunks) from the routes to ``RunRAGUseCase``."""
+
 EXTRA_KEY_HISTORY_MESSAGES = "history_messages"
 """Key in ``RunConfigDTO.extra`` that carries prior-turn chat messages
 (native user/assistant pairs) for Direct, Compare, and RAG modes."""

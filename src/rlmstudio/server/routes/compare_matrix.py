@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 from rlmstudio.application.dto import RunConfigDTO
 from rlmstudio.application.sandbox_vars import (
     EPHEMERAL_CP_PREFIX,
+    EXTRA_KEY_RAG_CHUNK_OVERLAP,
     MODE_COMPARE,
     MODE_RAG,
     MODE_RLM,
@@ -416,6 +417,7 @@ async def _compare_matrix_v2(
                 slot_extra = {
                     "collection": f"rag_{uuid.uuid4().hex}",
                     "chunk_size": rag_cfg_resolved.chunk_size,
+                    EXTRA_KEY_RAG_CHUNK_OVERLAP: rag_cfg_resolved.chunk_overlap,
                     "top_k": rag_cfg_resolved.top_k,
                 }
 
@@ -675,6 +677,7 @@ async def compare_matrix(
                 slot_extra = {
                     "collection": f"rag_{uuid.uuid4().hex}",
                     "chunk_size": rag_cfg.chunk_size,
+                    EXTRA_KEY_RAG_CHUNK_OVERLAP: rag_cfg.chunk_overlap,
                     "top_k": rag_cfg.top_k,
                 }
 
