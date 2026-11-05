@@ -581,6 +581,25 @@ def test_startup_probe_runs_one_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
     assert lp.last_tested_by == "background"
 
 
+def test_startup_probe_failure_sets_offline_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SET2-01: with recurring checks off (the default), the startup probe is
+    the only check.  Its failure left the provider "connected" with one
+    recent failure, waiting for a second check that never comes."""
+    state = _startup_state(monkeypatch)
+    lp = _make_lp(status="connected", consecutive_failures=0)
+    state.config.llm_providers = [lp]
+    _enable_startup_probe(monkeypatch, "0")
+
+    with patch.object(AppState, "_safe_test", lambda self, p: _offline_result()):
+        state._start_startup_probe()
+        thread = state._startup_probe_thread
+        assert thread is not None
+        thread.join(timeout=5.0)
+
+    assert lp.status == "offline"
+    assert lp.consecutive_failures == 1
+
+
 def test_startup_probe_is_not_rerun(monkeypatch: pytest.MonkeyPatch) -> None:
     state = _startup_state(monkeypatch)
     _enable_startup_probe(monkeypatch, "0")

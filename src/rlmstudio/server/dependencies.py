@@ -463,6 +463,8 @@ class AppState:
     _PROVIDER_TEST_TIMEOUT_S: float = 10.0
     # Connected → offline requires this many consecutive failures.
     _OFFLINE_FAILURE_THRESHOLD: int = 2
+    # A one-shot check (the startup probe) has no follow-up to confirm with.
+    _ONE_SHOT_FAILURE_THRESHOLD: int = 1
     # Parallelism inside a single cycle.
     _CYCLE_MAX_WORKERS: int = 5
     # Test-only override for the interval, in seconds (never documented to
@@ -613,7 +615,7 @@ class AppState:
         if delay > 0 and stop_event.wait(timeout=delay):
             return
         try:
-            self._run_test_cycle(stop_event)
+            self._run_test_cycle(stop_event, one_shot=True)
         except Exception:  # noqa: BLE001 — a failed probe must not kill anything
             self._connection_test_logger.exception("startup provider probe failed")
         try:
@@ -730,8 +732,14 @@ class AppState:
                 error_message=f"internal error: {exc!s}"[:200],
             )
 
-    def _run_test_cycle(self, stop_event: threading.Event | None = None) -> None:
+    def _run_test_cycle(
+        self, stop_event: threading.Event | None = None, *, one_shot: bool = False
+    ) -> None:
         """One cycle: snapshot → probe in parallel → apply under lock.
+
+        ``one_shot`` marks a check no recurring check follows up on (the
+        startup probe): its failures set the status at once, like a manual
+        Test, instead of waiting for a second failure that never comes.
 
         ``stop_event`` is the event this cycle was started under.  It is
         captured by the caller because a restart replaces
@@ -793,7 +801,7 @@ class AppState:
         # Step 3: apply results under lock
         with self._config_lock:
             transitions, discarded = self._apply_test_results(
-                results, snapshot=provider_snapshot, source="background"
+                results, snapshot=provider_snapshot, source="background", one_shot=one_shot
             )
             self.save_config()
 
@@ -833,8 +841,13 @@ class AppState:
         *,
         snapshot: dict[str, LLMProviderConfig],
         source: Literal["background", "manual"],
+        one_shot: bool = False,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Merge cycle results back into self.config.llm_providers.
+
+        A ``one_shot`` check flips a failed provider offline on its first
+        failure; the two-failure threshold is for recurring checks, where a
+        second check follows to confirm.
 
         Returns (transitions, discarded) for logging AFTER the lock is
         released.  MUST be called with ``_config_lock`` held.
@@ -852,6 +865,9 @@ class AppState:
         transitions: list[dict[str, Any]] = []
         discarded: list[dict[str, Any]] = []
         current_by_id = {lp.id: lp for lp in self.config.llm_providers}
+        offline_threshold = (
+            self._ONE_SHOT_FAILURE_THRESHOLD if one_shot else self._OFFLINE_FAILURE_THRESHOLD
+        )
 
         for pid, result in results.items():
             current = current_by_id.get(pid)
@@ -902,7 +918,7 @@ class AppState:
                 current.status = "error"
             else:  # offline (graceful failure)
                 current.consecutive_failures += 1
-                if current.consecutive_failures >= self._OFFLINE_FAILURE_THRESHOLD:
+                if current.consecutive_failures >= offline_threshold:
                     current.status = "offline"
                 # else: stay at old status (likely "connected"); surface
                 # the brewing failure via consecutive_failures counter in UI.
