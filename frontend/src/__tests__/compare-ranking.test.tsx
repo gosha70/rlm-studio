@@ -178,6 +178,12 @@ describe("_rankSlots — failures, unjudged and unpriced slots", () => {
     expect(_rankSlots(slots, "cost", {})).toEqual([3, 2, 0, 1]);
   });
 
+  test("tokens: an unreported token count ranks after measured runs, before failures", () => {
+    // Review P1: tokens_known=false stores total_tokens=0, which ranked first.
+    const slots = [ok("unknown", { total_tokens: 0, tokens_known: false }), failed("f"), ok("measured", { total_tokens: 900 })];
+    expect(_rankSlots(slots, "tokens", {})).toEqual([2, 0, 1]);
+  });
+
   test("answer per cost: known-free runs first by answer length, unpriced after priced", () => {
     const slots = [
       ok("unpriced", { total_cost: 0, cost_known: false, answer: "x".repeat(500) }),

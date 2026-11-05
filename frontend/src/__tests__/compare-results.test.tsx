@@ -271,6 +271,29 @@ describe("Unknown cost (SC3-02, CMP2-10)", () => {
     expect(within(card(local)).getByTitle("Total tokens")).not.toHaveTextContent("unknown");
   });
 
+  test("under Tokens, an unknown token count plots no bar and says so (review P1)", async () => {
+    const timedOut = makeSlot({
+      slot_id: "t2",
+      execution_id: "exec-t2",
+      mode: "rlm_official",
+      label: "LM Studio Qwen · rlm_official",
+      total_tokens: 0,
+      tokens_known: false,
+    });
+    Element.prototype.hasPointerCapture = vi.fn().mockReturnValue(false);
+    Element.prototype.scrollIntoView = vi.fn();
+    await runWith([timedOut, local]);
+    const ranking = screen
+      .getAllByRole("combobox")
+      .find((el) => el.textContent?.includes("Cost (lowest wins)"))!;
+    fireEvent.pointerDown(ranking, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /^Tokens/ }));
+
+    const plotted = chart.data.find((d) => d.name === "LM Studio Qwen · Official RLM (rlms)");
+    expect(plotted?.value).toBeNull();
+    expect(screen.getAllByTestId("chart-tooltip")[0]).toHaveTextContent("Tokens unknown");
+  });
+
   test("the cost chart plots no bar for an unknown cost and says why", async () => {
     await runWith([unpriced, local]);
 

@@ -447,6 +447,10 @@ class RunMatrixComparisonUseCase:
                     return (float("inf"), i)
                 return (r.total_cost, i)
             if metric == "tokens":
+                # An unreported token count's 0 is not "fewest": it sorts
+                # last among successes, like an unknown cost.
+                if not r.tokens_known:
+                    return (float("inf"), i)
                 return (float(r.total_tokens), i)
             if metric == "latency":
                 return (r.elapsed_time, i)

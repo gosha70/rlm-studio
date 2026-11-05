@@ -80,7 +80,7 @@ import {
   type CompareMatrixRequestV2,
 } from "@/lib/api";
 import { ALL_EXECUTION_MODES, displayModeName, EMBEDDING_MODEL_DEFAULT, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
-import { COST_UNKNOWN_HINT, COST_UNKNOWN_TEXT, TOKENS_UNKNOWN_HINT, formatTokensOrUnknown, formatUsd, formatUsdTick } from "@/lib/format";
+import { COST_UNKNOWN_HINT, COST_UNKNOWN_TEXT, TOKENS_UNKNOWN_HINT, TOKENS_UNKNOWN_TEXT, formatTokensOrUnknown, formatUsd, formatUsdTick } from "@/lib/format";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { useEngineAvailability } from "@/components/shared/use-engines";
 
@@ -1088,7 +1088,8 @@ export function _rankSlots(
         // An unpriced run's $0 is not free: it ranks after priced runs.
         return costKnown ? value(s.total_cost) : missing;
       case "tokens":
-        return value(s.total_tokens);
+        // An unreported token count's 0 is not "fewest".
+        return s.tokens_known === false ? missing : value(s.total_tokens);
       case "latency":
         return value(s.elapsed_seconds);
       case "judge_score": {
@@ -1286,6 +1287,7 @@ const JUDGE_SCORE_TICKS = [0, 1, 2, 3, 4, 5];
 const CHART_FAILED_TEXT = "Failed — no result";
 const CHART_NOT_JUDGED_TEXT = "Not judged";
 const CHART_COST_UNKNOWN_TEXT = `Cost ${COST_UNKNOWN_TEXT}`;
+const CHART_TOKENS_UNKNOWN_TEXT = `Tokens ${TOKENS_UNKNOWN_TEXT}`;
 
 interface ComparisonChartProps {
   slots: CompareMatrixSlotResponse[];
@@ -1343,11 +1345,14 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
       // An unpriced run's $0 is not a cost: no bar, and the tooltip says so.
       const costUnknown =
         s.cost_known === false && (metric === "cost" || metric === "answer_per_cost");
+      // Same for an unreported token count.
+      const tokensUnknown = s.tokens_known === false && metric === "tokens";
       return {
         name: _slotLabel(s),
         failed,
         costUnknown,
-        value: failed || costUnknown ? null : value,
+        tokensUnknown,
+        value: failed || costUnknown || tokensUnknown ? null : value,
         success: !failed,
         slotIdx,
       };
@@ -1420,6 +1425,7 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
               const entry = item?.payload as (typeof chartData)[number] | undefined;
               if (entry?.failed) return [CHART_FAILED_TEXT, metricLabel];
               if (entry?.costUnknown) return [CHART_COST_UNKNOWN_TEXT, metricLabel];
+              if (entry?.tokensUnknown) return [CHART_TOKENS_UNKNOWN_TEXT, metricLabel];
               if (value == null) return [CHART_NOT_JUDGED_TEXT, metricLabel];
               const v = Number(value);
               return [
