@@ -6,6 +6,14 @@
  * Recharts' default axis ticks fall into scientific notation ("6e-7").
  */
 
+/**
+ * Shown in place of a cost the API marks unknown (`cost_known: false`):
+ * an unpriced run's $0 is not free.
+ */
+export const COST_UNKNOWN_TEXT = "unknown";
+/** Tooltip for a cost shown as {@link COST_UNKNOWN_TEXT}. */
+export const COST_UNKNOWN_HINT = "Cost unknown: no price is known for this model, so its $0 is not free.";
+
 /** Below this, four decimals would round a real cost to "$0.0000". */
 const SMALL_COST_USD = 0.0001;
 const COST_DECIMALS = 4;

@@ -235,6 +235,37 @@ describe("Failed Compare cell without an answer", () => {
   });
 });
 
+describe("Unknown cost (SC3-02, CMP2-10)", () => {
+  const unpriced = makeSlot({
+    slot_id: "u",
+    execution_id: "exec-u",
+    mode: "rlm_official",
+    label: "LM Studio Qwen · rlm_official",
+    total_cost: 0,
+    cost_known: false,
+  });
+  const local = makeSlot({ slot_id: "l", execution_id: "exec-l", total_cost: 0, cost_known: true });
+
+  test("an unpriced run's card says unknown, a local run's $0 stays $0", async () => {
+    await runWith([unpriced, local]);
+
+    const unknownCost = within(card(unpriced)).getByTitle(/Cost unknown/);
+    expect(unknownCost).toHaveTextContent("unknown");
+    expect(unknownCost).not.toHaveTextContent("0.0000");
+    expect(within(card(local)).getByTitle("Cost (USD)")).toHaveTextContent("0.0000");
+  });
+
+  test("the cost chart plots no bar for an unknown cost and says why", async () => {
+    await runWith([unpriced, local]);
+
+    const tooltip = screen.getAllByTestId("chart-tooltip")[0];
+    expect(tooltip).toHaveTextContent("LM Studio Qwen · Official RLM (rlms): Cost unknown");
+    expect(tooltip).toHaveTextContent("LM Studio Qwen · Direct: $0.0000");
+    const plotted = chart.data.find((d) => d.name === "LM Studio Qwen · Official RLM (rlms)");
+    expect(plotted?.value).toBeNull();
+  });
+});
+
 describe("Judge Score chart", () => {
   const judged = makeSlot({ slot_id: "a", execution_id: "exec-a", label: "Ollama Llama · direct", provider: "ollama" });
   const unjudged = makeSlot({ slot_id: "b", execution_id: "exec-b", label: "LM Studio Qwen · direct" });

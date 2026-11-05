@@ -80,7 +80,7 @@ import {
   type CompareMatrixRequestV2,
 } from "@/lib/api";
 import { ALL_EXECUTION_MODES, displayModeName, EMBEDDING_MODEL_DEFAULT, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
-import { formatUsd, formatUsdTick } from "@/lib/format";
+import { COST_UNKNOWN_HINT, COST_UNKNOWN_TEXT, formatUsd, formatUsdTick } from "@/lib/format";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { useEngineAvailability } from "@/components/shared/use-engines";
 
@@ -1285,6 +1285,7 @@ const JUDGE_SCORE_TICKS = [0, 1, 2, 3, 4, 5];
 /** Tooltip text for a slot with nothing to plot. */
 const CHART_FAILED_TEXT = "Failed — no result";
 const CHART_NOT_JUDGED_TEXT = "Not judged";
+const CHART_COST_UNKNOWN_TEXT = `Cost ${COST_UNKNOWN_TEXT}`;
 
 interface ComparisonChartProps {
   slots: CompareMatrixSlotResponse[];
@@ -1339,10 +1340,14 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
           value = s.total_cost;
       }
       const failed = _isSlotFailed(s);
+      // An unpriced run's $0 is not a cost: no bar, and the tooltip says so.
+      const costUnknown =
+        s.cost_known === false && (metric === "cost" || metric === "answer_per_cost");
       return {
         name: _slotLabel(s),
         failed,
-        value: failed ? null : value,
+        costUnknown,
+        value: failed || costUnknown ? null : value,
         success: !failed,
         slotIdx,
       };
@@ -1414,6 +1419,7 @@ function ComparisonChart({ slots, metric, ranking, judgeScores }: ComparisonChar
             formatter={(value, _name, item) => {
               const entry = item?.payload as (typeof chartData)[number] | undefined;
               if (entry?.failed) return [CHART_FAILED_TEXT, metricLabel];
+              if (entry?.costUnknown) return [CHART_COST_UNKNOWN_TEXT, metricLabel];
               if (value == null) return [CHART_NOT_JUDGED_TEXT, metricLabel];
               const v = Number(value);
               return [
@@ -1491,9 +1497,12 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
           <Hash className="h-3 w-3" />
           {slot.total_tokens.toLocaleString()}
         </span>
-        <span className="flex items-center gap-1" title="Cost (USD)">
+        <span
+          className="flex items-center gap-1"
+          title={slot.cost_known === false ? COST_UNKNOWN_HINT : "Cost (USD)"}
+        >
           <DollarSign className="h-3 w-3" />
-          {slot.total_cost.toFixed(4)}
+          {slot.cost_known === false ? COST_UNKNOWN_TEXT : slot.total_cost.toFixed(4)}
         </span>
         <span className="flex items-center gap-1" title="Elapsed seconds">
           <Clock className="h-3 w-3" />
