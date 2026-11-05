@@ -1197,6 +1197,16 @@ describe("SettingsPage — Wave 3", () => {
     expect(flips).toEqual([]);
   });
 
+  test("the tab strip wraps inside its container instead of overflowing at 768 px", () => {
+    stubSettingsData({});
+    render(<SettingsPage />);
+    // jsdom has no layout; the classes are what keep all seven tabs on
+    // screen (verified in Chromium at 768 px: two rows, no page scroll).
+    const tablist = screen.getByRole("tablist");
+    expect(tablist).toHaveClass("flex-wrap", "max-w-full", "h-auto");
+    expect(tablist).not.toHaveClass("h-10");
+  });
+
   test("a successful Budget save is confirmed", async () => {
     vi.mocked(updateConfig).mockResolvedValueOnce(MOCK_CONFIG as never);
     vi.mocked(toast.success).mockClear();

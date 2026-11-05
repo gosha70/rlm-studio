@@ -936,7 +936,9 @@ function SettingsPageInner() {
         )}
 
         <Tabs defaultValue="llm-providers">
-          <TabsList>
+          {/* Wraps onto a second row when the seven tabs don't fit (768 px),
+              instead of pushing General and Appearance off screen. */}
+          <TabsList className="h-auto max-w-full flex-wrap justify-start">
             <TabsTrigger value="llm-providers">LLM Providers</TabsTrigger>
             <TabsTrigger value="chat-providers">Chat Providers</TabsTrigger>
             <TabsTrigger value="budget">Budget</TabsTrigger>
