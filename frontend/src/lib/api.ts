@@ -143,6 +143,10 @@ export interface MessageMetrics {
   cost_usd: number;
   elapsed_seconds: number;
   steps: number;
+  /** False when the run's cost is unknown (no price, or an engine timeout): show "unknown", not $0. */
+  cost_known?: boolean;
+  /** False when the run's token usage is unknown: show "unknown", not 0. */
+  tokens_known?: boolean;
 }
 
 export interface SessionMessage {
@@ -183,6 +187,9 @@ export interface MetricsSummary {
   total_cost_usd: number;
   avg_latency_seconds: number;
   avg_token_savings_percent: number | null;
+  /** Runs in the totals whose cost / tokens are unknown: the totals are lower bounds. */
+  cost_unknown_runs?: number;
+  tokens_unknown_runs?: number;
 }
 
 export interface ModeSummary {
@@ -201,6 +208,10 @@ export interface TimelineEntry {
   provider: string;
   chat_provider_name?: string | null;
   execution_id?: string | null;
+  /** False when the run's cost is unknown (no price, or an engine timeout): show "unknown", not $0. */
+  cost_known?: boolean;
+  /** False when the run's token usage is unknown: show "unknown", not 0. */
+  tokens_known?: boolean;
 }
 
 export interface MetricsResponse {
@@ -263,6 +274,8 @@ export interface TraceResponse {
     input_tokens?: number;
     output_tokens?: number;
     total_cost?: number;
+    cost_known?: boolean;
+    tokens_known?: boolean;
   };
   budget: {
     steps_used: number;
@@ -869,6 +882,10 @@ export interface ExecutionSummary {
   total_cost: number;
   chat_provider_id?: string | null;
   chat_provider_name?: string | null;
+  /** False when the run's cost is unknown (no price, or an engine timeout): show "unknown", not $0. */
+  cost_known?: boolean;
+  /** False when the run's token usage is unknown: show "unknown", not 0. */
+  tokens_known?: boolean;
 }
 
 export const getExecutions = (limit = 20, chatProviderId?: string, sessionId?: string) => {

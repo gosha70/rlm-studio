@@ -1,7 +1,7 @@
 /** Cost formatting for charts and tables (lib/format.ts). */
 
 import { describe, test, expect } from "vitest";
-import { formatUsd, formatUsdTick } from "@/lib/format";
+import { formatCostOrUnknown, formatTokensOrUnknown, formatUsd, formatUsdTick } from "@/lib/format";
 
 describe("formatUsd", () => {
   test("keeps four decimals for ordinary costs", () => {
@@ -29,5 +29,15 @@ describe("formatUsdTick", () => {
     expect(formatUsdTick(0)).toBe("$0");
     expect(formatUsdTick(2)).toBe("$2");
     expect(formatUsdTick(0.5)).toBe("$0.5");
+  });
+});
+
+describe("formatCostOrUnknown / formatTokensOrUnknown (SC3-02)", () => {
+  test("say unknown only when the API marks the figure unknown", () => {
+    expect(formatCostOrUnknown(0, false)).toBe("unknown");
+    expect(formatCostOrUnknown(0, true)).toBe("$0.0000");
+    expect(formatCostOrUnknown(0.036)).toBe("$0.0360");
+    expect(formatTokensOrUnknown(0, false)).toBe("unknown");
+    expect(formatTokensOrUnknown(6791, undefined)).toBe((6791).toLocaleString());
   });
 });

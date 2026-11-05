@@ -36,6 +36,21 @@ export function formatUsd(value: number): string {
   return `$${value.toFixed(COST_DECIMALS)}`;
 }
 
+/** Shown in place of a token count the API marks unknown (`tokens_known: false`). */
+export const TOKENS_UNKNOWN_TEXT = "unknown";
+/** Tooltip for a token count shown as {@link TOKENS_UNKNOWN_TEXT}. */
+export const TOKENS_UNKNOWN_HINT = "Token usage unknown: the engine reported none for this run.";
+
+/** A run's cost, or {@link COST_UNKNOWN_TEXT} when the API says it is unknown. */
+export function formatCostOrUnknown(value: number, known?: boolean): string {
+  return known === false ? COST_UNKNOWN_TEXT : formatUsd(value);
+}
+
+/** A run's token count, or {@link TOKENS_UNKNOWN_TEXT} when the API says it is unknown. */
+export function formatTokensOrUnknown(value: number, known?: boolean): string {
+  return known === false ? TOKENS_UNKNOWN_TEXT : value.toLocaleString();
+}
+
 /** A cost axis tick: short plain decimals ("$0", "$0.0000003", "$2.5"), never "6e-7". */
 export function formatUsdTick(value: number): string {
   return usdSignificant(value, TICK_SIGNIFICANT_DIGITS);

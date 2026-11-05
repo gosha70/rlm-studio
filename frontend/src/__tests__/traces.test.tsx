@@ -274,6 +274,17 @@ describe("TracesPage", () => {
     expect(screen.getByText("Explain recursion")).toBeInTheDocument();
   });
 
+  test("an execution with unknown cost and tokens says unknown, not $0 or 0 (SC3-02)", () => {
+    mockUseSWR.mockReturnValue({
+      data: [makeExecution({ total_cost: 0, total_tokens: 0, cost_known: false, tokens_known: false })],
+      isLoading: false,
+    } as ReturnType<typeof useSWR>);
+
+    render(<TracesPage />);
+    expect(screen.getAllByText("unknown")).toHaveLength(2);
+    expect(screen.queryByText("$0.0000")).not.toBeInTheDocument();
+  });
+
   test("shows trace detail when an execution is selected", () => {
     // With no trace loaded yet, the detail panel is absent; clicking loads it
     // (async). We verify the execution row is rendered and clickable.

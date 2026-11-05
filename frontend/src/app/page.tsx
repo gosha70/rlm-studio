@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { User, Bot, Sparkles, Loader2, ChevronDown, ChevronRight, Terminal, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/shared/app-shell";
+import { COST_UNKNOWN_HINT, TOKENS_UNKNOWN_HINT, formatCostOrUnknown, formatTokensOrUnknown } from "@/lib/format";
 import { CHAT_PROVIDERS_SWR_KEY, SESSIONS_SWR_KEY } from "@/lib/constants";
 import { ChatProviderSelector } from "@/components/chat/chat-provider-selector";
 import { ChatInput } from "@/components/chat/chat-input";
@@ -474,6 +475,8 @@ export default function ChatPage() {
                               output_tokens: trace.result.output_tokens ?? 0,
                               total_tokens: trace.budget.tokens_used,
                               cost_usd: trace.result.total_cost ?? 0,
+                              cost_known: trace.result?.cost_known,
+                              tokens_known: trace.result?.tokens_known,
                               elapsed_seconds:
                                 trace.completed_at && trace.started_at
                                   ? (new Date(trace.completed_at).getTime() -
@@ -637,6 +640,8 @@ export default function ChatPage() {
                             output_tokens: trace.result.output_tokens ?? 0,
                             total_tokens: trace.budget.tokens_used,
                             cost_usd: trace.result.total_cost ?? trace.budget.cost_used,
+                            cost_known: trace.result?.cost_known,
+                            tokens_known: trace.result?.tokens_known,
                             elapsed_seconds:
                               trace.completed_at && trace.started_at
                                 ? (new Date(trace.completed_at).getTime() -
@@ -680,6 +685,8 @@ export default function ChatPage() {
                             output_tokens: trace.result?.output_tokens ?? 0,
                             total_tokens: trace.result?.input_tokens ?? 0,
                             cost_usd: trace.result?.total_cost ?? 0,
+                            cost_known: trace.result?.cost_known,
+                            tokens_known: trace.result?.tokens_known,
                             elapsed_seconds:
                               trace.completed_at && trace.started_at
                                 ? (new Date(trace.completed_at).getTime() -
@@ -1173,8 +1180,8 @@ export default function ChatPage() {
                                 {resp.metrics && (
                                   <div className="mt-3 flex flex-col gap-2 border-t pt-2 text-xs text-muted-foreground">
                                     <div className="flex items-center gap-4">
-                                      <span>{resp.metrics.total_tokens} tokens</span>
-                                      <span>${resp.metrics.cost_usd.toFixed(4)}</span>
+                                      <span title={resp.metrics.tokens_known === false ? TOKENS_UNKNOWN_HINT : undefined}>{formatTokensOrUnknown(resp.metrics.total_tokens, resp.metrics.tokens_known)} tokens</span>
+                                      <span title={resp.metrics.cost_known === false ? COST_UNKNOWN_HINT : undefined}>{resp.metrics.cost_known === false ? "cost unknown" : formatCostOrUnknown(resp.metrics.cost_usd)}</span>
                                       <span>{resp.metrics.elapsed_seconds.toFixed(1)}s</span>
                                       <ResponseRating
                                         executionId={resp.executionId}
@@ -1260,7 +1267,10 @@ export default function ChatPage() {
                         if (values.every((v) => v === values[0])) return null;
                         return usable.reduce((a, b) => (metric(a[1].metrics!) <= metric(b[1].metrics!) ? a : b));
                       };
-                      const cheapest = winnerBy((m) => m.cost_usd);
+                      // An unknown cost is not $0: it cannot be "cheapest".
+                      const cheapest = usable.some(([, r]) => r.metrics!.cost_known === false)
+                        ? null
+                        : winnerBy((m) => m.cost_usd);
                       const fastest = winnerBy((m) => m.elapsed_seconds);
                       return (
                         <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
@@ -1271,8 +1281,8 @@ export default function ChatPage() {
                                   {r.chatProviderName}{!isUsable(r) ? " (failed)" : ""}
                                 </span>
                                 <div>
-                                  {r.metrics!.total_tokens.toLocaleString()} tokens
-                                  {" · "}${r.metrics!.cost_usd.toFixed(4)}
+                                  {formatTokensOrUnknown(r.metrics!.total_tokens, r.metrics!.tokens_known)} tokens
+                                  {" · "}{r.metrics!.cost_known === false ? "cost unknown" : formatCostOrUnknown(r.metrics!.cost_usd)}
                                   {" · "}{r.metrics!.elapsed_seconds.toFixed(1)}s
                                 </div>
                               </div>

@@ -21,7 +21,7 @@ import { JudgeDimensionsChart } from "@/components/metrics/judge-dimensions-char
 import { FailureBreakdown } from "@/components/metrics/failure-breakdown";
 import { CHAT_PROVIDERS_SWR_KEY, TRACE_EXEC_PARAM, displayModeName, displayProviderName } from "@/lib/constants";
 import { providerColorMap } from "@/components/metrics/series-colors";
-import { formatUsd } from "@/lib/format";
+import { formatCostOrUnknown, formatTokensOrUnknown } from "@/lib/format";
 
 /** Shown in a summary card when there is no run to compute it from. */
 const NO_VALUE = "—";
@@ -160,6 +160,13 @@ export default function DashboardPage() {
           />
           <MetricCard {...tokenComparisonCard(summary?.avg_token_savings_percent)} icon={Activity} />
         </div>
+        {summary && hasUsableRuns && ((summary.cost_unknown_runs ?? 0) > 0 || (summary.tokens_unknown_runs ?? 0) > 0) && (
+          <p className="text-xs text-muted-foreground">
+            Totals are a lower bound:{" "}
+            {Math.max(summary.cost_unknown_runs ?? 0, summary.tokens_unknown_runs ?? 0)} run(s) did not
+            report their full cost or token usage.
+          </p>
+        )}
 
         {isLoading && (
           <div className="grid grid-cols-2 gap-4">
@@ -231,10 +238,10 @@ export default function DashboardPage() {
                         {entry.chat_provider_name || entry.provider || "—"}
                       </TableCell>
                       <TableCell className="text-right">
-                        {entry.tokens.toLocaleString()}
+                        {formatTokensOrUnknown(entry.tokens, entry.tokens_known)}
                       </TableCell>
                       <TableCell className="text-right">
-                        {formatUsd(entry.cost_usd)}
+                        {formatCostOrUnknown(entry.cost_usd, entry.cost_known)}
                       </TableCell>
                       <TableCell className="text-right">
                         {entry.latency_seconds.toFixed(1)}s

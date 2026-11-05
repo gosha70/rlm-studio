@@ -6,6 +6,7 @@ import useSWR from "swr";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { AppShell } from "@/components/shared/app-shell";
+import { COST_UNKNOWN_HINT, TOKENS_UNKNOWN_HINT, formatCostOrUnknown, formatTokensOrUnknown } from "@/lib/format";
 import { SESSIONS_SWR_KEY, TRACE_EXEC_PARAM, displayModeName } from "@/lib/constants";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { PERF_UI_ENABLED } from "@/lib/branding";
@@ -121,12 +122,16 @@ function TraceDetailPanel({
           <Separator orientation="vertical" className="h-8" />
           <div className="text-sm">
             <span className="text-muted-foreground">Tokens: </span>
-            <span className="font-medium">{trace.budget.tokens_used.toLocaleString()}</span>
+            <span className="font-medium" title={trace.result.tokens_known === false ? TOKENS_UNKNOWN_HINT : undefined}>
+              {formatTokensOrUnknown(trace.budget.tokens_used, trace.result.tokens_known)}
+            </span>
           </div>
           <Separator orientation="vertical" className="h-8" />
           <div className="text-sm">
             <span className="text-muted-foreground">Cost: </span>
-            <span className="font-medium">${trace.budget.cost_used.toFixed(4)}</span>
+            <span className="font-medium" title={trace.result.cost_known === false ? COST_UNKNOWN_HINT : undefined}>
+              {formatCostOrUnknown(trace.budget.cost_used, trace.result.cost_known)}
+            </span>
           </div>
           <Badge variant={trace.result.success ? "success" : "destructive"}>
             {trace.status}
@@ -613,10 +618,10 @@ function TracesPageInner() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        {exec.total_tokens.toLocaleString()}
+                        {formatTokensOrUnknown(exec.total_tokens, exec.tokens_known)}
                       </TableCell>
                       <TableCell className="text-right">
-                        ${exec.total_cost.toFixed(4)}
+                        {formatCostOrUnknown(exec.total_cost, exec.cost_known)}
                       </TableCell>
                       <TableCell
                         className="text-right"
