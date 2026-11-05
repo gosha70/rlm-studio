@@ -43,6 +43,21 @@ interface SidebarProps {
 
 const LOGO_SIZE_PX = 28;
 
+/**
+ * A session's Rename / Delete buttons take no width until the row is
+ * hovered, holds focus, or is the active session, so a name can use the
+ * whole row.  Zero width (not `hidden`) keeps them in the Tab order: Tab
+ * from the name lands on them, and the focused row shows them.
+ */
+function sessionActionClass(active: boolean): string {
+  return cn(
+    "h-6 shrink-0 overflow-hidden",
+    active
+      ? "w-6 opacity-100"
+      : "w-0 opacity-0 group-hover:w-6 group-hover:opacity-100 group-focus-within:w-6 group-focus-within:opacity-100",
+  );
+}
+
 const NAV_ITEMS = [
   { href: "/", label: "Chat", icon: MessageSquare },
   { href: "/compare", label: "LLM Tuner", icon: SlidersHorizontal },
@@ -261,10 +276,7 @@ export function Sidebar({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className={cn(
-                        "h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                        s.id === activeSessionId && "opacity-100",
-                      )}
+                      className={sessionActionClass(s.id === activeSessionId)}
                       onClick={(e) => {
                         e.stopPropagation();
                         startRename(s);
@@ -278,10 +290,7 @@ export function Sidebar({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className={cn(
-                      "h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
-                      s.id === activeSessionId && "opacity-100",
-                    )}
+                    className={sessionActionClass(s.id === activeSessionId)}
                     onClick={(e) => {
                       e.stopPropagation();
                       if (window.confirm(deleteSessionPrompt(s.name))) onDeleteSession?.(s.id);

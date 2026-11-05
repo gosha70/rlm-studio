@@ -85,6 +85,40 @@ describe("Long session names (SH2-1)", () => {
   });
 });
 
+describe("Session actions take space only when shown (P3-CS-2)", () => {
+  const classesOf = (name: string) => screen.getByRole("button", { name }).className.split(" ");
+
+  test("an idle row's Rename and Delete take no width until hover or focus", () => {
+    renderSidebar();
+    for (const name of ["Rename session Orion notes", "Delete session Orion notes"]) {
+      const classes = classesOf(name);
+      expect(classes).toEqual(expect.arrayContaining(["w-0", "overflow-hidden", "shrink-0"]));
+      expect(classes).not.toContain("w-6");
+      expect(classes).toEqual(
+        expect.arrayContaining(["group-hover:w-6", "group-focus-within:w-6", "group-focus-within:opacity-100"]),
+      );
+    }
+  });
+
+  test("the active row keeps its actions at full width", () => {
+    renderSidebar({ activeSessionId: "s-1" });
+    for (const name of ["Rename session Orion notes", "Delete session Orion notes"]) {
+      expect(classesOf(name)).toEqual(expect.arrayContaining(["w-6", "opacity-100"]));
+      expect(classesOf(name)).not.toContain("w-0");
+    }
+  });
+
+  test("Tab from the session name reaches Rename, then Delete", async () => {
+    const user = (await import("@testing-library/user-event")).default.setup();
+    renderSidebar();
+    screen.getByRole("button", { name: "Orion notes" }).focus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Rename session Orion notes" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Delete session Orion notes" })).toHaveFocus();
+  });
+});
+
 describe("Sidebar logo (owner #1)", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
