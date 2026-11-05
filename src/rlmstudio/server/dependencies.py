@@ -321,10 +321,15 @@ class AppState:
         Also performs a second pass to replace stale model IDs that are no longer
         present in the hardcoded catalog with the provider's current default model.
 
-        Only a config that predates LLM Providers is converted: once named LLM
-        Providers exist, an empty Chat Provider list is the user's choice (for
-        example, after deleting them all) and must not be refilled.
+        Only a config that predates LLM Providers is converted, and only once:
+        once named LLM Providers exist, or the conversion has run, an empty
+        provider list is the user's choice (for example, after deleting them
+        all) and must not be refilled.  ``legacy_providers_migrated`` records
+        that, so it survives the user deleting everything.
         """
+        if self.config.legacy_providers_migrated:
+            self._migrate_to_llm_providers()
+            return
         if not self.config.chat_providers and not self.config.llm_providers:
             now = datetime.now(timezone.utc)
             for pc in self.config.provider_configs:
@@ -351,6 +356,8 @@ class AppState:
                 self.save_config()
 
         self._migrate_to_llm_providers()
+        self.config.legacy_providers_migrated = True
+        self.save_config()
 
     def _migrate_to_llm_providers(self) -> None:
         """Create named LLM Provider instances from legacy ChatProvider configs.

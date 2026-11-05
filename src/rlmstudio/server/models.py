@@ -955,6 +955,11 @@ class ConfigResponse(BaseModel):
     # 0 = disabled (default, no thread runs).  1-1440 = interval in minutes.
     # See doc_internal/specs/scheduled-connection-testing.md.
     connection_test_interval_minutes: int = Field(default=0, ge=0, le=1440)
+    # True once legacy ``provider_configs`` have been converted to Chat and
+    # LLM Providers (or the config never needed it).  Without it, a user who
+    # deleted every provider looked like a pre-migration config again and the
+    # leftover legacy entry was converted back on the next restart.
+    legacy_providers_migrated: bool = False
 
 
 class ConfigUpdateRequest(BaseModel):

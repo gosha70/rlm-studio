@@ -549,6 +549,32 @@ class TestAutoMigration:
         assert restarted.config.chat_providers == []
         assert restarted.config.provider_configs == []
 
+    def test_providers_deleted_after_migration_stay_deleted_on_restart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Review P1: after the user deleted the migrated Chat Provider and LLM
+        Provider, the next restart looked like a pre-migration config and the
+        leftover legacy entry was converted back into DIRECT-OPENAI and
+        OpenAI (gpt-4o)."""
+        monkeypatch.setattr(dependencies, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(dependencies, "_CONFIG_FILE", tmp_path / "config.json")
+        first = AppState(load_from_disk=False)
+        first.config.provider_configs.append(
+            ProviderConfig(provider="openai", model="gpt-4o", enabled=True)
+        )
+        first._migrate_chat_providers()
+        assert [cp.name for cp in first.config.chat_providers] == ["DIRECT-OPENAI"]
+        first.config.chat_providers = []
+        first.config.llm_providers = []
+        first.save_config()
+
+        restarted = AppState(load_from_disk=False)
+        restarted._load_config()
+        restarted._migrate_chat_providers()
+
+        assert restarted.config.chat_providers == []
+        assert restarted.config.llm_providers == []
+
     def test_migration_skips_configs_that_already_have_llm_providers(self) -> None:
         """Deleted Chat Providers are not recreated from a stale legacy entry."""
         state = get_state()
