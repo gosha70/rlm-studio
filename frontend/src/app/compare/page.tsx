@@ -80,7 +80,7 @@ import {
   type CompareMatrixRequestV2,
 } from "@/lib/api";
 import { ALL_EXECUTION_MODES, displayModeName, EMBEDDING_MODEL_DEFAULT, MODE_DIRECT, MODE_RAG } from "@/lib/constants";
-import { COST_UNKNOWN_HINT, COST_UNKNOWN_TEXT, formatUsd, formatUsdTick } from "@/lib/format";
+import { COST_UNKNOWN_HINT, COST_UNKNOWN_TEXT, TOKENS_UNKNOWN_HINT, formatTokensOrUnknown, formatUsd, formatUsdTick } from "@/lib/format";
 import { EngineBadge } from "@/components/shared/engine-badge";
 import { useEngineAvailability } from "@/components/shared/use-engines";
 
@@ -1493,9 +1493,12 @@ function SlotCard({ slot, rank, expanded, onToggle, judgeScore }: SlotCardProps)
 
       {/* A failed run still spent tokens and time; show them like Chat does. */}
       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1" title="Total tokens">
+        <span
+          className="flex items-center gap-1"
+          title={slot.tokens_known === false ? TOKENS_UNKNOWN_HINT : "Total tokens"}
+        >
           <Hash className="h-3 w-3" />
-          {slot.total_tokens.toLocaleString()}
+          {formatTokensOrUnknown(slot.total_tokens, slot.tokens_known)}
         </span>
         <span
           className="flex items-center gap-1"

@@ -170,6 +170,15 @@ class TestCompareSlotWithUnknownUsage:
         run = state.telemetry.get_run(official["execution_id"])
         assert run is not None
         assert (run.cost_known, run.tokens_known) == (False, False)
+        # Pass 4 (W3C-1): Traces reads the in-memory record first; it showed
+        # 0 / $0.0000 until a restart re-read the run from telemetry.
+        trace = client.get(f"/api/traces/{official['execution_id']}").json()
+        assert (trace["result"]["cost_known"], trace["result"]["tokens_known"]) == (False, False)
+        listed = {e["execution_id"]: e for e in client.get("/api/executions").json()}
+        assert (
+            listed[official["execution_id"]]["cost_known"],
+            listed[official["execution_id"]]["tokens_known"],
+        ) == (False, False)
 
 
 def test_rows_recorded_before_the_flags_read_as_known(tmp_path: Path) -> None:

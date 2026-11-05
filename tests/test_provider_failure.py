@@ -635,6 +635,12 @@ def test_direct_answer_names_a_context_length_overflow() -> None:
             "APIConnectionError: OpenAIException - Model has not started loading/has been "
             "unloaded.",
         ),
+        (
+            # Pass 4 (SC3-10): LM Studio with nothing loaded at all.
+            "BadRequestError",
+            'Lm_studioException - {"error":"No models loaded. Please load a model in the '
+            "developer page or use the 'lms load' command.\"}",
+        ),
     ],
 )
 def test_lm_studio_unloaded_model_says_to_load_it(exc_class: str, message: str) -> None:

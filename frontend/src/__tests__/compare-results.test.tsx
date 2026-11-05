@@ -255,6 +255,22 @@ describe("Unknown cost (SC3-02, CMP2-10)", () => {
     expect(within(card(local)).getByTitle("Cost (USD)")).toHaveTextContent("0.0000");
   });
 
+  test("an unknown token count says unknown, not 0 (pass 4, W3C-2)", async () => {
+    const timedOut = makeSlot({
+      slot_id: "t",
+      execution_id: "exec-t",
+      mode: "rlm_official",
+      label: "LM Studio Qwen · rlm_official",
+      total_tokens: 0,
+      tokens_known: false,
+      cost_known: false,
+    });
+    await runWith([timedOut, local]);
+
+    expect(within(card(timedOut)).getByTitle(/Token usage unknown/)).toHaveTextContent("unknown");
+    expect(within(card(local)).getByTitle("Total tokens")).not.toHaveTextContent("unknown");
+  });
+
   test("the cost chart plots no bar for an unknown cost and says why", async () => {
     await runWith([unpriced, local]);
 

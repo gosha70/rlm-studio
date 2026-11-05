@@ -918,5 +918,8 @@ def _update_execution_record(
         "steps_count": result.steps,
         # The slot's own step limit, which Traces shows (not the global one).
         "steps_limit": steps_limit,
+        # Same as Chat's record: without these Traces showed an unknown
+        # usage as 0 / $0.0000 until the record was re-read from telemetry.
+        **result.usage_flags(),
     }
     execution.steps = list(result.trace)

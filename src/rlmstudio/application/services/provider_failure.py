@@ -134,6 +134,9 @@ _MODEL_NOT_LOADED_KEYWORDS: tuple[str, ...] = (
     # LM Studio's JIT load of a chat or embedding model failed or was
     # cancelled ("Failed to load model \"…\". Error: Operation canceled.").
     "failed to load model",
+    # LM Studio with nothing loaded at all ("No models loaded. Please load a
+    # model in the developer page or use the 'lms load' command.").
+    "no models loaded",
 )
 
 # The routing prefixes Studio and LiteLLM put in front of a model id

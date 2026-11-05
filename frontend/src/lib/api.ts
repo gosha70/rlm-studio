@@ -115,6 +115,8 @@ export interface CompareMatrixSlotResponse {
   cache_hit_rate?: number;
   /** False when the run's price is unknown: its $0 is not free. */
   cost_known?: boolean;
+  /** False when the run's token usage is unknown: show "unknown", not 0. */
+  tokens_known?: boolean;
 }
 
 export interface CompareMatrixResponse {
